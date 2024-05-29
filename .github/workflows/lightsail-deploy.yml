@@ -9,7 +9,7 @@ on:
       - lightsail-deploy
 
 jobs:
-  configure-aws-credentials:
+  deploy-lightsail-container:
     runs-on: ubuntu-latest
 
     steps:
@@ -40,3 +40,37 @@ jobs:
         echo $service_name
         echo $container_name
         docker build -t $container_name -f Dockerfile .
+        docker images
+
+    - name: Create Lightsail container service
+      run: |
+        service_name="diaspora-service"
+        aws lightsail create-container-service --region us-east-1 --service-name $service_name --power small --scale 1
+
+    - name: Push Docker image to Lightsail and deploy
+      run: |
+        service_name="diaspora-service"
+        container_name="$service_name-container"
+        output=$(aws lightsail push-container-image --region us-east-1 --service-name $service_name --label $container_name --image $container_name)
+        image_name=$(echo "$output" | sed -n 's/.*Refer to this image as "\(.*\)" in deployments.*/\1/p')
+        echo "IMAGE NAME"
+        echo "$image_name"
+
+        containers=$(jq -n --arg image_name "$image_name" '{
+            "flask": {
+                "image": $image_name,
+                "ports": {
+                    "8000": "HTTP"
+                }
+            }
+        }')
+
+        public_endpoint=$(jq -n '{
+            "containerName": "flask",
+            "containerPort": 8000
+        }')
+
+        aws lightsail create-container-service-deployment --region us-east-1 \
+            --service-name $service_name \
+            --containers "$containers" \
+            --public-endpoint "$public_endpoint"
