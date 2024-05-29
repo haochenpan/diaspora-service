@@ -43,6 +43,7 @@ jobs:
         docker images
 
     - name: Create Lightsail container service
+      continue-on-error: true
       run: |
         service_name="diaspora-service"
         aws lightsail create-container-service --region us-east-1 --service-name $service_name --power small --scale 1
