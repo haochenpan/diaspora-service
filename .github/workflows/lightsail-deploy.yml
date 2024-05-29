@@ -1,4 +1,4 @@
-name: Configure AWS Credentials
+name: Deploy Lightsail Container
 
 on:
   push:
@@ -13,8 +13,6 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
 
     - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v4
@@ -23,6 +21,22 @@ jobs:
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         aws-region: us-east-1
 
-    - name: Verify AWS configuration
+    - name: Verify AWS credential
       run: |
         aws sts get-caller-identity
+
+    - name: Install AWS Lightsail plugin
+      run: |
+        sudo curl "https://s3.us-west-2.amazonaws.com/lightsailctl/latest/linux-amd64/lightsailctl" -o "/usr/local/bin/lightsailctl"
+        sudo chmod +x /usr/local/bin/lightsailctl
+
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Build Docker container
+      run: |
+        service_name="diaspora-service"
+        container_name="$service_name-container"
+        echo $service_name
+        echo $container_name
+        docker build -t $container_name -f Dockerfile .
