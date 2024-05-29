@@ -1,0 +1,115 @@
+name: Deploy Lightsail Containers
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      service_name_1:
+        description: "The name of the first Lightsail service"
+        required: true
+        default: "diaspora-web-service"
+      container_name_1:
+        description: "The name of the first Docker container"
+        required: true
+        default: "diaspora-web-service-container"
+      dockerfile_path_1:
+        description: "The path to the first Dockerfile"
+        required: true
+        default: "web_service/Dockerfile"
+      service_name_2:
+        description: "The name of the second Lightsail service"
+        required: true
+        default: "diaspora-action-provider"
+      container_name_2:
+        description: "The name of the second Docker container"
+        required: true
+        default: "diaspora-action-provider-container"
+      dockerfile_path_2:
+        description: "The path to the second Dockerfile"
+        required: true
+        default: "action_provider/Dockerfile"
+
+jobs:
+  deploy-lightsail-containers:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        include:
+          - service_name: ${{ github.event.inputs.service_name_1 || 'diaspora-web-service' }}
+            container_name: ${{ github.event.inputs.container_name_1 || 'diaspora-web-service-container' }}
+            dockerfile_path: ${{ github.event.inputs.dockerfile_path_1 || 'web_service/Dockerfile' }}
+          - service_name: ${{ github.event.inputs.service_name_2 || 'diaspora-action-provider' }}
+            container_name: ${{ github.event.inputs.container_name_2 || 'diaspora-action-provider-container' }}
+            dockerfile_path: ${{ github.event.inputs.dockerfile_path_2 || 'action_provider/Dockerfile' }}
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Verify AWS credential
+        run: |
+          aws sts get-caller-identity
+
+      - name: Install AWS Lightsail plugin
+        run: |
+          sudo curl "https://s3.us-west-2.amazonaws.com/lightsailctl/latest/linux-amd64/lightsailctl" -o "/usr/local/bin/lightsailctl"
+          sudo chmod +x /usr/local/bin/lightsailctl
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build Docker container for AWS Lightsail
+        run: |
+          echo "SERVICE NAME"
+          echo ${{ matrix.service_name }}
+
+          echo "CONTAINER NAME"
+          echo ${{ matrix.container_name }}
+
+          echo "DOCKERFILE PATH"
+          echo ${{ matrix.dockerfile_path }}
+
+          docker build -t ${{ matrix.container_name }} -f ${{ matrix.dockerfile_path }} .
+          docker images
+
+      - name: Idempotently Create Lightsail container service
+        continue-on-error: true
+        run: |
+          aws lightsail create-container-service --region us-east-1 --service-name ${{ matrix.service_name }} --power small --scale 1
+
+      - name: Push Docker image to Lightsail and deploy
+        run: |
+          output=$(aws lightsail push-container-image --region us-east-1 --service-name ${{ matrix.service_name }} --label ${{ matrix.container_name }} --image ${{ matrix.container_name }})
+          image_name=$(echo "$output" | sed -n 's/.*Refer to this image as "\(.*\)" in deployments.*/\1/p')
+          
+          echo "IMAGE NAME"
+          echo "$image_name"
+
+          containers=$(jq -n --arg image_name "$image_name" '{
+              "flask": {
+                  "image": $image_name,
+                  "ports": {
+                      "8000": "HTTP"
+                  }
+              }
+          }')
+
+          public_endpoint=$(jq -n '{
+              "containerName": "flask",
+              "containerPort": 8000
+          }')
+
+          aws lightsail create-container-service-deployment --region us-east-1 \
+              --service-name ${{ matrix.service_name }} \
+              --containers "$containers" \
+              --public-endpoint "$public_endpoint"
