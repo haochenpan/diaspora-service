@@ -74,6 +74,19 @@ jobs:
           docker build -t $CONTAINER_NAME -f $DOCKERFILE_PATH .
           docker images
 
+      - name: Delete old container images
+        env:
+          SERVICE_NAME: ${{ matrix.service_name }}
+        run: |
+            output=$(aws lightsail get-container-images --service-name $SERVICE_NAME --no-paginate --output text)
+            container_names=($(echo "$output" | awk '{print $NF}'))
+
+            for name in "${container_names[@]:1}"; do
+              echo "IMAGE TO DELETE"
+              echo "$name"
+              aws lightsail delete-container-image --region us-east-1 --service-name $SERVICE_NAME --image "$name" || true
+            done
+
       - name: Idempotently Create Lightsail container service
         env:
           SERVICE_NAME: ${{ matrix.service_name }}

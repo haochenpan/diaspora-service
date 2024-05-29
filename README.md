@@ -1,46 +1,6 @@
 # diaspora-service
 
-docker build -t diaspora-app -f lightsail/Dockerfile .
-
-docker run -p 8000:8000 diaspora-app 
-
-aws lightsail create-container-service --service-name diaspora-app --power micro --scale 1
-
-aws lightsail push-container-image --region us-east-1 --service-name diaspora-app --label diaspora-app --image diaspora-app
-# Refer to this image as ":diaspora-app.diaspora-app.22" in deployments.
-
-aws lightsail create-container-service-deployment --region us-east-1 --cli-input-json
-
-
-
-aws lightsail create-container-service --generate-cli-skeleton
-
-
-
-docker build -t diaspora-app2 -f Dockerfile . 
-docker run -p 8000:8000 diaspora-app2 
-
-aws lightsail create-container-service --region us-east-1 --service-name diaspora-app2 --power small --scale 1
-aws lightsail push-container-image --region us-east-1 --service-name diaspora-app2 --label diaspora-app2 --image diaspora-app2 --no-paginate --output json
-
-aws lightsail create-container-service-deployment --region us-east-1 \
-    --service-name diaspora-app2 \
-    --containers '{
-        "flask": {
-            "image": ":diaspora-app2.diaspora-app2.26",
-            "ports": {
-                "8000": "HTTP"
-            }
-        }
-    }' \
-    --public-endpoint '{
-        "containerName": "flask",
-        "containerPort": 8000
-    }'
-
 ```bash
-# current_container="$service_name-$(openssl rand -base64 12 | tr 'A-Z' 'a-z' | tr -dc 'a-z0-9')"
-
 
 service_name="diaspora-service"
 current_container="$service_name-container"
@@ -86,5 +46,25 @@ service_name="diaspora-action-provider"
 current_container="$service_name-container"
 docker build -t $current_container -f action_provider/Dockerfile . 
 docker run -p 8000:8000 $current_container
+
+
+
+output=$(aws lightsail get-container-images --service-name diaspora-web-service --no-paginate --output text)
+echo $ouput
+
+
+
+output=$(aws lightsail get-container-images --service-name diaspora-web-service --no-paginate --output text)
+
+container_names=($(echo "$output" | awk '{print $NF}'))
+
+for name in "${container_names[@]:2}"; do
+  echo "IMAGE TO DELETE"
+  echo "$name"
+
+  aws lightsail delete-container-image --region us-east-1 --service-name diaspora-web-service --image "$name" || true
+done
+
+
 ```
 
