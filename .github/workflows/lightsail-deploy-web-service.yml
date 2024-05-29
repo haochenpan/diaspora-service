@@ -35,7 +35,7 @@ jobs:
 
       - name: Build Docker container for AWS Lightsail
         run: |
-          service_name="diaspora-service"
+          service_name="diaspora-web-service"
           echo "SERVICE NAME"
           echo $service_name
           
@@ -43,19 +43,20 @@ jobs:
           echo "CONTAINER NAME"
           echo $container_name
 
-          docker build -t $container_name -f Dockerfile .
+          docker build -t $container_name -f web_service/Dockerfile .
           docker images
 
       - name: Idempotently Create Lightsail container service
         continue-on-error: true
         run: |
-          service_name="diaspora-service"
+          service_name="diaspora-web-service"
           aws lightsail create-container-service --region us-east-1 --service-name $service_name --power small --scale 1
 
       - name: Push Docker image to Lightsail and deploy
         run: |
-          service_name="diaspora-service"
+          service_name="diaspora-web-service"
           container_name="$service_name-container"
+          
           output=$(aws lightsail push-container-image --region us-east-1 --service-name $service_name --label $container_name --image $container_name)
           image_name=$(echo "$output" | sed -n 's/.*Refer to this image as "\(.*\)" in deployments.*/\1/p')
           echo "IMAGE NAME"

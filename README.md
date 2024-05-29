@@ -72,5 +72,14 @@ aws lightsail create-container-service-deployment --region us-east-1 \
     --containers "$containers" \
     --public-endpoint "$public_endpoint"
     
+
+
+
+
+service_name="diaspora-web-service"
+current_container="$service_name-container"
+echo $current_container
+docker build -t $current_container -f web_service/Dockerfile . 
+docker run -p 8000:8000 $current_container
 ```
 

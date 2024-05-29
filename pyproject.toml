@@ -5,7 +5,21 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "diaspora-service"
 version = "0.0.1"
-dependencies = ["flask"]
+dependencies = [
+    "aws-msk-iam-sasl-signer-python",
+    "boto3",
+    "diaspora-event-sdk",
+    "fastapi",
+    "flask",
+    "globus_action_provider_tools",
+    "globus_sdk",
+    "gunicorn",
+    "jinja2",
+    "kafka-python",
+    "requests",
+    "uvicorn",
+]
+
 requires-python = ">=3.8"
 authors = [{ name = "Haochen Pan" }, { email = "haochenpan@uchicago.edu" }]
 description = "Diaspora Service"
@@ -21,4 +35,4 @@ homepage = "https://diaspora-project.github.io/"
 repository = "https://github.com/haochenpan/diaspora-service"
 
 [tool.setuptools.packages.find]
-where = ["app"]
+where = ["app", "web_service"]
