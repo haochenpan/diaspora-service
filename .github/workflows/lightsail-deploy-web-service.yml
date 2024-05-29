@@ -3,10 +3,10 @@ name: Deploy Lightsail Containers
 on:
   push:
     branches:
-      - lightsail-deploy
+      - main
   pull_request:
     branches:
-      - lightsail-deploy
+      - main
   workflow_dispatch:
     inputs:
       service_name_1:
