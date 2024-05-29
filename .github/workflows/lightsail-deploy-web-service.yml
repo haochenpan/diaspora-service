@@ -7,6 +7,20 @@ on:
   pull_request:
     branches:
       - lightsail-deploy
+  workflow_dispatch:
+    inputs:
+      service_name:
+        description: "The name of the Lightsail service"
+        required: true
+        default: "diaspora-web-service"
+      container_name:
+        description: "The name of the Docker container"
+        required: true
+        default: "diaspora-web-service-container"
+      dockerfile_path:
+        description: "The path to the Dockerfile"
+        required: true
+        default: "web_service/Dockerfile"
 
 jobs:
   deploy-lightsail-container:
@@ -24,7 +38,6 @@ jobs:
         run: |
           aws sts get-caller-identity
 
-      # https://docs.aws.amazon.com/lightsail/latest/userguide/amazon-lightsail-install-software.html
       - name: Install AWS Lightsail plugin
         run: |
           sudo curl "https://s3.us-west-2.amazonaws.com/lightsailctl/latest/linux-amd64/lightsailctl" -o "/usr/local/bin/lightsailctl"
@@ -35,30 +48,36 @@ jobs:
 
       - name: Build Docker container for AWS Lightsail
         run: |
-          service_name="diaspora-web-service"
+          service_name="${{ github.event.inputs.service_name }}"
+          container_name="${{ github.event.inputs.container_name }}"
+          dockerfile_path="${{ github.event.inputs.dockerfile_path }}"
+
           echo "SERVICE NAME"
           echo $service_name
-          
-          container_name="$service_name-container"
+
           echo "CONTAINER NAME"
           echo $container_name
 
-          docker build -t $container_name -f web_service/Dockerfile .
+          echo "DOCKERFILE PATH"
+          echo $dockerfile_path
+
+          docker build -t $container_name -f $dockerfile_path .
           docker images
 
       - name: Idempotently Create Lightsail container service
         continue-on-error: true
         run: |
-          service_name="diaspora-web-service"
+          service_name="${{ github.event.inputs.service_name }}"
           aws lightsail create-container-service --region us-east-1 --service-name $service_name --power small --scale 1
 
       - name: Push Docker image to Lightsail and deploy
         run: |
-          service_name="diaspora-web-service"
-          container_name="$service_name-container"
-          
+          service_name="${{ github.event.inputs.service_name }}"
+          container_name="${{ github.event.inputs.container_name }}"
+
           output=$(aws lightsail push-container-image --region us-east-1 --service-name $service_name --label $container_name --image $container_name)
           image_name=$(echo "$output" | sed -n 's/.*Refer to this image as "\(.*\)" in deployments.*/\1/p')
+          
           echo "IMAGE NAME"
           echo "$image_name"
 
