@@ -26,6 +26,11 @@ jobs:
   deploy-lightsail-container:
     runs-on: ubuntu-latest
 
+    env:
+      SERVICE_NAME: ${{ github.event.inputs.service_name || 'diaspora-web-service' }}
+      CONTAINER_NAME: ${{ github.event.inputs.container_name || 'diaspora-web-service-container' }}
+      DOCKERFILE_PATH: ${{ github.event.inputs.dockerfile_path || 'web_service/Dockerfile' }}
+
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -48,36 +53,28 @@ jobs:
 
       - name: Build Docker container for AWS Lightsail
         run: |
-          service_name="${{ github.event.inputs.service_name }}"
-          container_name="${{ github.event.inputs.container_name }}"
-          dockerfile_path="${{ github.event.inputs.dockerfile_path }}"
-
           echo "SERVICE NAME"
-          echo $service_name
+          echo $SERVICE_NAME
 
           echo "CONTAINER NAME"
-          echo $container_name
+          echo $CONTAINER_NAME
 
           echo "DOCKERFILE PATH"
-          echo $dockerfile_path
+          echo $DOCKERFILE_PATH
 
-          docker build -t $container_name -f $dockerfile_path .
+          docker build -t $CONTAINER_NAME -f $DOCKERFILE_PATH .
           docker images
 
       - name: Idempotently Create Lightsail container service
         continue-on-error: true
         run: |
-          service_name="${{ github.event.inputs.service_name }}"
-          aws lightsail create-container-service --region us-east-1 --service-name $service_name --power small --scale 1
+          aws lightsail create-container-service --region us-east-1 --service-name $SERVICE_NAME --power small --scale 1
 
       - name: Push Docker image to Lightsail and deploy
         run: |
-          service_name="${{ github.event.inputs.service_name }}"
-          container_name="${{ github.event.inputs.container_name }}"
-
-          output=$(aws lightsail push-container-image --region us-east-1 --service-name $service_name --label $container_name --image $container_name)
+          output=$(aws lightsail push-container-image --region us-east-1 --service-name $SERVICE_NAME --label $CONTAINER_NAME --image $CONTAINER_NAME)
           image_name=$(echo "$output" | sed -n 's/.*Refer to this image as "\(.*\)" in deployments.*/\1/p')
-          
+
           echo "IMAGE NAME"
           echo "$image_name"
 
@@ -96,6 +93,6 @@ jobs:
           }')
 
           aws lightsail create-container-service-deployment --region us-east-1 \
-              --service-name $service_name \
+              --service-name $SERVICE_NAME \
               --containers "$containers" \
               --public-endpoint "$public_endpoint"
