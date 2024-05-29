@@ -16,7 +16,7 @@ on:
       container_names:
         description: "Comma-separated names of Docker containers"
         required: true
-        default: "diaspora-web-service-container,diaspora-action-provider-container"
+        default: "docker,docker"
       dockerfile_paths:
         description: "Comma-separated paths to Dockerfiles"
         required: true

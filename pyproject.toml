@@ -35,4 +35,16 @@ homepage = "https://diaspora-project.github.io/"
 repository = "https://github.com/haochenpan/diaspora-service"
 
 [tool.setuptools.packages.find]
-where = ["app", "web_service"]
+where = ["action_provider", "web_service"]
+
+[project.optional-dependencies]
+docs = [
+    "black",
+    "mkdocs-gen-files",
+    "mkdocs-literate-nav",
+    "mkdocs-material",
+    "mkdocs-section-index",
+    "mkdocstrings",
+    "mkdocstrings-python",
+    "mike",
+]
