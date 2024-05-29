@@ -1,4 +1,4 @@
-name: Deploy Lightsail Container
+name: Deploy Lightsail Containers
 
 on:
   push:
@@ -9,27 +9,44 @@ on:
       - lightsail-deploy
   workflow_dispatch:
     inputs:
-      service_name:
-        description: "The name of the Lightsail service"
+      service_name_1:
+        description: "The name of the first Lightsail service"
         required: true
         default: "diaspora-web-service"
-      container_name:
-        description: "The name of the Docker container"
+      container_name_1:
+        description: "The name of the first Docker container"
         required: true
         default: "diaspora-web-service-container"
-      dockerfile_path:
-        description: "The path to the Dockerfile"
+      dockerfile_path_1:
+        description: "The path to the first Dockerfile"
         required: true
         default: "web_service/Dockerfile"
+      service_name_2:
+        description: "The name of the second Lightsail service"
+        required: true
+        default: "diaspora-action-provider"
+      container_name_2:
+        description: "The name of the second Docker container"
+        required: true
+        default: "diaspora-action-provider-container"
+      dockerfile_path_2:
+        description: "The path to the second Dockerfile"
+        required: true
+        default: "action_provider/Dockerfile"
 
 jobs:
-  deploy-lightsail-container:
+  deploy-lightsail-containers:
     runs-on: ubuntu-latest
 
-    env:
-      SERVICE_NAME: ${{ github.event.inputs.service_name || 'diaspora-web-service' }}
-      CONTAINER_NAME: ${{ github.event.inputs.container_name || 'diaspora-web-service-container' }}
-      DOCKERFILE_PATH: ${{ github.event.inputs.dockerfile_path || 'web_service/Dockerfile' }}
+    strategy:
+      matrix:
+        include:
+          - service_name: ${{ github.event.inputs.service_name_1 || 'diaspora-web-service' }}
+            container_name: ${{ github.event.inputs.container_name_1 || 'diaspora-web-service-container' }}
+            dockerfile_path: ${{ github.event.inputs.dockerfile_path_1 || 'web_service/Dockerfile' }}
+          - service_name: ${{ github.event.inputs.service_name_2 || 'diaspora-action-provider' }}
+            container_name: ${{ github.event.inputs.container_name_2 || 'diaspora-action-provider-container' }}
+            dockerfile_path: ${{ github.event.inputs.dockerfile_path_2 || 'action_provider/Dockerfile' }}
 
     steps:
       - name: Configure AWS credentials
@@ -54,27 +71,27 @@ jobs:
       - name: Build Docker container for AWS Lightsail
         run: |
           echo "SERVICE NAME"
-          echo $SERVICE_NAME
+          echo ${{ matrix.service_name }}
 
           echo "CONTAINER NAME"
-          echo $CONTAINER_NAME
+          echo ${{ matrix.container_name }}
 
           echo "DOCKERFILE PATH"
-          echo $DOCKERFILE_PATH
+          echo ${{ matrix.dockerfile_path }}
 
-          docker build -t $CONTAINER_NAME -f $DOCKERFILE_PATH .
+          docker build -t ${{ matrix.container_name }} -f ${{ matrix.dockerfile_path }} .
           docker images
 
       - name: Idempotently Create Lightsail container service
         continue-on-error: true
         run: |
-          aws lightsail create-container-service --region us-east-1 --service-name $SERVICE_NAME --power small --scale 1
+          aws lightsail create-container-service --region us-east-1 --service-name ${{ matrix.service_name }} --power small --scale 1
 
       - name: Push Docker image to Lightsail and deploy
         run: |
-          output=$(aws lightsail push-container-image --region us-east-1 --service-name $SERVICE_NAME --label $CONTAINER_NAME --image $CONTAINER_NAME)
+          output=$(aws lightsail push-container-image --region us-east-1 --service-name ${{ matrix.service_name }} --label ${{ matrix.container_name }} --image ${{ matrix.container_name }})
           image_name=$(echo "$output" | sed -n 's/.*Refer to this image as "\(.*\)" in deployments.*/\1/p')
-
+          
           echo "IMAGE NAME"
           echo "$image_name"
 
@@ -93,6 +110,6 @@ jobs:
           }')
 
           aws lightsail create-container-service-deployment --region us-east-1 \
-              --service-name $SERVICE_NAME \
+              --service-name ${{ matrix.service_name }} \
               --containers "$containers" \
               --public-endpoint "$public_endpoint"
