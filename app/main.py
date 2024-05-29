@@ -3,7 +3,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def hello_world():
-   return "Hello, World! 123"
+   return "Hello, World from Diaspora Service"
 
 if __name__ == "__main__":
    app.run(host='0.0.0.0', port=8000)

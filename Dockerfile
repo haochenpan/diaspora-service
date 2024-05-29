@@ -9,4 +9,4 @@ COPY pyproject.toml .
 
 RUN pip install .
 
-CMD [ "python", "app/app.py" ]
+CMD [ "python", "app/main.py" ]
