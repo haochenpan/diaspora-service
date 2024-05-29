@@ -28,9 +28,13 @@ jobs:
 
     strategy:
       matrix:
-        service_name: [diaspora-web-service, diaspora-action-provider]
-        container_name: [diaspora-web-service-container, diaspora-action-provider-container]
-        dockerfile_path: [web_service/Dockerfile, action_provider/Dockerfile]
+        include:
+          - service_name: diaspora-web-service
+            container_name: diaspora-web-service-container
+            dockerfile_path: web_service/Dockerfile
+          - service_name: diaspora-action-provider
+            container_name: diaspora-action-provider-container
+            dockerfile_path: action_provider/Dockerfile
 
     steps:
       - name: Configure AWS credentials
