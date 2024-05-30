@@ -35,7 +35,7 @@ homepage = "https://diaspora-project.github.io/"
 repository = "https://github.com/haochenpan/diaspora-service"
 
 [tool.setuptools.packages.find]
-where = ["action_provider", "web_service"]
+where = ["."]
 
 [project.optional-dependencies]
 docs = [

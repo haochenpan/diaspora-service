@@ -30,10 +30,10 @@ jobs:
       matrix:
         include:
           - service_name: diaspora-web-service
-            container_name: diaspora-web-service-container
+            container_name: docker
             dockerfile_path: web_service/Dockerfile
           - service_name: diaspora-action-provider
-            container_name: diaspora-action-provider-container
+            container_name: docker
             dockerfile_path: action_provider/Dockerfile
 
     steps:
@@ -87,7 +87,7 @@ jobs:
               aws lightsail delete-container-image --region us-east-1 --service-name $SERVICE_NAME --image "$name" || true
             done
 
-      - name: Idempotently Create Lightsail container service
+      - name: Idempotently create Lightsail container service
         env:
           SERVICE_NAME: ${{ matrix.service_name }}
         continue-on-error: true
