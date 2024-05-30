@@ -1,4 +1,4 @@
-name: Documentation
+name: docs
 
 on:
   push:
@@ -47,3 +47,4 @@ jobs:
       - name: Deploy docs for main:latest to gh-pages branch
         run: |
           mike deploy --push --update-aliases main
+          mike alias --push main latest

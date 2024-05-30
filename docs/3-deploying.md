@@ -1,7 +1,7 @@
 # Deployment
 ## Deploy through GitHub Actions
 
-A push or merge to the `main` branch automatically triggers AWS Lightsail Docker deployments. See the workflow file [lightsail.yml](https://github.com/haochenpan/diaspora-service/blob/main/.github/workflows/lightsail.yml). This action is partially adapted from [fdiesel/github-action-deploy-aws-lightsail-container](https://github.com/fdiesel/github-action-deploy-aws-lightsail-container).
+A push or merge to the `main` branch automatically triggers AWS Lightsail Docker deployments. See the workflow file [deployment.yml](https://github.com/haochenpan/diaspora-service/blob/main/.github/workflows/deployment.yml). This action is partially adapted from [fdiesel/github-action-deploy-aws-lightsail-container](https://github.com/fdiesel/github-action-deploy-aws-lightsail-container).
 
 ## Deploy from a Local Environment
 
