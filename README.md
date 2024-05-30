@@ -6,8 +6,9 @@
 [![pre-commit.ci status](https://results.pre-commit.ci/badge/github/haochenpan/diaspora-service/main.svg)](https://results.pre-commit.ci/latest/github/haochenpan/diaspora-service/main)
 
 
-[Project Home Page](https://diaspora-project.github.io/)
-[project Documentation](https://haochenpan.github.io/diaspora-service/)
+[Project Homepage](https://diaspora-project.github.io/)
+
+[Project Documentation](https://haochenpan.github.io/diaspora-service/)
 
 TODOs
 
