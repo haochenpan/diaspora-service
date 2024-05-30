@@ -18,7 +18,7 @@ def hello_world() -> str:
     version = __version__
     client_id = os.environ['CLIENT_ID']
     return (
-        'Hello World from Action Provider '
+        'Hello World! from Action Provider '
         f'version {version} with CLIENT_ID={client_id}'
     )
 

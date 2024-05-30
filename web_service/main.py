@@ -26,7 +26,7 @@ async def root() -> dict[str, str]:
     client_id = os.environ['SERVER_CLIENT_ID']
     return {
         'message': (
-            'Hello World from Web Service '
+            'Hello World! from Web Service '
             f'version {version} with CLIENT_ID={client_id}'
         ),
     }
