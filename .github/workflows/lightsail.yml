@@ -1,4 +1,4 @@
-name: Deploy Lightsail Containers
+name: Deployment
 
 on:
   push:
