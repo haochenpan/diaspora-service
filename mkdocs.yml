@@ -55,7 +55,7 @@ theme:
   # favicon: static/favicon.png
   # icon:
   #   logo: logo
-  
+
 watch:
   - mkdocs.yml
   - README.md

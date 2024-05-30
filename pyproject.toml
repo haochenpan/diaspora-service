@@ -32,12 +32,23 @@ classifiers = [
 
 [project.urls]
 homepage = "https://diaspora-project.github.io/"
+documentation = "https://haochenpan.github.io/diaspora-service/"
 repository = "https://github.com/haochenpan/diaspora-service"
 
-[tool.setuptools.packages.find]
-where = ["."]
+
 
 [project.optional-dependencies]
+dev = [
+    "covdefaults>=2.2",
+    "coverage",
+    "mypy",
+    "pre-commit",
+    "pytest",
+    "pytest-cov",
+    "ruff>=0.2.0",
+    "tox",
+    "virtualenv",
+]
 docs = [
     "black",
     "mkdocs-gen-files",
@@ -48,3 +59,127 @@ docs = [
     "mkdocstrings-python",
     "mike",
 ]
+demo = [
+    "ipykernel",
+    "requests",
+]
+
+[tool.codespell]
+skip = """
+.git,
+.github,
+__pycache__,
+build,
+dist,
+.*egg-info
+"""
+
+[tool.pytest.ini_options]
+log_cli = true
+log_cli_level = "INFO"
+
+
+[tool.coverage.run]
+plugins = ["covdefaults"]
+omit = [
+    "examples",
+]
+
+[tool.mypy]
+python_version = "3.10"
+check_untyped_defs = true
+disallow_any_generics = true
+disallow_incomplete_defs = true
+disallow_untyped_defs = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_configs = true
+warn_unused_ignores = true
+
+[[tool.mypy.overrides]]
+module = "testing.*"
+disallow_untyped_defs = false
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+ignore_missing_imports = true
+
+[tool.ruff]
+line-length = 79
+target-version = "py38"
+extend-include = ["*.ipynb"]
+
+[tool.ruff.format]
+indent-style = "space"
+quote-style = "single"
+
+[tool.ruff.lint]
+# See all rules here: https://beta.ruff.rs/docs/rules
+select = [
+    # pyflakes
+    "F",
+    # pycodestyle
+    "E",
+    # mccabe
+    "C90",
+    # isort
+    "I",
+    # pep8-naming
+    "N",
+    # pydocstyle
+    "D",
+    # pyupgrade
+    "UP",
+    # flake8-2020
+    "YTT",
+    # flake8-bugbear
+    "B",
+    # flake8-builtins
+    "A",
+    # flake8-commas
+    "COM",
+    # flake8-comprehensions
+    "C4",
+    # flake8-implicit-str-concat
+    "ISC",
+    # flake8-pytest-style
+    "PT",
+    # flake8-quotes
+    "Q",
+    # flake8-debugger
+    "T10",
+    # flake8-simplify
+    "SIM",
+    # PyLint
+    "PL",
+    # ruff-specific
+    "RUF",
+]
+extend-ignore = []
+
+[tool.ruff.lint.flake8-pytest-style]
+parametrize-values-type = "tuple"
+
+[tool.ruff.lint.flake8-quotes]
+inline-quotes = "single"
+multiline-quotes = "single"
+
+[tool.ruff.lint.isort]
+force-single-line = true
+known-first-party = ["foobar", "test", "testing"]
+order-by-type = false
+required-imports = ["from __future__ import annotations"]
+
+[tool.ruff.lint.per-file-ignores]
+"*/__init__.py" = ["F401"]
+"*/*_test.py" = ["D10"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.setuptools.packages.find]
+where = ["."]
+exclude = ["tests*", "testing*"]
+namespaces = false

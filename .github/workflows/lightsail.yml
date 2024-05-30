@@ -101,7 +101,7 @@ jobs:
         run: |
           output=$(aws lightsail push-container-image --region us-east-1 --service-name $SERVICE_NAME --label $CONTAINER_NAME --image $CONTAINER_NAME)
           image_name=$(echo "$output" | sed -n 's/.*Refer to this image as "\(.*\)" in deployments.*/\1/p')
-          
+
           echo "IMAGE NAME"
           echo "$image_name"
 
