@@ -1,4 +1,4 @@
-"""Utility functions for the Action Provider."""
+"""Common utility functions."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ class EnvironmentChecker:
     """Check if environment variables are set."""
 
     @staticmethod
-    def check_env_variables(*variables):
+    def check_env_variables(*variables: str) -> None:
         """Check if each environment variable in vars is set."""
         for var in variables:
             assert os.getenv(var), f'{var} environment variable is not set.'

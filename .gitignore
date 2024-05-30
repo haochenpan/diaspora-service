@@ -133,3 +133,4 @@ secrets.sh
 nohup.out
 *.pyc
 *venv*
+.DS_Store

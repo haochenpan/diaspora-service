@@ -32,11 +32,25 @@ To deploy from a local environment, first build the Docker containers using the 
 
     echo "IMAGE NAME: $image_name"
 
-    containers=$(jq -n --arg image_name "$image_name" '{
+    containers=$(jq -n --arg image_name "$image_name" \
+        --arg aws_access_key_id "$AWS_ACCESS_KEY_ID" \
+        --arg aws_secret_access_key "$AWS_SECRET_ACCESS_KEY" \
+        --arg client_id "$CLIENT_ID" \
+        --arg client_secret "$CLIENT_SECRET" \
+        --arg client_scope "$CLIENT_SCOPE" \
+        --arg default_servers "$DEFAULT_SERVERS" '{
         "flask": {
             "image": $image_name,
             "ports": {
                 "8000": "HTTP"
+            },
+            "environment": {
+                "AWS_ACCESS_KEY_ID": $aws_access_key_id,
+                "AWS_SECRET_ACCESS_KEY": $aws_secret_access_key,
+                "CLIENT_ID": $client_id,
+                "CLIENT_SECRET": $client_secret,
+                "CLIENT_SCOPE": $client_scope,
+                "DEFAULT_SERVERS": $default_servers
             }
         }
     }')
