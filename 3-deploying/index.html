@@ -12,13 +12,11 @@
         <meta name="author" content="Haochen Pan">
       
       
-        <link rel="canonical" href="https://github.com/haochenpan/diaspora-service/testing/">
+        <link rel="canonical" href="https://github.com/haochenpan/diaspora-service/3-deploying/">
       
       
-        <link rel="prev" href="../running/">
+        <link rel="prev" href="../2-testing/">
       
-      
-        <link rel="next" href="../deployment/">
       
       
       <link rel="icon" href="../assets/images/favicon.png">
@@ -26,7 +24,7 @@
     
     
       
-        <title>Testing - Diaspora Service Documentation</title>
+        <title>Deploying - Diaspora Service Documentation</title>
       
     
     
@@ -78,7 +76,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#testing" class="md-skip">
+        <a href="#deployment" class="md-skip">
           Skip to content
         </a>
       
@@ -112,7 +110,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Testing
+              Deploying
             
           </span>
         </div>
@@ -369,11 +367,32 @@
   
   
     <li class="md-nav__item">
-      <a href="../running/" class="md-nav__link">
+      <a href="../1-running/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
     Running
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2-testing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Testing
   </span>
   
 
@@ -403,7 +422,7 @@
           
   
   <span class="md-ellipsis">
-    Testing
+    Deploying
   </span>
   
 
@@ -414,7 +433,7 @@
         
   
   <span class="md-ellipsis">
-    Testing
+    Deploying
   </span>
   
 
@@ -436,35 +455,20 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#testing-in-virtual-environment" class="md-nav__link">
+  <a href="#deploy-through-github-actions" class="md-nav__link">
     <span class="md-ellipsis">
-      Testing in Virtual Environment
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Testing in Virtual Environment">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#action-provider" class="md-nav__link">
-    <span class="md-ellipsis">
-      Action Provider
+      Deploy through GitHub Actions
     </span>
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
-  <a href="#web-service" class="md-nav__link">
+      
+        <li class="md-nav__item">
+  <a href="#deploy-from-a-local-environment" class="md-nav__link">
     <span class="md-ellipsis">
-      Web Service
+      Deploy from a Local Environment
     </span>
   </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
@@ -472,27 +476,6 @@
   
 </nav>
       
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../deployment/" class="md-nav__link">
-        
-  
-  <span class="md-ellipsis">
-    Deployment
-  </span>
-  
-
-      </a>
     </li>
   
 
@@ -532,35 +515,20 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#testing-in-virtual-environment" class="md-nav__link">
+  <a href="#deploy-through-github-actions" class="md-nav__link">
     <span class="md-ellipsis">
-      Testing in Virtual Environment
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Testing in Virtual Environment">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#action-provider" class="md-nav__link">
-    <span class="md-ellipsis">
-      Action Provider
+      Deploy through GitHub Actions
     </span>
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
-  <a href="#web-service" class="md-nav__link">
+      
+        <li class="md-nav__item">
+  <a href="#deploy-from-a-local-environment" class="md-nav__link">
     <span class="md-ellipsis">
-      Web Service
+      Deploy from a Local Environment
     </span>
   </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
@@ -582,16 +550,77 @@
   
 
 
-<h1 id="testing">Testing<a class="headerlink" href="#testing" title="Permanent link">&para;</a></h1>
-<h2 id="testing-in-virtual-environment">Testing in Virtual Environment<a class="headerlink" href="#testing-in-virtual-environment" title="Permanent link">&para;</a></h2>
-<h3 id="action-provider">Action Provider<a class="headerlink" href="#action-provider" title="Permanent link">&para;</a></h3>
-<p>To test the Action Provider in a virtual environment, run:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>pytest<span class="w"> </span>tests/action_provider_test.py
+<h1 id="deployment">Deployment<a class="headerlink" href="#deployment" title="Permanent link">&para;</a></h1>
+<h2 id="deploy-through-github-actions">Deploy through GitHub Actions<a class="headerlink" href="#deploy-through-github-actions" title="Permanent link">&para;</a></h2>
+<p>A push or merge to the <code>main</code> branch automatically triggers AWS Lightsail Docker deployments. See the workflow file <a href="https://github.com/haochenpan/diaspora-service/blob/main/.github/workflows/lightsail.yml">lightsail.yml</a>. This action is partially adapted from <a href="https://github.com/fdiesel/github-action-deploy-aws-lightsail-container">fdiesel/github-action-deploy-aws-lightsail-container</a>.</p>
+<h2 id="deploy-from-a-local-environment">Deploy from a Local Environment<a class="headerlink" href="#deploy-from-a-local-environment" title="Permanent link">&para;</a></h2>
+<p>To deploy from a local environment, first build the Docker containers using the commands provided above. Then, use the following commands to push the images to AWS Lightsail and deploy them.</p>
+<ol>
+<li>
+<p>Delete old container images:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nv">output</span><span class="o">=</span><span class="k">$(</span>aws<span class="w"> </span>lightsail<span class="w"> </span>get-container-images<span class="w"> </span>--service-name<span class="w"> </span><span class="nv">$SERVICE_NAME</span><span class="w"> </span>--no-paginate<span class="w"> </span>--output<span class="w"> </span>text<span class="k">)</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nv">container_names</span><span class="o">=(</span><span class="k">$(</span><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$output</span><span class="s2">&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>awk<span class="w"> </span><span class="s1">&#39;{print $NF}&#39;</span><span class="k">)</span><span class="o">)</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="k">for</span><span class="w"> </span>name<span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">container_names</span><span class="p">[@]:</span><span class="nv">1</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">;</span><span class="w"> </span><span class="k">do</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">    </span><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;IMAGE TO DELETE: </span><span class="nv">$name</span><span class="s2">&quot;</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">    </span>aws<span class="w"> </span>lightsail<span class="w"> </span>delete-container-image<span class="w"> </span>--region<span class="w"> </span>us-east-1<span class="w"> </span>--service-name<span class="w"> </span><span class="nv">$SERVICE_NAME</span><span class="w"> </span>--image<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$name</span><span class="s2">&quot;</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nb">true</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="k">done</span>
 </span></code></pre></div>
-<h3 id="web-service">Web Service<a class="headerlink" href="#web-service" title="Permanent link">&para;</a></h3>
-<p>To test the Web Service in a virtual environment, run:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>pytest<span class="w"> </span>tests/web_service_test.py
+</li>
+<li>
+<p>Idempotently create Lightsail container service:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>aws<span class="w"> </span>lightsail<span class="w"> </span>create-container-service<span class="w"> </span>--region<span class="w"> </span>us-east-1<span class="w"> </span>--service-name<span class="w"> </span><span class="nv">$SERVICE_NAME</span><span class="w"> </span>--power<span class="w"> </span>small<span class="w"> </span>--scale<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nb">true</span>
 </span></code></pre></div>
+</li>
+<li>
+<p>Push Docker image to Lightsail:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nv">output</span><span class="o">=</span><span class="k">$(</span>aws<span class="w"> </span>lightsail<span class="w"> </span>push-container-image<span class="w"> </span>--region<span class="w"> </span>us-east-1<span class="w"> </span>--service-name<span class="w"> </span><span class="nv">$SERVICE_NAME</span><span class="w"> </span>--label<span class="w"> </span><span class="nv">$CONTAINER_NAME</span><span class="w"> </span>--image<span class="w"> </span><span class="nv">$CONTAINER_NAME</span><span class="k">)</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="nv">image_name</span><span class="o">=</span><span class="k">$(</span><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$output</span><span class="s2">&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>sed<span class="w"> </span>-n<span class="w"> </span><span class="s1">&#39;s/.*Refer to this image as &quot;\(.*\)&quot; in deployments.*/\1/p&#39;</span><span class="k">)</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;IMAGE NAME: </span><span class="nv">$image_name</span><span class="s2">&quot;</span>
+</span></code></pre></div>
+</li>
+<li>
+<p>Deploy the Docker image:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nv">containers</span><span class="o">=</span><span class="k">$(</span>jq<span class="w"> </span>-n<span class="w"> </span>--arg<span class="w"> </span>image_name<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$image_name</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">    </span>--arg<span class="w"> </span>aws_access_key_id<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$AWS_ACCESS_KEY_ID</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">    </span>--arg<span class="w"> </span>aws_secret_access_key<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$AWS_SECRET_ACCESS_KEY</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">    </span>--arg<span class="w"> </span>client_id<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CLIENT_ID</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">    </span>--arg<span class="w"> </span>client_secret<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CLIENT_SECRET</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">    </span>--arg<span class="w"> </span>client_scope<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CLIENT_SCOPE</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">    </span>--arg<span class="w"> </span>default_servers<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$DEFAULT_SERVERS</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="w">    </span>--arg<span class="w"> </span>server_client_id<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$SERVER_CLIENT_ID</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="w">    </span>--arg<span class="w"> </span>server_secret<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$SERVER_SECRET</span><span class="s2">&quot;</span><span class="w"> </span><span class="s1">&#39;{</span>
+</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="s1">    &quot;flask&quot;: {</span>
+</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a><span class="s1">        &quot;image&quot;: $image_name,</span>
+</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a><span class="s1">        &quot;ports&quot;: {</span>
+</span><span id="__span-3-13"><a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a><span class="s1">            &quot;8000&quot;: &quot;HTTP&quot;</span>
+</span><span id="__span-3-14"><a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a><span class="s1">        },</span>
+</span><span id="__span-3-15"><a id="__codelineno-3-15" name="__codelineno-3-15" href="#__codelineno-3-15"></a><span class="s1">        &quot;environment&quot;: {</span>
+</span><span id="__span-3-16"><a id="__codelineno-3-16" name="__codelineno-3-16" href="#__codelineno-3-16"></a><span class="s1">            &quot;AWS_ACCESS_KEY_ID&quot;: $aws_access_key_id,</span>
+</span><span id="__span-3-17"><a id="__codelineno-3-17" name="__codelineno-3-17" href="#__codelineno-3-17"></a><span class="s1">            &quot;AWS_SECRET_ACCESS_KEY&quot;: $aws_secret_access_key,</span>
+</span><span id="__span-3-18"><a id="__codelineno-3-18" name="__codelineno-3-18" href="#__codelineno-3-18"></a><span class="s1">            &quot;CLIENT_ID&quot;: $client_id,</span>
+</span><span id="__span-3-19"><a id="__codelineno-3-19" name="__codelineno-3-19" href="#__codelineno-3-19"></a><span class="s1">            &quot;CLIENT_SECRET&quot;: $client_secret,</span>
+</span><span id="__span-3-20"><a id="__codelineno-3-20" name="__codelineno-3-20" href="#__codelineno-3-20"></a><span class="s1">            &quot;CLIENT_SCOPE&quot;: $client_scope,</span>
+</span><span id="__span-3-21"><a id="__codelineno-3-21" name="__codelineno-3-21" href="#__codelineno-3-21"></a><span class="s1">            &quot;DEFAULT_SERVERS&quot;: $default_servers,</span>
+</span><span id="__span-3-22"><a id="__codelineno-3-22" name="__codelineno-3-22" href="#__codelineno-3-22"></a><span class="s1">            &quot;SERVER_CLIENT_ID&quot;: $server_client_id,</span>
+</span><span id="__span-3-23"><a id="__codelineno-3-23" name="__codelineno-3-23" href="#__codelineno-3-23"></a><span class="s1">            &quot;SERVER_SECRET&quot;: $server_secret</span>
+</span><span id="__span-3-24"><a id="__codelineno-3-24" name="__codelineno-3-24" href="#__codelineno-3-24"></a><span class="s1">        }</span>
+</span><span id="__span-3-25"><a id="__codelineno-3-25" name="__codelineno-3-25" href="#__codelineno-3-25"></a><span class="s1">    }</span>
+</span><span id="__span-3-26"><a id="__codelineno-3-26" name="__codelineno-3-26" href="#__codelineno-3-26"></a><span class="s1">}&#39;</span><span class="k">)</span>
+</span><span id="__span-3-27"><a id="__codelineno-3-27" name="__codelineno-3-27" href="#__codelineno-3-27"></a>
+</span><span id="__span-3-28"><a id="__codelineno-3-28" name="__codelineno-3-28" href="#__codelineno-3-28"></a>
+</span><span id="__span-3-29"><a id="__codelineno-3-29" name="__codelineno-3-29" href="#__codelineno-3-29"></a><span class="nv">public_endpoint</span><span class="o">=</span><span class="k">$(</span>jq<span class="w"> </span>-n<span class="w"> </span><span class="s1">&#39;{</span>
+</span><span id="__span-3-30"><a id="__codelineno-3-30" name="__codelineno-3-30" href="#__codelineno-3-30"></a><span class="s1">    &quot;containerName&quot;: &quot;flask&quot;,</span>
+</span><span id="__span-3-31"><a id="__codelineno-3-31" name="__codelineno-3-31" href="#__codelineno-3-31"></a><span class="s1">    &quot;containerPort&quot;: 8000</span>
+</span><span id="__span-3-32"><a id="__codelineno-3-32" name="__codelineno-3-32" href="#__codelineno-3-32"></a><span class="s1">}&#39;</span><span class="k">)</span>
+</span><span id="__span-3-33"><a id="__codelineno-3-33" name="__codelineno-3-33" href="#__codelineno-3-33"></a>
+</span><span id="__span-3-34"><a id="__codelineno-3-34" name="__codelineno-3-34" href="#__codelineno-3-34"></a>aws<span class="w"> </span>lightsail<span class="w"> </span>create-container-service-deployment<span class="w"> </span>--region<span class="w"> </span>us-east-1<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-35"><a id="__codelineno-3-35" name="__codelineno-3-35" href="#__codelineno-3-35"></a><span class="w">    </span>--service-name<span class="w"> </span><span class="nv">$SERVICE_NAME</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-36"><a id="__codelineno-3-36" name="__codelineno-3-36" href="#__codelineno-3-36"></a><span class="w">    </span>--containers<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$containers</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-37"><a id="__codelineno-3-37" name="__codelineno-3-37" href="#__codelineno-3-37"></a><span class="w">    </span>--public-endpoint<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$public_endpoint</span><span class="s2">&quot;</span>
+</span></code></pre></div>
+</li>
+</ol>
 
 
 

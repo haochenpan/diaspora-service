@@ -6,17 +6,17 @@
          <changefreq>daily</changefreq>
     </url>
     <url>
-         <loc>https://github.com/haochenpan/diaspora-service/deployment/</loc>
+         <loc>https://github.com/haochenpan/diaspora-service/1-running/</loc>
          <lastmod>2024-05-30</lastmod>
          <changefreq>daily</changefreq>
     </url>
     <url>
-         <loc>https://github.com/haochenpan/diaspora-service/running/</loc>
+         <loc>https://github.com/haochenpan/diaspora-service/2-testing/</loc>
          <lastmod>2024-05-30</lastmod>
          <changefreq>daily</changefreq>
     </url>
     <url>
-         <loc>https://github.com/haochenpan/diaspora-service/testing/</loc>
+         <loc>https://github.com/haochenpan/diaspora-service/3-deploying/</loc>
          <lastmod>2024-05-30</lastmod>
          <changefreq>daily</changefreq>
     </url>
