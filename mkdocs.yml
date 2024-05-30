@@ -95,4 +95,7 @@ markdown_extensions:
 nav:
   - Home:
       - Overview: index.md
+      - Running: running.md
+      - Testing: testing.md
       - Deployment: deployment.md
+
