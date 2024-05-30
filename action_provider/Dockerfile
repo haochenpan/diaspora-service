@@ -5,6 +5,7 @@ EXPOSE 8000/tcp
 WORKDIR /diaspora-action-provider
 
 COPY action_provider action_provider
+COPY common common
 COPY pyproject.toml .
 
 RUN pip install .

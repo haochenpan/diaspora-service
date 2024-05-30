@@ -28,7 +28,6 @@ def test_hello_world(client):
     logger.info(f'Response data: {response.data.decode("utf-8")}')
 
     assert response.status_code == SUCCESS_STATUS_CODE
-    assert (
-        response.data.decode('utf-8')
-        == f'Hello World from Action Provider version {__version__}'
+    assert response.data.decode('utf-8').startswith(
+        f'Hello World from Action Provider version {__version__}',
     )

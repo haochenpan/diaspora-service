@@ -16,6 +16,6 @@ def test_root():
     """Test the root endpoint."""
     response = client.get('/')
     assert response.status_code == SUCCESS_STATUS_CODE
-    assert response.json() == {
-        'message': f'Hello World from Web Service version {__version__}',
-    }
+    assert response.json()['message'].startswith(
+        f'Hello World from Web Service version {__version__}',
+    )

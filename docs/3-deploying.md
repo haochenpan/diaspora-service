@@ -24,22 +24,45 @@ To deploy from a local environment, first build the Docker containers using the 
     aws lightsail create-container-service --region us-east-1 --service-name $SERVICE_NAME --power small --scale 1 || true
     ```
 
-3. Push Docker image to Lightsail and deploy:
+3. Push Docker image to Lightsail:
 
     ```bash
     output=$(aws lightsail push-container-image --region us-east-1 --service-name $SERVICE_NAME --label $CONTAINER_NAME --image $CONTAINER_NAME)
     image_name=$(echo "$output" | sed -n 's/.*Refer to this image as "\(.*\)" in deployments.*/\1/p')
 
     echo "IMAGE NAME: $image_name"
+    ```
 
-    containers=$(jq -n --arg image_name "$image_name" '{
+4. Deploy the Docker image:
+
+    ```bash
+    containers=$(jq -n --arg image_name "$image_name" \
+        --arg aws_access_key_id "$AWS_ACCESS_KEY_ID" \
+        --arg aws_secret_access_key "$AWS_SECRET_ACCESS_KEY" \
+        --arg client_id "$CLIENT_ID" \
+        --arg client_secret "$CLIENT_SECRET" \
+        --arg client_scope "$CLIENT_SCOPE" \
+        --arg default_servers "$DEFAULT_SERVERS" \
+        --arg server_client_id "$SERVER_CLIENT_ID" \
+        --arg server_secret "$SERVER_SECRET" '{
         "flask": {
             "image": $image_name,
             "ports": {
                 "8000": "HTTP"
+            },
+            "environment": {
+                "AWS_ACCESS_KEY_ID": $aws_access_key_id,
+                "AWS_SECRET_ACCESS_KEY": $aws_secret_access_key,
+                "CLIENT_ID": $client_id,
+                "CLIENT_SECRET": $client_secret,
+                "CLIENT_SCOPE": $client_scope,
+                "DEFAULT_SERVERS": $default_servers,
+                "SERVER_CLIENT_ID": $server_client_id,
+                "SERVER_SECRET": $server_secret
             }
         }
     }')
+
 
     public_endpoint=$(jq -n '{
         "containerName": "flask",
