@@ -17,5 +17,5 @@ def test_root():
     response = client.get('/')
     assert response.status_code == SUCCESS_STATUS_CODE
     assert response.json()['message'].startswith(
-        f'Hello World from Web Service version {__version__}',
+        f'Hello World! from Web Service version {__version__}',
     )

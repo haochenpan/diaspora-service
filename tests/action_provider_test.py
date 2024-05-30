@@ -29,5 +29,5 @@ def test_hello_world(client):
 
     assert response.status_code == SUCCESS_STATUS_CODE
     assert response.data.decode('utf-8').startswith(
-        f'Hello World from Action Provider version {__version__}',
+        f'Hello World! from Action Provider version {__version__}',
     )
