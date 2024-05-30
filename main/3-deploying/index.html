@@ -552,7 +552,7 @@
 
 <h1 id="deployment">Deployment<a class="headerlink" href="#deployment" title="Permanent link">&para;</a></h1>
 <h2 id="deploy-through-github-actions">Deploy through GitHub Actions<a class="headerlink" href="#deploy-through-github-actions" title="Permanent link">&para;</a></h2>
-<p>A push or merge to the <code>main</code> branch automatically triggers AWS Lightsail Docker deployments. See the workflow file <a href="https://github.com/haochenpan/diaspora-service/blob/main/.github/workflows/lightsail.yml">lightsail.yml</a>. This action is partially adapted from <a href="https://github.com/fdiesel/github-action-deploy-aws-lightsail-container">fdiesel/github-action-deploy-aws-lightsail-container</a>.</p>
+<p>A push or merge to the <code>main</code> branch automatically triggers AWS Lightsail Docker deployments. See the workflow file <a href="https://github.com/haochenpan/diaspora-service/blob/main/.github/workflows/deployment.yml">deployment.yml</a>. This action is partially adapted from <a href="https://github.com/fdiesel/github-action-deploy-aws-lightsail-container">fdiesel/github-action-deploy-aws-lightsail-container</a>.</p>
 <h2 id="deploy-from-a-local-environment">Deploy from a Local Environment<a class="headerlink" href="#deploy-from-a-local-environment" title="Permanent link">&para;</a></h2>
 <p>To deploy from a local environment, first build the Docker containers using the commands provided above. Then, use the following commands to push the images to AWS Lightsail and deploy them.</p>
 <ol>
