@@ -4,7 +4,6 @@ import importlib.metadata as importlib_metadata
 import json
 import logging
 
-from action_provider.utils import load_schema
 from testing.fixtures import access_token  # noqa: F401
 from testing.fixtures import client  # noqa: F401
 
