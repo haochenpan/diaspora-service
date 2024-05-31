@@ -19,3 +19,4 @@ TODOs
 - action provider basic tests
 
 - add docs along the way
+- octopus icon
