@@ -25,4 +25,14 @@
          <lastmod>2024-05-31</lastmod>
          <changefreq>daily</changefreq>
     </url>
+    <url>
+         <loc>https://github.com/haochenpan/diaspora-service/main/ap/api/</loc>
+         <lastmod>2024-05-31</lastmod>
+         <changefreq>daily</changefreq>
+    </url>
+    <url>
+         <loc>https://github.com/haochenpan/diaspora-service/main/ap/examples/</loc>
+         <lastmod>2024-05-31</lastmod>
+         <changefreq>daily</changefreq>
+    </url>
 </urlset>
