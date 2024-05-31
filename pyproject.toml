@@ -83,7 +83,7 @@ log_cli_level = "INFO"
 [tool.coverage.run]
 plugins = ["covdefaults"]
 omit = [
-    "examples",
+    "lambda/",
 ]
 
 [tool.mypy]
