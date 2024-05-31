@@ -6,17 +6,20 @@ import os
 
 from globus_sdk import ConfidentialAppAuthClient
 
+from common.utils import EnvironmentChecker
+
 
 def get_access_token() -> str:
     """Get an access token to SERVER_CLIENT_ID."""
+    EnvironmentChecker.check_env_variables(
+        'SERVER_CLIENT_ID',
+        'SERVER_SECRET',
+        'CLIENT_SCOPE',
+    )
+
     client_id = os.getenv('SERVER_CLIENT_ID')
     client_secret = os.getenv('SERVER_SECRET')
     requested_scopes = os.getenv('CLIENT_SCOPE')
-
-    if not all([client_id, client_secret, requested_scopes]):
-        raise ValueError(
-            'Missing one or more environment variables: SERVER_CLIENT_ID, SERVER_SECRET, CLIENT_SCOPE'
-        )
 
     ca = ConfidentialAppAuthClient(
         client_id=client_id,

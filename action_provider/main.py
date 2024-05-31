@@ -8,6 +8,7 @@ from flask import Blueprint
 from flask import Flask
 from globus_action_provider_tools import ActionProviderDescription
 from globus_action_provider_tools import ActionRequest
+from globus_action_provider_tools import ActionStatusValue
 from globus_action_provider_tools import AuthState
 from globus_action_provider_tools.flask import add_action_routes_to_blueprint
 from globus_action_provider_tools.flask.helpers import assign_json_provider
@@ -29,7 +30,12 @@ def action_run(
     auth: AuthState,
 ) -> ActionCallbackReturn:
     """Produce or consume events."""
-    status = build_action_status(auth)
+    status = build_action_status(
+        auth,
+        ActionStatusValue.SUCCEEDED,
+        request,
+        result={'result': 'succeeded'},
+    )
     return status, 200
     # action = request.body['action']
     # if action == 'produce':
