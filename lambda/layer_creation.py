@@ -20,7 +20,7 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     try:
         # for Diaspora Trigger
         # packages = ['globus_sdk', 'diaspora-event-sdk[kafka-python]']
-        
+
         # for CICD monitor
         packages = ['requests']
         bucket_name = 'fabric-lambda-layers-bucket'

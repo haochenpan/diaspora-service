@@ -109,6 +109,7 @@ nav:
       - Running: 1-running.md
       - Testing: 2-testing.md
       - Deploying: 3-deploying.md
+      - Monitoring: 4-monitoring.md
       - Acknowledgment: acknowledgment.md
   - Action provider:
       - APIs: ap/api.md
