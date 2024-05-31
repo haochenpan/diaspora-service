@@ -1,4 +1,5 @@
 """Fixtures for Diaspora Service."""
+
 from __future__ import annotations
 
 import pytest
@@ -13,6 +14,7 @@ def client():
     app = create_app()
     with app.test_client() as client:
         yield client
+
 
 @pytest.fixture(scope='module')
 def access_token():
