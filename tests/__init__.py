@@ -1,3 +1,3 @@
-"""Testing code for Diaspora Service."""
+"""Tests for Diaspora Service."""
 
 from __future__ import annotations

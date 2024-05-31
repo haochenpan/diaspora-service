@@ -52,9 +52,9 @@ theme:
       toggle:
         icon: material/brightness-4
         name: Switch to system preference
-  # favicon: static/favicon.png
+  # favicon: static/octopus.png
   # icon:
-  #   logo: logo
+    # logo: static/octopus.png
 
 watch:
   - mkdocs.yml

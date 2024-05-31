@@ -1,0 +1,83 @@
+{
+    "title": "Diaspora Event Fabric Messaging Schema",
+    "type": "object",
+    "properties": {
+        "action": {
+            "description": "The action to perform: 'produce' for publishing events, 'consume' for retrieving recent events.",
+            "type": "string",
+            "enum": [
+                "produce",
+                "consume"
+            ]
+        },
+        "topic": {
+            "description": "The topic to publish or retrieve the events.",
+            "type": "string"
+        },
+        "msgs": {
+            "type": "array",
+            "description": "List of events, each formatted as a JSON string. Required for 'produce' action.",
+            "items": {
+                "type": "object"
+            }
+        },
+        "keys": {
+            "oneOf": [
+                {
+                    "type": "string",
+                    "description": "Optional single event key for 'produce' action."
+                },
+                {
+                    "type": "array",
+                    "description": "Optional list of event keys for 'produce' action.",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            ]
+        },
+        "ts": {
+            "description": "Timestamp in milliseconds since the beginning of the epoch to start retrieving messages from. Required for 'consume' action.",
+            "type": "integer",
+            "minimum": 0
+        },
+        "servers": {
+            "description": "Optional list of diaspora servers separated by commas (dev use only).",
+            "type": "string"
+        }
+    },
+    "additionalProperties": false,
+    "required": [
+        "action",
+        "topic"
+    ],
+    "dependencies": {
+        "action": {
+            "oneOf": [
+                {
+                    "properties": {
+                        "action": {
+                            "const": "produce"
+                        },
+                        "msgs": {
+                            "minItems": 1
+                        }
+                    },
+                    "required": [
+                        "msgs"
+                    ]
+                },
+                {
+                    "properties": {
+                        "action": {
+                            "const": "consume"
+                        },
+                        "ts": {
+                            "type": "integer"
+                        }
+                    }
+                }
+            ]
+        }
+    }
+}
