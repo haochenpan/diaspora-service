@@ -14,10 +14,9 @@
 
 TODOs
 
-- action provider code
-- action provider basic tests
 - action provider filter by key
-- action provider filtering syntax
+- action provider general filtering syntax
+- action provider filter tests
 
 - web service code
 - web service basic tests
