@@ -15,6 +15,7 @@ from globus_action_provider_tools.flask.helpers import assign_json_provider
 from globus_action_provider_tools.flask.types import ActionCallbackReturn
 
 from action_provider import __version__
+from action_provider.action_produce import action_produce
 from action_provider.utils import build_action_status
 from action_provider.utils import load_schema
 from common.utils import EnvironmentChecker
@@ -30,13 +31,14 @@ def action_run(
     auth: AuthState,
 ) -> ActionCallbackReturn:
     """Produce or consume events."""
-    status = build_action_status(
-        auth,
-        ActionStatusValue.SUCCEEDED,
-        request,
-        result={'result': 'succeeded'},
-    )
-    return status, 200
+    return action_produce(request, auth)
+    # status = build_action_status(
+    #     auth,
+    #     ActionStatusValue.SUCCEEDED,
+    #     request,
+    #     result={'result': 'succeeded'},
+    # )
+    # return status, 200
     # action = request.body['action']
     # if action == 'produce':
     #     return action_produce(request, auth)
