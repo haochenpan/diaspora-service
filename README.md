@@ -15,10 +15,12 @@
 TODOs
 
 - action provider code
-- web service code
-
-- web service basic tests
 - action provider basic tests
+- action provider filter by key
+- action provider filtering syntax
+
+- web service code
+- web service basic tests
 
 - add docs along the way
 - octopus icon
