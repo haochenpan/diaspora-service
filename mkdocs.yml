@@ -63,6 +63,9 @@ watch:
   - mkdocs.yml
   - README.md
   - docs/
+  - action_provider/
+  - common/
+  - web_service/
 
 extra:
   version:

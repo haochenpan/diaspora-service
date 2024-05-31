@@ -30,7 +30,92 @@ def action_run(
     request: ActionRequest,
     auth: AuthState,
 ) -> ActionCallbackReturn:
-    """Produce or consume events."""
+    """Handle the action request to produce or consume events.
+
+    This function processes the action specified in the request, either
+    producing events (publishing) or consuming events (retrieving). The
+    action type determines which internal function is called to handle the
+    request.
+
+    Parameters
+    ----------
+
+    request : ActionRequest
+        The action request object containing the details of the request.
+
+        The request body must include the following fields:
+
+        - action (str): The action to perform. Must be either 'produce' or
+          'consume'.
+
+            - 'produce': Publish events to a topic.
+
+            - 'consume': Retrieve recent events from a topic.
+
+        - topic (str): The topic to publish or retrieve the events.
+
+        Depending on the action type, additional fields are required:
+
+        - For 'produce' action:
+
+            - msgs (list of dict): List of events, each formatted as a JSON
+            object.
+
+            - keys (str or list of str, optional): Optional single event key or
+            list of event keys.
+
+        - For 'consume' action:
+
+            - ts (int, optional): Timestamp in milliseconds since the epoch to
+            start retrieving messages from. If not provided, the current
+            timestamp will be used.
+
+        Optional field:
+        - servers (str): Comma-separated list of diaspora servers (for
+          development use).
+
+    auth : AuthState
+        The authentication state object containing identity and
+        authentication information of the requester.
+
+    Returns:
+    -------
+    ActionCallbackReturn
+        The result of the action, either from the `action_produce` or
+        `action_consume` function based on the action type.
+
+    Examples:
+    --------
+    The function can handle both 'produce' and 'consume' actions based on
+    the request body:
+
+    Example request for 'produce' action:
+
+    ```python
+    request_body = {
+        "action": "produce",
+        "topic": "example_topic",
+        "msgs": [{"key1": "value1"}, {"key2": "value2"}],
+        "keys": ["key1", "key2"]
+    }
+    ```
+
+    Example request for 'consume' action:
+
+    ```python
+    request_body = {
+        "action": "consume",
+        "topic": "example_topic",
+        "ts": 1620000000000  # Optional: if not provided, current
+                              # timestamp will be used
+    }
+    ```
+
+    The function will call the appropriate internal function to handle the
+    request:
+    - `action_produce` for publishing events.
+    - `action_consume` for retrieving events.
+    """
     action = request.body['action']
     if action == 'produce':
         return action_produce(request, auth)
