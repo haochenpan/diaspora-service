@@ -62,6 +62,7 @@ docs = [
 demo = [
     "ipykernel",
     "requests",
+    "diaspora_event_sdk",
 ]
 
 [tool.codespell]
