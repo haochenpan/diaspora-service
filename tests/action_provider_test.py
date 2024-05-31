@@ -243,3 +243,89 @@ def test_run_endpoint_lens_mismatch_2(client, access_token):  # noqa: F811
         response_data['details']['error']
         == "The len of 'keys' (2) must match that of 'msgs' (3)."
     )
+
+
+def test_run_endpoint_send_no_keys(client, access_token):  # noqa: F811
+    """Test the run endpoint (send without keys)."""
+    headers = {
+        'Authorization': f'Bearer {access_token}',
+        'Content-Type': 'application/json',
+    }
+
+    data = {
+        'request_id': '100',
+        'body': {
+            'action': 'produce',
+            'topic': 'diaspora-cicd',
+            'msgs': [
+                {'content': 'hello world1'},
+                {'content': 'hello world2'},
+                {'content': 'hello world3'},
+            ],
+        },
+    }
+    response = client.post('/run', json=data, headers=headers)
+    response_data = json.loads(response.data.decode('utf-8'))
+    logger.info(f'Response code: {response.status_code}')
+    logger.info(f'Response data: {response_data}')
+
+    assert response.status_code == ACCEPTED_STATUS_CODE
+    assert response_data['status'] == SUCCESS_STATUS_STRING
+
+
+def test_run_endpoint_send_one_key(client, access_token):  # noqa: F811
+    """Test the run endpoint (send under a single key)."""
+    headers = {
+        'Authorization': f'Bearer {access_token}',
+        'Content-Type': 'application/json',
+    }
+
+    data = {
+        'request_id': '100',
+        'body': {
+            'action': 'produce',
+            'topic': 'diaspora-cicd',
+            'msgs': [
+                {'content': 'hello world1'},
+                {'content': 'hello world2'},
+                {'content': 'hello world3'},
+            ],
+            'keys': 'single-key',
+        },
+    }
+    response = client.post('/run', json=data, headers=headers)
+    response_data = json.loads(response.data.decode('utf-8'))
+    logger.info(f'Response code: {response.status_code}')
+    logger.info(f'Response data: {response_data}')
+
+    assert response.status_code == ACCEPTED_STATUS_CODE
+    assert response_data['status'] == SUCCESS_STATUS_STRING
+
+
+def test_run_endpoint_send_multiple_keys(client, access_token):  # noqa: F811
+    """Test the run endpoint (send under a single key)."""
+    headers = {
+        'Authorization': f'Bearer {access_token}',
+        'Content-Type': 'application/json',
+    }
+
+    data = {
+        'request_id': '100',
+        'body': {
+            'action': 'produce',
+            'topic': 'diaspora-cicd',
+            'msgs': [
+                {'content': 'hello world1'},
+                {'content': 'hello world2'},
+                {'content': 'hello world3'},
+            ],
+            'keys': ['key1', 'key2', 'key3'],
+        },
+    }
+    response = client.post('/run', json=data, headers=headers)
+    response_data = json.loads(response.data.decode('utf-8'))
+    logger.info(f'Response code: {response.status_code}')
+    logger.info(f'Response data: {response_data}')
+
+    assert response.status_code == ACCEPTED_STATUS_CODE
+    assert response_data['status'] == SUCCESS_STATUS_STRING
