@@ -11,10 +11,27 @@ import json
 import os
 from typing import Any
 
+from aws_msk_iam_sasl_signer import MSKAuthTokenProvider
 from globus_action_provider_tools import ActionRequest
 from globus_action_provider_tools import ActionStatus
 from globus_action_provider_tools import ActionStatusValue
 from globus_action_provider_tools import AuthState
+
+
+class MSKTokenProviderFromRole:
+    """MSKTokenProviderFromRole."""
+
+    def __init__(self, open_id: str) -> None:
+        """MSKTokenProviderFromRole init."""
+        self.open_id = open_id
+
+    def token(self) -> str:
+        """MSKTokenProviderFromRole token."""
+        token, _ = MSKAuthTokenProvider.generate_auth_token_from_role_arn(
+            'us-east-1',
+            f'arn:aws:iam::845889416464:role/ap/{self.open_id}-role',
+        )
+        return token
 
 
 def load_schema() -> dict[str, Any]:

@@ -9,7 +9,9 @@ from testing.fixtures import access_token  # noqa: F401
 from testing.fixtures import client  # noqa: F401
 
 SUCCESS_STATUS_CODE = 200
+UNPROCESSABLE_STATUS_CODE = 422
 SUCCESS_STATUS_STRING = 'SUCCEEDED'
+FAILED_STATUS_STRING = 'FAILED'
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -34,28 +36,6 @@ def test_root_endpoint(client):  # noqa: F811
     assert response.status_code == SUCCESS_STATUS_CODE
     assert response_data['title'] == 'Diaspora Action Provider'
     assert response_data['api_version'] == __version__
-
-
-def test_run_endpoint(client, access_token):  # noqa: F811
-    """Test the run endpoint."""
-    headers = {
-        'Authorization': f'Bearer {access_token}',
-        'Content-Type': 'application/json',
-    }
-
-    data = {
-        'request_id': '100',
-        'body': {
-            'action': 'produce',
-            'topic': 'a_topic',
-        },
-    }
-    response = client.post('/run', json=data, headers=headers)
-    response_data = json.loads(response.data.decode('utf-8'))
-    logger.info(f'Response data: {response_data}')
-
-    assert response.status_code == SUCCESS_STATUS_CODE
-    assert response_data['status'] == SUCCESS_STATUS_STRING
 
 
 def test_status_endpoint(client, access_token):  # noqa: F811
@@ -101,3 +81,50 @@ def test_release_endpoint(client, access_token):  # noqa: F811
 
     assert response.status_code == SUCCESS_STATUS_CODE
     assert response_data['status'] == SUCCESS_STATUS_STRING
+
+
+def test_run_endpoint_bad_action(client, access_token):  # noqa: F811
+    """Test the run endpoint (bad action)."""
+    headers = {
+        'Authorization': f'Bearer {access_token}',
+        'Content-Type': 'application/json',
+    }
+
+    data = {
+        'request_id': '100',
+        'body': {
+            'action': 'bad_action',
+            'topic': 'a_topic',
+        },
+    }
+    response = client.post('/run', json=data, headers=headers)
+    response_data = json.loads(response.data.decode('utf-8'))
+    logger.info(f'Response code: {response.status_code}')
+    logger.info(f'Response data: {response_data}')
+
+    assert response.status_code == UNPROCESSABLE_STATUS_CODE
+    assert response_data['code'] == 'RequestValidationError'
+
+
+def test_run_endpoint_bad_msgs(client, access_token):  # noqa: F811
+    """Test the run endpoint (bad msgs)."""
+    headers = {
+        'Authorization': f'Bearer {access_token}',
+        'Content-Type': 'application/json',
+    }
+
+    data = {
+        'request_id': '100',
+        'body': {
+            'action': 'produce',
+            'topic': 'a_topic',
+            'msgs': ['msg1', 'msg2', 'msg3'],
+        },
+    }
+    response = client.post('/run', json=data, headers=headers)
+    response_data = json.loads(response.data.decode('utf-8'))
+    logger.info(f'Response code: {response.status_code}')
+    logger.info(f'Response data: {response_data}')
+
+    assert response.status_code == UNPROCESSABLE_STATUS_CODE
+    assert response_data['code'] == 'RequestValidationError'

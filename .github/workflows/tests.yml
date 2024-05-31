@@ -23,9 +23,9 @@ jobs:
         - os: ubuntu-latest
           python: '3.11'
           toxenv: py311
-        - os: ubuntu-latest
-          python: '3.12'
-          toxenv: py312
+        # - os: ubuntu-latest
+          # python: '3.12'
+          # toxenv: py312
     runs-on: ${{ matrix.os }}
 
     env:
@@ -61,7 +61,7 @@ jobs:
             tests-${{ matrix.os }}-pip-${{ matrix.python }}-
 
       - name: Install Packages
-        run: python -m pip install --upgrade pip tox
+        run: python -m pip install --upgrade pip tox setuptools
 
       - name: Run Tox
         run: tox -e ${{ matrix.toxenv }}

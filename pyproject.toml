@@ -183,3 +183,6 @@ convention = "google"
 where = ["."]
 exclude = ["tests*", "testing*"]
 namespaces = false
+
+[tool.setuptools.package-data]
+'action_provider' = ['*.json']
