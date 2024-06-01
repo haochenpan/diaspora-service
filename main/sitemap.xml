@@ -26,7 +26,7 @@
          <changefreq>daily</changefreq>
     </url>
     <url>
-         <loc>https://github.com/haochenpan/diaspora-service/main/acknowledgment/</loc>
+         <loc>https://github.com/haochenpan/diaspora-service/main/acknowledgments/</loc>
          <lastmod>2024-06-01</lastmod>
          <changefreq>daily</changefreq>
     </url>
@@ -37,6 +37,21 @@
     </url>
     <url>
          <loc>https://github.com/haochenpan/diaspora-service/main/ap/examples/</loc>
+         <lastmod>2024-06-01</lastmod>
+         <changefreq>daily</changefreq>
+    </url>
+    <url>
+         <loc>https://github.com/haochenpan/diaspora-service/main/console/intro/</loc>
+         <lastmod>2024-06-01</lastmod>
+         <changefreq>daily</changefreq>
+    </url>
+    <url>
+         <loc>https://github.com/haochenpan/diaspora-service/main/web/api/</loc>
+         <lastmod>2024-06-01</lastmod>
+         <changefreq>daily</changefreq>
+    </url>
+    <url>
+         <loc>https://github.com/haochenpan/diaspora-service/main/web/examples/</loc>
          <lastmod>2024-06-01</lastmod>
          <changefreq>daily</changefreq>
     </url>
