@@ -19,7 +19,7 @@
         <link rel="next" href="1-running/">
       
       
-      <link rel="icon" href="assets/images/favicon.png">
+      <link rel="icon" href="static/octopus.svg">
       <meta name="generator" content="mkdocs-1.6.0, mkdocs-material-9.5.25">
     
     
@@ -45,8 +45,8 @@
         
         
         <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Lato:300,300i,400,400i,700,700i%7CFira+Code:400,400i,700,700i&display=fallback">
-        <style>:root{--md-text-font:"Lato";--md-code-font:"Fira Code"}</style>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CUbuntu+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Ubuntu Mono"}</style>
       
     
     
@@ -98,8 +98,7 @@
   <nav class="md-header__inner md-grid" aria-label="Header">
     <a href="." title="Diaspora Service Documentation" class="md-header__button md-logo" aria-label="Diaspora Service Documentation" data-md-component="logo">
       
-  
-  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54Z"/></svg>
+  <img src="static/octopus.svg" alt="logo">
 
     </a>
     <label class="md-header__button md-icon" for="__drawer">
@@ -253,8 +252,7 @@
   <label class="md-nav__title" for="__drawer">
     <a href="." title="Diaspora Service Documentation" class="md-nav__button md-logo" aria-label="Diaspora Service Documentation" data-md-component="logo">
       
-  
-  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54Z"/></svg>
+  <img src="static/octopus.svg" alt="logo">
 
     </a>
     Diaspora Service Documentation
@@ -372,18 +370,18 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#project-homepage" class="md-nav__link">
+  <a href="#project-description" class="md-nav__link">
     <span class="md-ellipsis">
-      Project Homepage
+      Project Description
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#project-documentation" class="md-nav__link">
+  <a href="#docs-and-demo" class="md-nav__link">
     <span class="md-ellipsis">
-      Project Documentation
+      Docs and Demo
     </span>
   </a>
   
@@ -393,6 +391,24 @@
   <a href="#service-status" class="md-nav__link">
     <span class="md-ellipsis">
       Service Status
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#diaspora-sdk" class="md-nav__link">
+    <span class="md-ellipsis">
+      Diaspora SDK
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#todos" class="md-nav__link">
+    <span class="md-ellipsis">
+      TODOs
     </span>
   </a>
   
@@ -635,18 +651,18 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#project-homepage" class="md-nav__link">
+  <a href="#project-description" class="md-nav__link">
     <span class="md-ellipsis">
-      Project Homepage
+      Project Description
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#project-documentation" class="md-nav__link">
+  <a href="#docs-and-demo" class="md-nav__link">
     <span class="md-ellipsis">
-      Project Documentation
+      Docs and Demo
     </span>
   </a>
   
@@ -656,6 +672,24 @@
   <a href="#service-status" class="md-nav__link">
     <span class="md-ellipsis">
       Service Status
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#diaspora-sdk" class="md-nav__link">
+    <span class="md-ellipsis">
+      Diaspora SDK
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#todos" class="md-nav__link">
+    <span class="md-ellipsis">
+      TODOs
     </span>
   </a>
   
@@ -684,13 +718,16 @@
 <a href="https://github.com/globus-labs/diaspora-action-provider/actions"><img alt="tests TODO" src="https://github.com/globus-labs/diaspora-action-provider/actions/workflows/tests.yml/badge.svg" /></a>
 <a href="https://github.com/haochenpan/diaspora-service/actions/workflows/deployment.yml"><img alt="deployment" src="https://github.com/haochenpan/diaspora-service/actions/workflows/deployment.yml/badge.svg" /></a>
 <a href="https://results.pre-commit.ci/latest/github/haochenpan/diaspora-service/main"><img alt="pre-commit.ci status" src="https://results.pre-commit.ci/badge/github/haochenpan/diaspora-service/main.svg" /></a></p>
-<h3 id="project-homepage"><a href="https://diaspora-project.github.io/">Project Homepage</a><a class="headerlink" href="#project-homepage" title="Permanent link">&para;</a></h3>
-<h3 id="project-documentation"><a href="https://haochenpan.github.io/diaspora-service/">Project Documentation</a><a class="headerlink" href="#project-documentation" title="Permanent link">&para;</a></h3>
+<h3 id="project-description"><a href="https://diaspora-project.github.io/">Project Description</a><a class="headerlink" href="#project-description" title="Permanent link">&para;</a></h3>
+<h3 id="docs-and-demo"><a href="https://haochenpan.github.io/diaspora-service/">Docs and Demo</a><a class="headerlink" href="#docs-and-demo" title="Permanent link">&para;</a></h3>
 <h3 id="service-status"><a href="https://haochenpan.github.io/diaspora-uptime-monitor/">Service Status</a><a class="headerlink" href="#service-status" title="Permanent link">&para;</a></h3>
-<p>TODOs</p>
+<h3 id="diaspora-sdk"><a href="https://github.com/globus-labs/diaspora-event-sdk">Diaspora SDK</a><a class="headerlink" href="#diaspora-sdk" title="Permanent link">&para;</a></h3>
+<h3 id="todos">TODOs<a class="headerlink" href="#todos" title="Permanent link">&para;</a></h3>
 <ul>
+<li>archived repos, adjust the uptime repo</li>
+<li>web service: mypy, basic tests</li>
 <li>
-<p>lambda monitoring functions</p>
+<p>version number</p>
 </li>
 <li>
 <p>action provider filter by key</p>
@@ -700,17 +737,7 @@
 <p>action provider filter tests</p>
 </li>
 <li>
-<p>web service code</p>
-</li>
-<li>
-<p>web service basic tests</p>
-</li>
-<li>
 <p>add docs along the way</p>
-</li>
-<li>octopus icon</li>
-<li>
-<p>notes on archived repos</p>
 </li>
 <li>
 <p>event fabric usage logging</p>
