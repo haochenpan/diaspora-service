@@ -14,6 +14,8 @@
 
 TODOs
 
+- lambda monitoring functions
+
 - action provider filter by key
 - action provider general filtering syntax
 - action provider filter tests
@@ -23,3 +25,8 @@ TODOs
 
 - add docs along the way
 - octopus icon
+- notes on archived repos
+
+- event fabric usage logging
+- trigger improvements: improved authentication, easy to use
+- evolve the Action Provider according to needs
