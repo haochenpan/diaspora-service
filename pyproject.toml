@@ -83,7 +83,8 @@ log_cli_level = "INFO"
 [tool.coverage.run]
 plugins = ["covdefaults"]
 omit = [
-    "lambda/",
+    "lambda/*",
+    "web_service/*",
 ]
 
 [tool.mypy]
@@ -96,6 +97,11 @@ no_implicit_optional = true
 warn_redundant_casts = true
 warn_unused_configs = true
 warn_unused_ignores = true
+
+[[tool.mypy.overrides]]
+module = "web_service.*"
+disallow_incomplete_defs = false
+disallow_untyped_defs = false
 
 [[tool.mypy.overrides]]
 module = "testing.*"

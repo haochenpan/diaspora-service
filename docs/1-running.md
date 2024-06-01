@@ -2,21 +2,48 @@
 
 ### Action Provider
 
-To test the Action Provider in a virtual environment, run the main script:
+To test the Action Provider in a virtual environment, follow these steps:
 
-```bash
-source secrets.sh
-python action_provider/main.py
-```
+1. Source your secrets:
+
+   ```bash
+   source secrets.sh
+   ```
+
+2. Run the main script in development mode:
+
+   ```bash
+   python action_provider/main.py
+   ```
+
+3. For production mode, use Gunicorn to start the server:
+
+   ```bash
+   gunicorn --bind 0.0.0.0:8000 action_provider.main:app
+   ```
 
 ### Web Service
 
-To test the Web Service in a virtual environment, use the following command to start the server:
+To test the Web Service in a virtual environment, follow these steps:
 
-```bash
-source secrets.sh
-uvicorn web_service.main:app --host 0.0.0.0 --port 8000 --reload
-```
+1. Source your secrets:
+
+   ```bash
+   source secrets.sh
+   ```
+
+2. Start the server in development mode using Uvicorn:
+
+   ```bash
+   uvicorn web_service.main:app --host 0.0.0.0 --port 8000 --reload
+   ```
+
+3. For production mode, use Gunicorn with Uvicorn workers to start the server:
+
+   ```bash
+   gunicorn --bind 0.0.0.0:8000 -k uvicorn.workers.UvicornWorker web_service.main:app
+   ```
+
 
 ## Running in Docker Container
 
@@ -28,7 +55,7 @@ To build and run the Action Provider in a Docker container:
 
     ```bash
     SERVICE_NAME=diaspora-action-provider
-    CONTAINER_NAME=container
+    CONTAINER_NAME=docker
     DOCKERFILE_PATH=action_provider/Dockerfile
     ```
 
@@ -60,7 +87,7 @@ To build and run the Web Service in a Docker container:
 
     ```bash
     SERVICE_NAME=diaspora-web-service
-    CONTAINER_NAME=container
+    CONTAINER_NAME=docker
     DOCKERFILE_PATH=web_service/Dockerfile
     ```
 

@@ -10,4 +10,5 @@ COPY pyproject.toml .
 
 RUN pip install .
 
-CMD [ "uvicorn", "web_service.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload" ]
+# CMD [ "uvicorn", "web_service.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload" ]
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "-k", "uvicorn.workers.UvicornWorker", "web_service.main:app"]

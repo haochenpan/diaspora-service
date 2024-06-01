@@ -23,8 +23,8 @@ theme:
     - search.suggest
     - toc.follow
   font:
-    text: Lato
-    code: Fira Code
+    text: Roboto
+    code: Ubuntu Mono
   palette:
     # Palette toggle for automatic mode
     - media: "(prefers-color-scheme)"
@@ -52,9 +52,8 @@ theme:
       toggle:
         icon: material/brightness-4
         name: Switch to system preference
-  # favicon: static/octopus.png
-  # icon:
-    # logo: static/octopus.png
+  favicon: static/octopus.svg
+  logo: static/octopus.svg
 
 plugins:
   - mkdocstrings

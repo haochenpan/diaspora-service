@@ -6,26 +6,25 @@
 [![pre-commit.ci status](https://results.pre-commit.ci/badge/github/haochenpan/diaspora-service/main.svg)](https://results.pre-commit.ci/latest/github/haochenpan/diaspora-service/main)
 
 
-### [Project Homepage](https://diaspora-project.github.io/)
+### [Project Description](https://diaspora-project.github.io/)
 
-### [Project Documentation](https://haochenpan.github.io/diaspora-service/)
+### [Docs and Demo](https://haochenpan.github.io/diaspora-service/)
 
 ### [Service Status](https://haochenpan.github.io/diaspora-uptime-monitor/)
 
-TODOs
+### [Diaspora SDK](https://github.com/globus-labs/diaspora-event-sdk)
 
-- lambda monitoring functions
+### TODOs
+
+- archived repos, adjust the uptime repo
+- web service: mypy, basic tests
+- version number
 
 - action provider filter by key
 - action provider general filtering syntax
 - action provider filter tests
 
-- web service code
-- web service basic tests
-
 - add docs along the way
-- octopus icon
-- notes on archived repos
 
 - event fabric usage logging
 - trigger improvements: improved authentication, easy to use
