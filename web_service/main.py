@@ -467,7 +467,8 @@ class DiasporaService:
         return self.aws.get_log_events(subject, trigger, stream)
 
 
+service = DiasporaService()
+app = service.app
+
 if __name__ == '__main__':
-    service = DiasporaService()
-    app = service.app
     uvicorn.run(app, host='0.0.0.0', port=8000)

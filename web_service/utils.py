@@ -31,7 +31,9 @@ from kafka.admin import ResourcePatternFilter
 from kafka.admin import ResourceType
 from kafka.errors import TopicAlreadyExistsError
 
-WEB_SERVICE_DESC = '[Decs and Demo](https://haochenpan.github.io/diaspora-service/)'
+WEB_SERVICE_DESC = (
+    '[Docs and Demo](https://haochenpan.github.io/diaspora-service/)'
+)
 
 WEB_SERVICE_TAGS_METADATA = [
     {

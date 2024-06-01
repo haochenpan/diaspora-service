@@ -8,7 +8,7 @@
 
 ### [Project Description](https://diaspora-project.github.io/)
 
-### [Decs and Demo](https://haochenpan.github.io/diaspora-service/)
+### [Docs and Demo](https://haochenpan.github.io/diaspora-service/)
 
 ### [Service Status](https://haochenpan.github.io/diaspora-uptime-monitor/)
 
@@ -18,13 +18,11 @@ TODOs
 
 - notes on archived repos in uptime
 - kui
+- web service: mypy, basic tests
 
 - action provider filter by key
 - action provider general filtering syntax
 - action provider filter tests
-
-- web service code
-- web service basic tests
 
 - add docs along the way
 
