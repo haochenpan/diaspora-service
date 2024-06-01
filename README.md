@@ -14,7 +14,7 @@
 
 TODOs
 
-- lambda monitoring functions
+- notes on archived repos in uptime
 
 - action provider filter by key
 - action provider general filtering syntax
@@ -24,8 +24,6 @@ TODOs
 - web service basic tests
 
 - add docs along the way
-- octopus icon
-- notes on archived repos
 
 - event fabric usage logging
 - trigger improvements: improved authentication, easy to use
