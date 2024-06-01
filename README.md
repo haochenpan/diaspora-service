@@ -6,15 +6,18 @@
 [![pre-commit.ci status](https://results.pre-commit.ci/badge/github/haochenpan/diaspora-service/main.svg)](https://results.pre-commit.ci/latest/github/haochenpan/diaspora-service/main)
 
 
-### [Project Homepage](https://diaspora-project.github.io/)
+### [Project Description](https://diaspora-project.github.io/)
 
-### [Project Documentation](https://haochenpan.github.io/diaspora-service/)
+### [Decs and Demo](https://haochenpan.github.io/diaspora-service/)
 
 ### [Service Status](https://haochenpan.github.io/diaspora-uptime-monitor/)
+
+### [Diaspora SDK](https://github.com/globus-labs/diaspora-event-sdk)
 
 TODOs
 
 - notes on archived repos in uptime
+- kui
 
 - action provider filter by key
 - action provider general filtering syntax
