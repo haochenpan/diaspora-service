@@ -104,12 +104,17 @@ markdown_extensions:
 
 nav:
   - Home:
-      - Overview: index.md
+      - Introduction: index.md
       - Running: 1-running.md
       - Testing: 2-testing.md
-      - Deploying: 3-deploying.md
+      - Deployment: 3-deploying.md
       - Monitoring: 4-monitoring.md
-      - Acknowledgment: acknowledgment.md
-  - Action provider:
-      - APIs: ap/api.md
-      - Examples: ap/examples.md
+      - Acknowledgments: acknowledgments.md
+  - Action Provider:
+      - API Documentation: ap/api.md
+      - Notebook Examples: ap/examples.md
+  - Web Service:
+      - API Documentation: web/api.md
+      - Notebook Examples: web/examples.md
+  - Admin Console:
+      - Introduction: console/intro.md
