@@ -10,4 +10,5 @@ COPY pyproject.toml .
 
 RUN pip install .
 
-CMD [ "python", "action_provider/main.py" ]
+# CMD [ "python", "action_provider/main.py" ]
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "action_provider.main:app"]

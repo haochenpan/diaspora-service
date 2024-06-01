@@ -14,11 +14,11 @@
 
 ### [Diaspora SDK](https://github.com/globus-labs/diaspora-event-sdk)
 
-TODOs
+### TODOs
 
-- notes on archived repos in uptime
-- kui
+- archived repos, adjust the uptime repo
 - web service: mypy, basic tests
+- version number
 
 - action provider filter by key
 - action provider general filtering syntax
