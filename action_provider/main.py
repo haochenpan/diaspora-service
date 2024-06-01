@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.metadata as importlib_metadata
 import os
 
 from flask import Blueprint
@@ -13,7 +14,6 @@ from globus_action_provider_tools.flask import add_action_routes_to_blueprint
 from globus_action_provider_tools.flask.helpers import assign_json_provider
 from globus_action_provider_tools.flask.types import ActionCallbackReturn
 
-from action_provider import __version__
 from action_provider.action_consume import action_consume
 from action_provider.action_produce import action_produce
 from action_provider.utils import build_action_status
@@ -154,7 +154,7 @@ def create_app() -> Flask:
         title='Diaspora Action Provider',
         admin_contact='haochenpan@uchicago.edu',
         administered_by=['Diaspora Team', 'Globus Labs'],
-        api_version=__version__,
+        api_version=importlib_metadata.version('diaspora_service'),
         synchronous=True,
         input_schema=load_schema(),
         log_supported=False,

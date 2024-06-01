@@ -85,3 +85,56 @@ def test_run_endpoint_from_past_ts(client, access_token):  # noqa: F811
 
     assert response.status_code == ACCEPTED_STATUS_CODE
     assert response_data['status'] == SUCCESS_STATUS_STRING
+
+
+def test_run_endpoint_no_records(client, access_token, mocker):  # noqa: F811
+    """Test the run endpoint when no records are returned."""
+    headers = {
+        'Authorization': f'Bearer {access_token}',
+        'Content-Type': 'application/json',
+    }
+
+    # Mock the KafkaConsumer poll method to return no records
+    mocker.patch('kafka.KafkaConsumer.poll', return_value={})
+
+    data = {
+        'request_id': '100',
+        'body': {
+            'action': 'consume',
+            'topic': 'diaspora-cicd',
+        },
+    }
+    response = client.post('/run', json=data, headers=headers)
+    response_data = json.loads(response.data.decode('utf-8'))
+    logger.info(f'Response code: {response.status_code}')
+    logger.info(f'Response data: {response_data}')
+
+    assert response.status_code == ACCEPTED_STATUS_CODE
+    assert response_data['status'] == SUCCESS_STATUS_STRING
+    assert response_data['details'] == {}  # Ensure no messages are present
+
+
+def test_run_endpoint_empty_topic(client, access_token, mocker):  # noqa: F811
+    """Test the run endpoint with an empty topic."""
+    headers = {
+        'Authorization': f'Bearer {access_token}',
+        'Content-Type': 'application/json',
+    }
+
+    # Mock the KafkaConsumer to have an empty topic
+    mocker.patch('kafka.KafkaConsumer.partitions_for_topic', return_value=[])
+
+    data = {
+        'request_id': '100',
+        'body': {
+            'action': 'consume',
+            'topic': 'diaspora-cicd',
+        },
+    }
+    response = client.post('/run', json=data, headers=headers)
+    response_data = json.loads(response.data.decode('utf-8'))
+    logger.info(f'Response code: {response.status_code}')
+    logger.info(f'Response data: {response_data}')
+
+    assert response.status_code == ACCEPTED_STATUS_CODE
+    assert response_data['status'] == FAILED_STATUS_STRING
