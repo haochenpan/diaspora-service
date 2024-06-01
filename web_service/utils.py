@@ -119,7 +119,13 @@ class AuthManager:
             return self.error_response('Token does not belong to the user.')
 
         if introspection_response.get('client_id') != self.client_id:
-            return self.error_response("Token's client ID does not match.")
+            return self.error_response(
+                (
+                    "Token's client ID does not match. ",
+                    f"introspected = {introspection_response.get('client_id')}",  # noqa: E501
+                    f'client_id = {self.client_id}',
+                ),
+            )
 
         if self.action_scope not in introspection_response.get('scope', ''):
             return self.error_response('Token lacks the scope for action.')
