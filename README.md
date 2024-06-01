@@ -18,7 +18,6 @@
 
 - archived repos, adjust the uptime repo
 - web service: mypy, basic tests
-- version number
 - forward from http://3.220.110.101/
 
 - action provider filter by key

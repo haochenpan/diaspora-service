@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import importlib.metadata as importlib_metadata
 import os
 
 import uvicorn
@@ -76,7 +77,7 @@ class DiasporaService:
         self.app = FastAPI(
             title='Diaspora Web Service',
             docs_url='/',
-            version='0.2.9',
+            version=importlib_metadata.version('diaspora_service'),
             description=WEB_SERVICE_DESC,
             openapi_tags=WEB_SERVICE_TAGS_METADATA,
         )
