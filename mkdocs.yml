@@ -103,7 +103,7 @@ markdown_extensions:
       custom_checkbox: true
 
 nav:
-  - Home:
+  - Development:
       - Introduction: index.md
       - Running: 1-running.md
       - Testing: 2-testing.md
@@ -111,10 +111,10 @@ nav:
       - Monitoring: 4-monitoring.md
       - Acknowledgments: acknowledgments.md
   - Action Provider:
-      - API Documentation: ap/api.md
-      - Notebook Examples: ap/examples.md
+      - Documentation: ap/api.md
+      - Examples: ap/examples.md
   - Web Service:
-      - API Documentation: web/api.md
-      - Notebook Examples: web/examples.md
+      - Documentation: web/api.md
+      - Examples: web/examples.md
   - Admin Console:
       - Introduction: console/intro.md

@@ -1,0 +1,2 @@
+- [live docs](https://diaspora-web-service.ml22sevubfnks.us-east-1.cs.amazonlightsail.com/)
+- [live openapi.json](https://diaspora-web-service.ml22sevubfnks.us-east-1.cs.amazonlightsail.com/openapi.json)
