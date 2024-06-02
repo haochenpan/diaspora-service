@@ -1,4 +1,2 @@
-# Notebook Examples
-
 - [Send requests to an AP Endpoint](https://github.com/haochenpan/diaspora-service/blob/main/examples/demo_to_host.ipynb)
 - [Use Diaspora AP in Globus Flows](https://github.com/haochenpan/diaspora-service/blob/main/examples/demo_to_flows.ipynb)

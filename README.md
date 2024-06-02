@@ -1,29 +1,36 @@
-# Diaspora Service
+# Diaspora Event Fabric Service
 
-[![docs](https://github.com/haochenpan/diaspora-service/actions/workflows/docs.yml/badge.svg)](https://github.com/haochenpan/diaspora-service/actions/workflows/docs.yml)
-[![tests](https://github.com/haochenpan/diaspora-service/actions/workflows/tests.yml/badge.svg)](https://github.com/haochenpan/diaspora-service/actions/workflows/tests.yml)
-[![deployment](https://github.com/haochenpan/diaspora-service/actions/workflows/deployment.yml/badge.svg)](https://github.com/haochenpan/diaspora-service/actions/workflows/deployment.yml)
-[![pre-commit.ci status](https://results.pre-commit.ci/badge/github/haochenpan/diaspora-service/main.svg)](https://results.pre-commit.ci/latest/github/haochenpan/diaspora-service/main)
+[![Docs Status](https://github.com/haochenpan/diaspora-service/actions/workflows/docs.yml/badge.svg)](https://github.com/haochenpan/diaspora-service/actions/workflows/docs.yml)
+[![Tests Status](https://github.com/haochenpan/diaspora-service/actions/workflows/tests.yml/badge.svg)](https://github.com/haochenpan/diaspora-service/actions/workflows/tests.yml)
+[![Deployment Status](https://github.com/haochenpan/diaspora-service/actions/workflows/deployment.yml/badge.svg)](https://github.com/haochenpan/diaspora-service/actions/workflows/deployment.yml)
+[![Pre-Commit CI Status](https://results.pre-commit.ci/badge/github/haochenpan/diaspora-service/main.svg)](https://results.pre-commit.ci/latest/github/haochenpan/diaspora-service/main)
 
+## Overview
 
-### [Project Description](https://diaspora-project.github.io/)
+Welcome to the Diaspora Event Fabric Service documentation! Our goal in the Diaspora project is to develop new methods for building next-generation resilient scientific applications capable of executing in an increasingly integrated research infrastructure.
 
-### [Docs and Demo](https://haochenpan.github.io/diaspora-service/)
+### Resources
 
-### [Service Status](https://haochenpan.github.io/diaspora-uptime-monitor/)
-
-### [Diaspora SDK](https://github.com/globus-labs/diaspora-event-sdk)
+- **[Project Description](https://diaspora-project.github.io/)**: Learn more about the overall Diaspora project.
+- **[Docs and Demo](https://haochenpan.github.io/diaspora-service/)**: Access detailed documentation and demonstrations.
+- **[Service Status](https://haochenpan.github.io/diaspora-uptime-monitor/)**: Check the current status of the Diaspora Event Fabric.
+- **[Diaspora SDK](https://github.com/globus-labs/diaspora-event-sdk)**: Explore the Python SDK for integrating with the Diaspora Event Fabric.
 
 ### TODOs
 
-- forward from http://3.220.110.101/
+- **Action Provider Enhancements**
+  - Implement filtering by key
+  - Develop a general filtering syntax
+  - Create and run filter tests
 
-- action provider filter by key
-- action provider general filtering syntax
-- action provider filter tests
+- **Event Fabric**
+  - Implement usage logging
 
-- add docs along the way
+- **Trigger Improvements**
+  - Enhance authentication mechanisms
+  - Simplify usability
 
-- event fabric usage logging
-- trigger improvements: improved authentication, easy to use
-- evolve the Action Provider according to needs
+- **Action Provider**
+  - Adapt and improve the Action Provider to meet evolving needs
+
+For any questions or contributions, please contain the Diaspora Event Fabric Team.
