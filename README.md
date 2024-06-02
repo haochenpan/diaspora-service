@@ -4,6 +4,7 @@
 [![Tests Status](https://github.com/haochenpan/diaspora-service/actions/workflows/tests.yml/badge.svg)](https://github.com/haochenpan/diaspora-service/actions/workflows/tests.yml)
 [![Deployment Status](https://github.com/haochenpan/diaspora-service/actions/workflows/deployment.yml/badge.svg)](https://github.com/haochenpan/diaspora-service/actions/workflows/deployment.yml)
 [![Pre-Commit CI Status](https://results.pre-commit.ci/badge/github/haochenpan/diaspora-service/main.svg)](https://results.pre-commit.ci/latest/github/haochenpan/diaspora-service/main)
+[![MIT License](https://img.shields.io/badge/license-MIT-blue)](https://opensource.org/licenses/MIT)
 
 ## Overview
 
