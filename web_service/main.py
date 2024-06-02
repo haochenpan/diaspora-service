@@ -140,18 +140,18 @@ class DiasporaService:
         )
 
         # Legacy
-        self.app.post('/v1/create_key', tags=['Legacy'])(
-            self.create_key,
-        )
-        self.app.post('/v1/register_topic', tags=['Legacy'])(
-            self.register_topic,
-        )
-        self.app.post('/v1/unregister_topic', tags=['Legacy'])(
-            self.unregister_topic,
-        )
-        self.app.get('/v1/list_topics', tags=['Legacy'])(
-            self.list_topics,
-        )
+        # self.app.post('/v1/create_key', tags=['Legacy'])(
+        #     self.create_key,
+        # )
+        # self.app.post('/v1/register_topic', tags=['Legacy'])(
+        #     self.register_topic,
+        # )
+        # self.app.post('/v1/unregister_topic', tags=['Legacy'])(
+        #     self.unregister_topic,
+        # )
+        # self.app.get('/v1/list_topics', tags=['Legacy'])(
+        #     self.list_topics,
+        # )
 
     async def create_key(
         self,
