@@ -93,7 +93,8 @@ class AuthManager:
             f'https://auth.globus.org/scopes/{server_client_id}/action_all'
         )
         self.scopes = f'openid email profile {self.action_scope}'
-        self.client_id = client_id
+        self.client_id = client_id  # SDK's internal_auth_client
+        self.server_client_id = server_client_id
 
     def validate_access_token(self, user_id, token):  # noqa: PLR0911
         """Validate the access token for the given user ID."""
@@ -118,12 +119,23 @@ class AuthManager:
         if introspection_response.get('sub') != user_id:
             return self.error_response('Token does not belong to the user.')
 
-        if introspection_response.get('client_id') != self.client_id:
+        print(introspection_response)
+
+        # if introspection_response.get('client_id') != self.client_id:
+        #     return self.error_response(
+        #         (
+        #             "Token's client ID does not match. ",
+        #             f"introspected = {introspection_response.get('client_id')}",  # noqa: E501
+        #             f'client_id = {self.client_id}',
+        #         ),
+        #     )
+
+        if self.server_client_id not in introspection_response.get('aud'):
             return self.error_response(
                 (
-                    "Token's client ID does not match. ",
-                    f"introspected = {introspection_response.get('client_id')}",  # noqa: E501
-                    f'client_id = {self.client_id}',
+                    'Not in the audience set. ',
+                    f"introspected = {introspection_response.get('aud')}",
+                    f'server_client_id = {self.server_client_id}',
                 ),
             )
 
