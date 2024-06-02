@@ -632,7 +632,8 @@ class AWSManager:
         for acl in result:
             principal, operation = (
                 str(acl.principal)[len('User:') :],
-                str(acl.operation)[len('ACLOperation.') :],
+                # str(acl.operation)[len('ACLOperation.') :],
+                acl.operation.name,  # due to change of python version?
             )
             p_ops[principal].add(operation)
         return dict(p_ops)
