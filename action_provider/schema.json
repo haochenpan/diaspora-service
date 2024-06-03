@@ -44,6 +44,17 @@
         "servers": {
             "description": "Optional list of diaspora servers separated by commas (dev use only).",
             "type": "string"
+        },
+        "group_id": {
+            "description": "The group ID to which the message belongs. Optional for 'consume' action.",
+            "type": "string"
+        },
+        "filters": {
+            "type": "array",
+            "description": "Array of filters to apply when retrieving events. Optional for 'consume' action.",
+            "items": {
+                "type": "object"
+            }
         }
     },
     "additionalProperties": false,
