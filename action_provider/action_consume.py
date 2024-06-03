@@ -87,8 +87,8 @@ def update_messages(
 
 def filter_messages(
     messages: dict[str, list[dict[str, Any]]],
-    filters: list[dict[str:Any]],
-):
+    filters: list[dict[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
     """Update the messages dictionary with the list of filters."""
     print(filters)
 
