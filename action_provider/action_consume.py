@@ -85,6 +85,54 @@ def update_messages(
         messages[msg_key].append(msg_val)
 
 
+def filter_messages(
+    messages: dict[str, list[dict[str, Any]]],
+    filters: list[dict[str:Any]],
+):
+    """Update the messages dictionary with the list of filters."""
+    print(filters)
+
+    ret_msgs: dict[str, list[dict[str, Any]]] = {}
+    added_messages = set()
+
+    for filter_pattern in filters:
+        pattern = filter_pattern.get('Pattern')
+        if not pattern:
+            continue
+
+        pattern_value = pattern.get('value')
+        # print(pattern_value, type(pattern_value))  # For debugging
+
+        for key, criteria in pattern_value.items():
+            for topic_partition, msgs in messages.items():
+                for message in msgs:
+                    message_value = message['value']
+                    match = all(
+                        (
+                            criterion.get('prefix') is None
+                            or str(message_value.get(key, '')).startswith(
+                                criterion.get('prefix'),
+                            )
+                        )
+                        and (
+                            criterion.get('suffix') is None
+                            or str(message_value.get(key, '')).endswith(
+                                criterion.get('suffix'),
+                            )
+                        )
+                        for criterion in criteria
+                    )
+                    if match:
+                        message_id = (topic_partition, message['offset'])
+                        if message_id not in added_messages:
+                            if topic_partition not in ret_msgs:
+                                ret_msgs[topic_partition] = []
+                            ret_msgs[topic_partition].append(message)
+                            added_messages.add(message_id)
+
+    return ret_msgs
+
+
 def action_consume(
     request: ActionRequest,
     auth: AuthState,
@@ -129,6 +177,8 @@ def action_consume(
             for _, partition_records in records.items():
                 update_messages(messages, partition_records)
 
+        filters = request.body.get('filters', [])
+        messages = filter_messages(messages, filters)
         status = build_action_status(
             auth,
             ActionStatusValue.SUCCEEDED,
