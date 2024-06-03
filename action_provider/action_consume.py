@@ -33,7 +33,7 @@ def create_consumer(
     servers: str,
     open_id: str,
     topic: str,
-    # group_id: str,
+    group_id: str | None,
 ) -> KafkaConsumer:
     """Create a Kafka consumer with the user identity and requested topic.
 
@@ -47,6 +47,7 @@ def create_consumer(
         'api_version': (3, 5, 1),
         'sasl_oauth_token_provider': MSKTokenProviderFromRole(open_id),
         'auto_offset_reset': 'earliest',
+        'group_id': group_id,
     }
 
     consumer = KafkaConsumer(**conf)
@@ -90,7 +91,7 @@ def filter_messages(
     filters: list[dict[str, Any]],
 ) -> dict[str, list[dict[str, Any]]]:
     """Update the messages dictionary with the list of filters."""
-    print(filters)
+    # print(filters)
 
     ret_msgs: dict[str, list[dict[str, Any]]] = {}
     added_messages = set()
@@ -142,11 +143,15 @@ def action_consume(
     caller_id = auth.effective_identity
     open_id = caller_id.split(':')[-1]
     topic = request.body['topic']
+    group_id = request.body.get('group_id', None)
+    # print('topic:', topic)
+    # print('group_id:', group_id)
 
     consumer = create_consumer(
         servers,
         open_id,
         topic,
+        group_id,
     )
 
     try:
@@ -178,7 +183,16 @@ def action_consume(
                 update_messages(messages, partition_records)
 
         filters = request.body.get('filters', [])
-        messages = filter_messages(messages, filters)
+        all_patterns_valid = True
+        for filter_pattern in filters:
+            pattern = filter_pattern.get('Pattern')
+            if not pattern:
+                all_patterns_valid = False
+                break
+
+        if len(filters) != 0 and all_patterns_valid:
+            messages = filter_messages(messages, filters)
+
         status = build_action_status(
             auth,
             ActionStatusValue.SUCCEEDED,
