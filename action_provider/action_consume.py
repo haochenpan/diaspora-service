@@ -5,8 +5,10 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+from collections import defaultdict
 from datetime import datetime
 from datetime import timezone
+from typing import Any
 
 from globus_action_provider_tools import ActionRequest
 from globus_action_provider_tools import ActionStatusValue
@@ -23,6 +25,8 @@ CLIENT_ID = os.environ['CLIENT_ID']
 CLIENT_SECRET = os.environ['CLIENT_SECRET']
 CLIENT_SCOPE = os.environ['CLIENT_SCOPE']
 DEFAULT_SERVERS = os.environ['DEFAULT_SERVERS']
+
+TIMESTAMP_TYPE_MAPPING = {0: 'CREATE_TIME', 1: 'LOG_APPEND_TIME'}
 
 
 def create_consumer(
@@ -51,22 +55,34 @@ def create_consumer(
 
 
 def update_messages(
-    messages: dict[str, list[str]],
+    messages: dict[str, list[dict[str, Any]]],
     records: list[ConsumerRecord],
 ) -> None:
     """Update the messages dictionary with the list of records."""
     for record in records:
-        record_partition = record.partition
-        record_offset = record.offset
+        msg_key = f'{record.topic}-{record.partition}'
 
         record_key = record.key.decode('utf-8') if record.key else None
         record_value = record.value.decode('utf-8') if record.value else None
         with contextlib.suppress(json.JSONDecodeError):
             record_value = json.loads(record_value) if record_value else None
+        record_ts_type = TIMESTAMP_TYPE_MAPPING.get(
+            record.timestamp_type,
+            'UNKNOWN',
+        )
 
-        msg_key = f'{record_partition}-{record_offset}'
-        msg_val = [record_key, record_value]
-        messages[msg_key] = msg_val
+        msg_val = {
+            'topic': record.topic,
+            'partition': record.partition,
+            'offset': record.offset,
+            'timestamp': record.timestamp,
+            'timestampType': record_ts_type,
+            'key': record_key,
+            'value': record_value,
+            'headers': record.headers,
+        }
+
+        messages[msg_key].append(msg_val)
 
 
 def action_consume(
@@ -104,7 +120,10 @@ def action_consume(
             if offset:
                 consumer.seek(tp, offset.offset)
 
-        messages: dict[str, list[str]] = {}
+        # key: topic-partition
+        # val: {topic, partition, offset, timestamp,
+        #       timestampType, value, headers}
+        messages: dict[str, list[dict[str, Any]]] = defaultdict(lambda: [])
 
         while records := consumer.poll(timeout_ms=1000):
             for _, partition_records in records.items():
