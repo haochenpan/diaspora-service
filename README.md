@@ -12,10 +12,24 @@ Welcome to the Diaspora Event Fabric Service documentation! Our goal in the Dias
 
 ### Resources
 
-- **[Project Description](https://diaspora-project.github.io/)**: Learn more about the overall Diaspora project.
+- **[Project Description](https://diaspora-project.github.io/)**: Learn more about the Diaspora project.
 - **[Docs and Demo](https://haochenpan.github.io/diaspora-service/)**: Access detailed documentation and demonstrations.
 - **[Service Status](https://haochenpan.github.io/diaspora-uptime-monitor/)**: Check the current status of the Diaspora Event Fabric.
+    - [Diaspora Web Service](https://diaspora-web-service.ml22sevubfnks.us-east-1.cs.amazonlightsail.com)
+    ![7-day response time](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fhaochenpan%2Fdiaspora-uptime-monitor%2FHEAD%2Fapi%2Fdiaspora-web-service%2Fresponse-time-week.json)
+    ![7-day uptime](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fhaochenpan%2Fdiaspora-uptime-monitor%2FHEAD%2Fapi%2Fdiaspora-web-service%2Fuptime-week.json)
+    - [Diaspora Action Provider](https://diaspora-action-provider.ml22sevubfnks.us-east-1.cs.amazonlightsail.com)
+    ![7-day response time](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fhaochenpan%2Fdiaspora-uptime-monitor%2FHEAD%2Fapi%2Fdiaspora-action-provider%2Fresponse-time-week.json)
+    ![7-day uptime](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fhaochenpan%2Fdiaspora-uptime-monitor%2FHEAD%2Fapi%2Fdiaspora-action-provider%2Fuptime-week.json)
+    - [Diaspora Admin Console](http://100.27.155.7/)
+    ![7-day response time](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fhaochenpan%2Fdiaspora-uptime-monitor%2FHEAD%2Fapi%2Fdiaspora-admin-console%2Fresponse-time-week.json)
+    ![7-day uptime](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fhaochenpan%2Fdiaspora-uptime-monitor%2FHEAD%2Fapi%2Fdiaspora-admin-console%2Fuptime-week.json)
+
 - **[Diaspora SDK](https://github.com/globus-labs/diaspora-event-sdk)**: Explore the Python SDK for integrating with the Diaspora Event Fabric.
+
+    [![PyPI Version](https://img.shields.io/pypi/v/diaspora-event-sdk?color=teal)](https://pypi.org/project/diaspora-event-sdk/)
+    [![Python Versions](https://img.shields.io/pypi/pyversions/diaspora-event-sdk.svg)](https://pypi.org/project/diaspora-event-sdk/)
+    [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
 ### TODOs
 
