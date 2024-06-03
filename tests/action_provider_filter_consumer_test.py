@@ -52,7 +52,7 @@ def test_run_endpoint_send_one_key(client, access_token):  # noqa: F811
     assert response_data['status'] == SUCCESS_STATUS_STRING
 
 
-def test_run_endpoint_consume_with_non_filter(
+def test_run_endpoint_consume_with_bad_filter(
     client,  # noqa: F811
     access_token,  # noqa: F811
 ):
@@ -68,9 +68,14 @@ def test_run_endpoint_consume_with_non_filter(
             'action': 'consume',
             'topic': 'diaspora-cicd',
             'ts': get_current_time_ms_minus_one_hour(),
-            'filters': [  # bad pattern does not have effect
+            'filters': [
                 {
                     'BadPattern': {
+                        'value': {'content': [{'prefix': 'hello world1'}]},
+                    },
+                },
+                {
+                    'Pattern': {
                         'value': {'content': [{'prefix': 'hello world1'}]},
                     },
                 },
@@ -83,7 +88,7 @@ def test_run_endpoint_consume_with_non_filter(
     logger.info(f'Response data: {response_data}')
 
     assert response.status_code == ACCEPTED_STATUS_CODE
-    assert response_data['status'] == SUCCESS_STATUS_STRING
+    assert response_data['status'] == FAILED_STATUS_STRING
 
 
 def test_run_endpoint_consume_with_suffix_and_hello_world1(

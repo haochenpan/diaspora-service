@@ -97,10 +97,7 @@ def filter_messages(
     added_messages = set()
 
     for filter_pattern in filters:
-        pattern = filter_pattern.get('Pattern')
-        if not pattern:
-            continue
-
+        pattern = filter_pattern['Pattern']
         pattern_value = pattern.get('value')
         # print(pattern_value, type(pattern_value))  # For debugging
 
@@ -183,14 +180,14 @@ def action_consume(
                 update_messages(messages, partition_records)
 
         filters = request.body.get('filters', [])
-        all_patterns_valid = True
         for filter_pattern in filters:
             pattern = filter_pattern.get('Pattern')
             if not pattern:
-                all_patterns_valid = False
-                break
+                raise ValueError(
+                    f'Invalid filter pattern: {filter_pattern}',
+                )
 
-        if len(filters) != 0 and all_patterns_valid:
+        if len(filters) != 0:
             messages = filter_messages(messages, filters)
 
         status = build_action_status(
