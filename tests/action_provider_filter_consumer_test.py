@@ -53,10 +53,10 @@ def test_run_endpoint_send_one_key(client, access_token):  # noqa: F811
 
 
 def test_run_endpoint_consume_with_non_filter(
-    client,
-    access_token,
-):  # noqa: F811
-    """Test the run endpoint (consume with prefix and hellow world 1)."""
+    client,  # noqa: F811
+    access_token,  # noqa: F811
+):
+    """Test the run endpoint (consume with bad pattern)."""
     headers = {
         'Authorization': f'Bearer {access_token}',
         'Content-Type': 'application/json',
@@ -87,10 +87,10 @@ def test_run_endpoint_consume_with_non_filter(
 
 
 def test_run_endpoint_consume_with_suffix_and_hello_world1(
-    client,
-    access_token,
-):  # noqa: F811
-    """Test the run endpoint (consume with prefix and hellow world 1)."""
+    client,  # noqa: F811
+    access_token,  # noqa: F811
+):
+    """Test the run endpoint (consume with prefix and hello world 1)."""
     headers = {
         'Authorization': f'Bearer {access_token}',
         'Content-Type': 'application/json',
@@ -133,9 +133,9 @@ def test_run_endpoint_consume_with_suffix_and_hello_world1(
 
 
 def test_run_endpoint_consume_with_suffix_and_hello_world2(
-    client,
-    access_token,
-):  # noqa: F811
+    client,  # noqa: F811
+    access_token,  # noqa: F811
+):
     """Test the run endpoint (consume with suffix and hello world2)."""
     headers = {
         'Authorization': f'Bearer {access_token}',
@@ -179,9 +179,9 @@ def test_run_endpoint_consume_with_suffix_and_hello_world2(
 
 
 def test_run_endpoint_consume_with_suffix_and_hello_world3(
-    client,
-    access_token,
-):  # noqa: F811
+    client,  # noqa: F811
+    access_token,  # noqa: F811
+):
     """Test the run endpoint (consume with suffix and hello world3)."""
     headers = {
         'Authorization': f'Bearer {access_token}',
