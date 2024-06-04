@@ -98,7 +98,7 @@ def test_run_endpoint_no_records(client, access_token, mocker):  # noqa: F811
 
     # Mock the KafkaConsumer poll method to return no records
     mocker.patch('kafka.KafkaConsumer.poll', return_value={})
-    # Mock the KafkaConsumer offsets_for_times method to return offsets with None
+    # Mock the KafkaConsumer offsets_for_times to return offsets with None
     mocker.patch('kafka.KafkaConsumer.offsets_for_times', return_value={})
 
     data = {
@@ -159,3 +159,27 @@ def test_run_endpoint_empty_topic(client, access_token, mocker):  # noqa: F811
 
     assert response.status_code == ACCEPTED_STATUS_CODE
     assert response_data['status'] == FAILED_STATUS_STRING
+
+
+def test_run_endpoint_with_group_id(client, access_token):  # noqa: F811
+    """Test the run endpoint (with a group id)."""
+    headers = {
+        'Authorization': f'Bearer {access_token}',
+        'Content-Type': 'application/json',
+    }
+
+    data = {
+        'request_id': '100',
+        'body': {
+            'action': 'consume',
+            'topic': 'diaspora-cicd',
+            'group_id': 'group-cicd',
+        },
+    }
+    response = client.post('/run', json=data, headers=headers)
+    response_data = json.loads(response.data.decode('utf-8'))
+    logger.info(f'Response code: {response.status_code}')
+    logger.info(f'Response data: {response_data}')
+
+    assert response.status_code == ACCEPTED_STATUS_CODE
+    assert response_data['status'] == SUCCESS_STATUS_STRING
