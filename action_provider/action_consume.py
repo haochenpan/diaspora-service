@@ -21,11 +21,7 @@ from kafka.consumer.fetcher import ConsumerRecord
 from action_provider.utils import build_action_status
 from action_provider.utils import MSKTokenProviderFromRole
 
-CLIENT_ID = os.environ['CLIENT_ID']
-CLIENT_SECRET = os.environ['CLIENT_SECRET']
-CLIENT_SCOPE = os.environ['CLIENT_SCOPE']
 DEFAULT_SERVERS = os.environ['DEFAULT_SERVERS']
-
 TIMESTAMP_TYPE_MAPPING = {0: 'CREATE_TIME', 1: 'LOG_APPEND_TIME'}
 
 
@@ -48,6 +44,7 @@ def create_consumer(
         'sasl_oauth_token_provider': MSKTokenProviderFromRole(open_id),
         'auto_offset_reset': 'earliest',
         'group_id': group_id,
+        'enable_auto_commit': False,  # deterministic and manual commit
     }
 
     consumer = KafkaConsumer(**conf)
@@ -84,6 +81,31 @@ def update_messages(
         }
 
         messages[msg_key].append(msg_val)
+
+
+def retrieve_messages(
+    consumer: KafkaConsumer,
+) -> dict[str, list[dict[str, Any]]]:
+    """Retrieve messages from a Kafka consumer.
+
+    This function polls a Kafka consumer for messages, processing and
+    collecting them into a dictionary.
+
+    Args:
+        consumer (KafkaConsumer): The Kafka consumer instance to poll for
+        messages.
+
+    Returns:
+        dict[str, list[dict[str, Any]]]: A dictionary of messages grouped by
+                                         topic-partition.
+    """
+    messages: dict[str, list[dict[str, Any]]] = defaultdict(lambda: [])
+
+    while records := consumer.poll(timeout_ms=1000):
+        for _, partition_records in records.items():
+            update_messages(messages, partition_records)
+
+    return messages
 
 
 def filter_messages(
@@ -141,8 +163,8 @@ def action_consume(
     open_id = caller_id.split(':')[-1]
     topic = request.body['topic']
     group_id = request.body.get('group_id', None)
-    # print('topic:', topic)
-    # print('group_id:', group_id)
+    print('topic:', topic)
+    print('group_id:', group_id)
 
     consumer = create_consumer(
         servers,
@@ -161,24 +183,6 @@ def action_consume(
                 'The topic does not exist or the user does not have access',
             )
 
-        topic_partitions = [TopicPartition(topic, p) for p in partitions]
-        timestamps = {tp: ts_mill for tp in topic_partitions}
-
-        offsets = consumer.offsets_for_times(timestamps)
-        consumer.poll(timeout_ms=10000)  # avoid unassigned partition exception
-        for tp, offset in offsets.items():
-            if offset:
-                consumer.seek(tp, offset.offset)
-
-        # key: topic-partition
-        # val: {topic, partition, offset, timestamp,
-        #       timestampType, value, headers}
-        messages: dict[str, list[dict[str, Any]]] = defaultdict(lambda: [])
-
-        while records := consumer.poll(timeout_ms=1000):
-            for _, partition_records in records.items():
-                update_messages(messages, partition_records)
-
         filters = request.body.get('filters', [])
         for filter_pattern in filters:
             pattern = filter_pattern.get('Pattern')
@@ -187,6 +191,18 @@ def action_consume(
                     f'Invalid filter pattern: {filter_pattern}',
                 )
 
+        # if not set, retrieve by >= timestamp
+        if group_id is None:
+            topic_partitions = [TopicPartition(topic, p) for p in partitions]
+            timestamps = {tp: ts_mill for tp in topic_partitions}
+            offsets = consumer.offsets_for_times(timestamps)
+            consumer.poll(timeout_ms=10000)  # avoid unassigned partition error
+            for tp, offset in offsets.items():
+                if offset:  # TODO: sometimes the tests fail here, rerun!
+                    consumer.seek(tp, offset.offset)
+
+        # if group_id is set, retrieve directly
+        messages = retrieve_messages(consumer)
         if len(filters) != 0:
             messages = filter_messages(messages, filters)
 
@@ -196,6 +212,10 @@ def action_consume(
             request,
             messages,
         )
+
+        if group_id is not None:
+            consumer.commit()
+
         return status
 
     except Exception as e:
