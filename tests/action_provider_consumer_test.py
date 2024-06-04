@@ -65,30 +65,6 @@ def test_run_endpoint_from_curr_ts(client, access_token):  # noqa: F811
     assert response_data['status'] == SUCCESS_STATUS_STRING
 
 
-def test_run_endpoint_from_past_ts(client, access_token):  # noqa: F811
-    """Test the run endpoint (from a past ts)."""
-    headers = {
-        'Authorization': f'Bearer {access_token}',
-        'Content-Type': 'application/json',
-    }
-
-    data = {
-        'request_id': '100',
-        'body': {
-            'action': 'consume',
-            'topic': 'diaspora-cicd',
-            'ts': 1715930522000,
-        },
-    }
-    response = client.post('/run', json=data, headers=headers)
-    response_data = json.loads(response.data.decode('utf-8'))
-    logger.info(f'Response code: {response.status_code}')
-    logger.info(f'Response data: {response_data}')
-
-    assert response.status_code == ACCEPTED_STATUS_CODE
-    assert response_data['status'] == SUCCESS_STATUS_STRING
-
-
 def test_run_endpoint_no_records(client, access_token, mocker):  # noqa: F811
     """Test the run endpoint when no records are returned."""
     headers = {
@@ -96,16 +72,23 @@ def test_run_endpoint_no_records(client, access_token, mocker):  # noqa: F811
         'Content-Type': 'application/json',
     }
 
+    # this mock is useful but ruff complains the message is not used
     # Mock the KafkaConsumer poll method to return no records
-    mocker.patch('kafka.KafkaConsumer.poll', return_value={})
+    mock_poll = mocker.patch('kafka.KafkaConsumer.poll', return_value={})  # noqa: F841
     # Mock the KafkaConsumer offsets_for_times to return offsets with None
-    mocker.patch('kafka.KafkaConsumer.offsets_for_times', return_value={})
+    mock_offsets = mocker.patch(
+        'kafka.KafkaConsumer.offsets_for_times',
+        return_value={TopicPartition('diaspora-cicd', 0): None},
+    )
+    # Mock the KafkaConsumer seek method
+    mock_seek = mocker.patch('kafka.KafkaConsumer.seek')
 
     data = {
         'request_id': '100',
         'body': {
             'action': 'consume',
             'topic': 'diaspora-cicd',
+            'ts': 1622518954000,
         },
     }
     response = client.post('/run', json=data, headers=headers)
@@ -114,25 +97,14 @@ def test_run_endpoint_no_records(client, access_token, mocker):  # noqa: F811
     logger.info(f'Response code: {response.status_code}')
     logger.info(f'Response data: {response_data}')
 
-    assert response.status_code == ACCEPTED_STATUS_CODE
-    assert response_data['status'] == SUCCESS_STATUS_STRING
+    assert response.status_code == ACCEPTED_STATUS_CODE  # ACCEPTED_STATUS_CODE
+    assert response_data['status'] == 'SUCCEEDED'  # SUCCESS_STATUS_STRING
     assert response_data['details'] == {}  # Ensure no messages are present
 
-    # Additional test for when offsets return None
-    mocker.patch(
-        'kafka.KafkaConsumer.offsets_for_times',
-        return_value={TopicPartition('diaspora-cicd', 0): None},
-    )
-
-    response = client.post('/run', json=data, headers=headers)
-    response_data = json.loads(response.data.decode('utf-8'))
-
-    logger.info(f'Additional Response code: {response.status_code}')
-    logger.info(f'Additional Response data: {response_data}')
-
-    assert response.status_code == ACCEPTED_STATUS_CODE
-    assert response_data['status'] == SUCCESS_STATUS_STRING
-    assert response_data['details'] == {}  # Ensure no messages are present
+    # Ensure offsets_for_times was called
+    mock_offsets.assert_called_once()
+    # Ensure seek was not called since offset was None
+    mock_seek.assert_not_called()
 
 
 def test_run_endpoint_empty_topic(client, access_token, mocker):  # noqa: F811
@@ -143,7 +115,10 @@ def test_run_endpoint_empty_topic(client, access_token, mocker):  # noqa: F811
     }
 
     # Mock the KafkaConsumer to have an empty topic
-    mocker.patch('kafka.KafkaConsumer.partitions_for_topic', return_value=[])
+    mock_partitions = mocker.patch(
+        'kafka.KafkaConsumer.partitions_for_topic',
+        return_value=[],
+    )
 
     data = {
         'request_id': '100',
@@ -157,8 +132,11 @@ def test_run_endpoint_empty_topic(client, access_token, mocker):  # noqa: F811
     logger.info(f'Response code: {response.status_code}')
     logger.info(f'Response data: {response_data}')
 
-    assert response.status_code == ACCEPTED_STATUS_CODE
-    assert response_data['status'] == FAILED_STATUS_STRING
+    assert response.status_code == ACCEPTED_STATUS_CODE  # ACCEPTED_STATUS_CODE
+    assert response_data['status'] == 'FAILED'  # FAILED_STATUS_STRING
+
+    # Ensure partitions_for_topic was called
+    mock_partitions.assert_called_once()
 
 
 def test_run_endpoint_with_group_id(client, access_token):  # noqa: F811

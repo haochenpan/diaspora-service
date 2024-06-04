@@ -6,8 +6,6 @@ import contextlib
 import json
 import os
 from collections import defaultdict
-from datetime import datetime
-from datetime import timezone
 from typing import Any
 
 from globus_action_provider_tools import ActionRequest
@@ -108,7 +106,21 @@ def retrieve_messages(
     return messages
 
 
-def filter_messages(
+def filter_messages_on_ts(
+    messages: dict[str, list[dict[str, Any]]],
+    ts: int,
+) -> dict[str, list[dict[str, Any]]]:
+    """Update the messages dictionary with the list of filters."""
+    for topic_partition in messages:
+        messages[topic_partition] = [
+            message
+            for message in messages[topic_partition]
+            if message['timestamp'] >= ts
+        ]
+    return messages
+
+
+def filter_messages_on_patterns(
     messages: dict[str, list[dict[str, Any]]],
     filters: list[dict[str, Any]],
 ) -> dict[str, list[dict[str, Any]]]:
@@ -153,6 +165,26 @@ def filter_messages(
     return ret_msgs
 
 
+def filter_msgs(
+    consumer: KafkaConsumer,
+    ts: int | None,
+    filters: list[dict[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    """Allpy the ts and pattern filters."""
+    # if ts is not provided OR group_id is set, retrieve directly
+    messages = retrieve_messages(consumer)
+
+    # 1st filter on ts
+    if ts:
+        messages = filter_messages_on_ts(messages, ts)
+
+    # 2nd filter on pattern syntax
+    if len(filters) != 0:
+        messages = filter_messages_on_patterns(messages, filters)
+
+    return messages
+
+
 def action_consume(
     request: ActionRequest,
     auth: AuthState,
@@ -174,9 +206,6 @@ def action_consume(
     )
 
     try:
-        ts_curr = int(datetime.now(timezone.utc).timestamp() * 1000)
-        ts_mill = request.body.get('ts', ts_curr)
-
         partitions = consumer.partitions_for_topic(topic)
         if not partitions:
             raise ValueError(
@@ -191,21 +220,18 @@ def action_consume(
                     f'Invalid filter pattern: {filter_pattern}',
                 )
 
-        # if not set, retrieve by >= timestamp
-        if group_id is None:
+        # if ts and no group_id, seek to the offset then retrieve msgs
+        ts = request.body.get('ts', None)
+        if ts and group_id is None:
             topic_partitions = [TopicPartition(topic, p) for p in partitions]
-            timestamps = {tp: ts_mill for tp in topic_partitions}
+            timestamps = {tp: ts for tp in topic_partitions}
             offsets = consumer.offsets_for_times(timestamps)
             consumer.poll(timeout_ms=10000)  # avoid unassigned partition error
             for tp, offset in offsets.items():
                 if offset:  # TODO: sometimes the tests fail here, rerun!
                     consumer.seek(tp, offset.offset)
 
-        # if group_id is set, retrieve directly
-        messages = retrieve_messages(consumer)
-        if len(filters) != 0:
-            messages = filter_messages(messages, filters)
-
+        messages = filter_msgs(consumer, ts, filters)
         status = build_action_status(
             auth,
             ActionStatusValue.SUCCEEDED,
