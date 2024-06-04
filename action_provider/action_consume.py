@@ -21,11 +21,7 @@ from kafka.consumer.fetcher import ConsumerRecord
 from action_provider.utils import build_action_status
 from action_provider.utils import MSKTokenProviderFromRole
 
-CLIENT_ID = os.environ['CLIENT_ID']
-CLIENT_SECRET = os.environ['CLIENT_SECRET']
-CLIENT_SCOPE = os.environ['CLIENT_SCOPE']
 DEFAULT_SERVERS = os.environ['DEFAULT_SERVERS']
-
 TIMESTAMP_TYPE_MAPPING = {0: 'CREATE_TIME', 1: 'LOG_APPEND_TIME'}
 
 
@@ -167,7 +163,7 @@ def action_consume(
         offsets = consumer.offsets_for_times(timestamps)
         consumer.poll(timeout_ms=10000)  # avoid unassigned partition exception
         for tp, offset in offsets.items():
-            if offset:
+            if offset:  # TODO: sometimes the tests fail here, rerun!
                 consumer.seek(tp, offset.offset)
 
         # key: topic-partition

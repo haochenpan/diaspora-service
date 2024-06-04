@@ -4,6 +4,8 @@ import importlib.metadata as importlib_metadata
 import json
 import logging
 
+from kafka import TopicPartition
+
 from testing.fixtures import access_token  # noqa: F401
 from testing.fixtures import client  # noqa: F401
 
@@ -96,6 +98,8 @@ def test_run_endpoint_no_records(client, access_token, mocker):  # noqa: F811
 
     # Mock the KafkaConsumer poll method to return no records
     mocker.patch('kafka.KafkaConsumer.poll', return_value={})
+    # Mock the KafkaConsumer offsets_for_times method to return offsets with None
+    mocker.patch('kafka.KafkaConsumer.offsets_for_times', return_value={})
 
     data = {
         'request_id': '100',
@@ -106,8 +110,25 @@ def test_run_endpoint_no_records(client, access_token, mocker):  # noqa: F811
     }
     response = client.post('/run', json=data, headers=headers)
     response_data = json.loads(response.data.decode('utf-8'))
+
     logger.info(f'Response code: {response.status_code}')
     logger.info(f'Response data: {response_data}')
+
+    assert response.status_code == ACCEPTED_STATUS_CODE
+    assert response_data['status'] == SUCCESS_STATUS_STRING
+    assert response_data['details'] == {}  # Ensure no messages are present
+
+    # Additional test for when offsets return None
+    mocker.patch(
+        'kafka.KafkaConsumer.offsets_for_times',
+        return_value={TopicPartition('diaspora-cicd', 0): None},
+    )
+
+    response = client.post('/run', json=data, headers=headers)
+    response_data = json.loads(response.data.decode('utf-8'))
+
+    logger.info(f'Additional Response code: {response.status_code}')
+    logger.info(f'Additional Response data: {response_data}')
 
     assert response.status_code == ACCEPTED_STATUS_CODE
     assert response_data['status'] == SUCCESS_STATUS_STRING
