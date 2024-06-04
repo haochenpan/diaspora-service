@@ -72,8 +72,9 @@ def test_run_endpoint_no_records(client, access_token, mocker):  # noqa: F811
         'Content-Type': 'application/json',
     }
 
+    # this mock is useful but ruff complains the message is not used
     # Mock the KafkaConsumer poll method to return no records
-    # mock_poll = mocker.patch('kafka.KafkaConsumer.poll', return_value={})
+    mock_poll = mocker.patch('kafka.KafkaConsumer.poll', return_value={})  # noqa: F841
     # Mock the KafkaConsumer offsets_for_times to return offsets with None
     mock_offsets = mocker.patch(
         'kafka.KafkaConsumer.offsets_for_times',
