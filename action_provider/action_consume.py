@@ -31,8 +31,24 @@ def create_consumer(
 ) -> KafkaConsumer:
     """Create a Kafka consumer with the user identity and requested topic.
 
-    Note: the call should succeed even the user does not exist or
-    does not have access to the topic.
+    This function sets up the consumer with parameters such as server
+    addresses, security protocols, and topic subscriptions.
+    The 'group_id' parameter allows for consumer group management,
+    where 'None' means no consumer group association.
+
+    Note: the call should succeed even if the user does not exist or does not
+      have access to the topic.
+
+    Args:
+        servers (str): A string specifying the Kafka bootstrap servers.
+        open_id (str): The OpenID identifier for the user.
+        topic (str): The topic from which messages will be consumed.
+        group_id (str | None): The consumer group ID, or None for no
+        group association.
+
+    Returns:
+        KafkaConsumer: An instance of KafkaConsumer configured with the
+        specified parameters.
     """
     conf = {
         'bootstrap_servers': servers,
@@ -170,7 +186,25 @@ def filter_msgs(
     ts: int | None,
     filters: list[dict[str, Any]],
 ) -> dict[str, list[dict[str, Any]]]:
-    """Allpy the ts and pattern filters."""
+    """Apply timestamp and pattern filters to the messages retrieved.
+
+    The function retrieves messages and then filters them based on a provided
+    timestamp and pattern filters. The 'filters' parameter is a list of
+    pattern matching rules that define which messages to include based on their
+      content.
+
+    Args:
+        consumer (KafkaConsumer): The Kafka consumer instance to poll for
+        messages.
+        ts (int | None): A timestamp to filter messages, where only messages
+        newer than this timestamp will be included.
+        filters (list[dict[str, Any]]): A list of filters specifying patterns
+        to apply when filtering messages.
+
+    Returns:
+        dict[str, list[dict[str, Any]]]: A dictionary of messages grouped by
+        topic-partition that meet the filtering criteria.
+    """
     # if ts is not provided OR group_id is set, retrieve directly
     messages = retrieve_messages(consumer)
 

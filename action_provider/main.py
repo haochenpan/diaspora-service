@@ -67,8 +67,14 @@ def action_run(
         - For 'consume' action:
 
             - ts (int, optional): Timestamp in milliseconds since the epoch to
-            start retrieving messages from. If not provided, the current
-            timestamp will be used.
+            start retrieving messages from. If not provided, the messages since
+            the earliest available messages will be returned.
+
+            - group_id (str, optional): Kafka consumer group ID for
+            managing session state across multiple consumers.
+
+            - filters (list of dict, optional): Criteria to filter messages
+            based on patterns within their content. See notebook examples.
 
         Optional field:
         - servers (str): Comma-separated list of diaspora servers (for
@@ -106,10 +112,12 @@ def action_run(
     request_body = {
         "action": "consume",
         "topic": "example_topic",
-        "ts": 1620000000000  # Optional: if not provided, current
-                              # timestamp will be used
+        "ts": 1620000000000  # Optional: if not provided, consume from
+                             # the earliest messages.
     }
     ```
+
+    See the notebooks for more filter examples.
 
     The function will call the appropriate internal function to handle the
     request:
