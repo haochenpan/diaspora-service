@@ -33,11 +33,6 @@ Welcome to the Diaspora Event Fabric Service documentation! Our goal in the Dias
 
 ### TODOs
 
-- **Action Provider Enhancements**
-  - Implement filtering by key
-  - Develop a general filtering syntax
-  - Create and run filter tests
-
 - **Event Fabric**
   - Implement usage logging
 
