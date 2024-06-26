@@ -14,4 +14,4 @@ This script sets up a Docker environment, installs Docker Compose, and configure
 
 ### Startup Script
 
-See [startup_script.sh](https://github.com/haochenpan/diaspora-service/blob/main/admin_console/startup_script.sh)
+See [startup_script.sh](https://github.com/haochenpan/diaspora-service/blob/main/kafka_console/startup_script.sh)

@@ -116,5 +116,7 @@ nav:
   - Web Service:
       - Documentation: web/api.md
       - Examples: web/examples.md
-  - Admin Console:
-      - Introduction: console/intro.md
+  - Kafka Console:
+      - Introduction: kafka-console/intro.md
+  - Grafana Console:
+      - Introduction: grafana-console/intro.md
