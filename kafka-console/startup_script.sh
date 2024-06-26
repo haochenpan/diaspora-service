@@ -8,7 +8,8 @@
 export DEBIAN_FRONTEND=noninteractive
 
 # Update package list and perform a dist-upgrade with forced configuration file overwrite
-apt-get update && apt-get -o Dpkg::Options::="--force-confold" dist-upgrade -q -y --force-yes
+# apt-get update && apt-get -o Dpkg::Options::="--force-confold" dist-upgrade -q -y --force-yes
+apt-get update && apt-get -o Dpkg::Options::="--force-confold" dist-upgrade -q -y --allow-downgrades
 
 # Install Docker
 curl -sSL https://get.docker.com | sh

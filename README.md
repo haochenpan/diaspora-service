@@ -13,7 +13,7 @@ Welcome to the Diaspora Event Fabric Service documentation! Our goal in the Dias
 ### Resources
 
 - **[Project Description](https://diaspora-project.github.io/)**: Learn more about the Diaspora project.
-- **[Docs and Demo](https://haochenpan.github.io/diaspora-service/)**: Access detailed documentation and demonstrations.
+- **[Docs and Demo](https://haochenpan.github.io/diaspora-service/)**: Access detailed documentation and code demonstrations.
 - **[Service Status](https://haochenpan.github.io/diaspora-uptime-monitor/)**: Check the current status of the Diaspora Event Fabric.
     - [Diaspora Web Service](https://diaspora-web-service.ml22sevubfnks.us-east-1.cs.amazonlightsail.com)
     ![7-day response time](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fhaochenpan%2Fdiaspora-uptime-monitor%2FHEAD%2Fapi%2Fdiaspora-web-service%2Fresponse-time-week.json)
@@ -22,8 +22,11 @@ Welcome to the Diaspora Event Fabric Service documentation! Our goal in the Dias
     ![7-day response time](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fhaochenpan%2Fdiaspora-uptime-monitor%2FHEAD%2Fapi%2Fdiaspora-action-provider%2Fresponse-time-week.json)
     ![7-day uptime](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fhaochenpan%2Fdiaspora-uptime-monitor%2FHEAD%2Fapi%2Fdiaspora-action-provider%2Fuptime-week.json)
     - [Diaspora Admin Console](http://100.27.155.7/)
-    ![7-day response time](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fhaochenpan%2Fdiaspora-uptime-monitor%2FHEAD%2Fapi%2Fdiaspora-admin-console%2Fresponse-time-week.json)
-    ![7-day uptime](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fhaochenpan%2Fdiaspora-uptime-monitor%2FHEAD%2Fapi%2Fdiaspora-admin-console%2Fuptime-week.json)
+    ![7-day response time](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fhaochenpan%2Fdiaspora-uptime-monitor%2FHEAD%2Fapi%2Fdiaspora-kafka-console%2Fresponse-time-week.json)
+    ![7-day uptime](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fhaochenpan%2Fdiaspora-uptime-monitor%2FHEAD%2Fapi%2Fdiaspora-kafka-console%2Fuptime-week.json)
+    - [Diaspora Grafana Console](http://100.29.137.186/)
+    ![7-day response time](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fhaochenpan%2Fdiaspora-uptime-monitor%2FHEAD%2Fapi%2Fdiaspora-grafana-console%2Fresponse-time-week.json)
+    ![7-day uptime](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fhaochenpan%2Fdiaspora-uptime-monitor%2FHEAD%2Fapi%2Fdiaspora-grafana-console%2Fuptime-week.json)
 
 - **[Diaspora SDK](https://github.com/globus-labs/diaspora-event-sdk)**: Explore the Python SDK for integrating with the Diaspora Event Fabric.
 

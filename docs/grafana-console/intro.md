@@ -1,6 +1,6 @@
 
 # Commands to setup the Grafana Console on LightSail (Ubuntu 22.04)
-### Masked Credentials 
+### Masked Credentials
 
 replace them below with appropriate credentials:
 
@@ -92,7 +92,7 @@ cat <<EOF > targets.json
         "job": "jmx"
       },
       "targets": [
-        "b-2-public.diaspora.fy49oq.c9.kafka.us-east-1.amazonaws.com:11001", 
+        "b-2-public.diaspora.fy49oq.c9.kafka.us-east-1.amazonaws.com:11001",
         "b-1-public.diaspora.fy49oq.c9.kafka.us-east-1.amazonaws.com:11001"
       ]
     },
@@ -101,7 +101,7 @@ cat <<EOF > targets.json
         "job": "node"
       },
       "targets": [
-        "b-2-public.diaspora.fy49oq.c9.kafka.us-east-1.amazonaws.com:11002", 
+        "b-2-public.diaspora.fy49oq.c9.kafka.us-east-1.amazonaws.com:11002",
         "b-1-public.diaspora.fy49oq.c9.kafka.us-east-1.amazonaws.com:11002"
       ]
     }
@@ -193,6 +193,6 @@ netfilter-persistent save
 ```
 TODO: test the cron job.
 
-Grafana defualt credential: admin admin
+Grafana default credential: admin admin
 
 Add a new datasource with Prometheus server URL set to http://172.17.0.1:10906. The bridge address can be found using `sudo docker network inspect bridge`
