@@ -21,7 +21,7 @@ Welcome to the Diaspora Event Fabric Service documentation! Our goal in the Dias
     - [Diaspora Action Provider](https://diaspora-action-provider.ml22sevubfnks.us-east-1.cs.amazonlightsail.com)
     ![7-day response time](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fhaochenpan%2Fdiaspora-uptime-monitor%2FHEAD%2Fapi%2Fdiaspora-action-provider%2Fresponse-time-week.json)
     ![7-day uptime](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fhaochenpan%2Fdiaspora-uptime-monitor%2FHEAD%2Fapi%2Fdiaspora-action-provider%2Fuptime-week.json)
-    - [Diaspora Admin Console](http://100.27.155.7/)
+    - [Diaspora Kafka Console](http://100.27.155.7/)
     ![7-day response time](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fhaochenpan%2Fdiaspora-uptime-monitor%2FHEAD%2Fapi%2Fdiaspora-kafka-console%2Fresponse-time-week.json)
     ![7-day uptime](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fhaochenpan%2Fdiaspora-uptime-monitor%2FHEAD%2Fapi%2Fdiaspora-kafka-console%2Fuptime-week.json)
     - [Diaspora Grafana Console](http://100.29.137.186/)

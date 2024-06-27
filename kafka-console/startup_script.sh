@@ -73,5 +73,5 @@ iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-port 8080
 apt-get install -y iptables-persistent
 netfilter-persistent save
 
-# Schedule a reboot every 3 hours using cron
-(crontab -l 2>/dev/null; echo "0 */3 * * * /sbin/reboot") | crontab -
+# Schedule a reboot every 3 days at 4:30 AM
+(crontab -l 2>/dev/null; echo "30 4 */3 * * /sbin/reboot") | crontab -
