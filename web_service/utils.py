@@ -1353,6 +1353,6 @@ if __name__ == '__main__':
         'us-east-1',
         'diaspora',
         '0b48e9a3-c32b-4783-9993-30798cdda646-9',
-        'b-1.diaspora.fy49oq.c9.kafka.us-east-1.amazonaws.com:9098',
+        'b-1-public.diaspora.fy49oq.c9.kafka.us-east-1.amazonaws.com:9198,b-2-public.diaspora.fy49oq.c9.kafka.us-east-1.amazonaws.com:9198',
         'b-1-public.diaspora.fy49oq.c9.kafka.us-east-1.amazonaws.com:9198,b-2-public.diaspora.fy49oq.c9.kafka.us-east-1.amazonaws.com:9198',
     )
