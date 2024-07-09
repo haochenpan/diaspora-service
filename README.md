@@ -36,9 +36,6 @@ Welcome to the Diaspora Event Fabric Service documentation! Our goal in the Dias
 
 ### TODOs
 
-- **Event Fabric**
-  - Implement usage logging
-
 - **Trigger Improvements**
   - Enhance authentication mechanisms
   - Simplify usability
