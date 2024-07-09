@@ -7,6 +7,7 @@ replace them below with appropriate credentials:
 - `AWS_ACCESS_KEY_ID`: `********************`
 - `AWS_SECRET_ACCESS_KEY`: `****************************`
 
+The keys need to have IAM access to S3 for Thanos; For details see [this article](https://aws.amazon.com/blogs/opensource/improving-ha-and-long-term-storage-for-prometheus-using-thanos-on-eks-with-s3/).
 
 ### 1. System updates and docker install
 ```bash
