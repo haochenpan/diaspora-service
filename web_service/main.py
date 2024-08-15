@@ -299,7 +299,7 @@ class DiasporaService:
                 'reason': 'newpartitions must be an integer in string format.',
             }
 
-    async def grant_or_revoke_user_access(  # noqa: PLR0913
+    async def grant_or_revoke_user_access(
         self,
         topic: str,
         subject: str = Depends(extract_val('subject')),
