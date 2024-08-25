@@ -4,6 +4,7 @@ import importlib.metadata as importlib_metadata
 import json
 import logging
 
+from action_provider.utils import random_request_id
 from testing.fixtures import access_token  # noqa: F401
 from testing.fixtures import client  # noqa: F401
 
@@ -25,7 +26,7 @@ def test_run_endpoint_no_msgs(client, access_token):  # noqa: F811
     }
 
     data = {
-        'request_id': '100',
+        'request_id': random_request_id(),
         'body': {
             'action': 'produce',
             'topic': 'a_topic',
@@ -48,7 +49,7 @@ def test_run_endpoint_empty_msgs(client, access_token):  # noqa: F811
     }
 
     data = {
-        'request_id': '100',
+        'request_id': random_request_id(),
         'body': {
             'action': 'produce',
             'topic': 'a_topic',
@@ -72,7 +73,7 @@ def test_run_endpoint_lens_mismatch_1(client, access_token):  # noqa: F811
     }
 
     data = {
-        'request_id': '100',
+        'request_id': random_request_id(),
         'body': {
             'action': 'produce',
             'topic': 'a_topic',
@@ -105,7 +106,7 @@ def test_run_endpoint_lens_mismatch_2(client, access_token):  # noqa: F811
     }
 
     data = {
-        'request_id': '100',
+        'request_id': random_request_id(),
         'body': {
             'action': 'produce',
             'topic': 'a_topic',
@@ -140,7 +141,7 @@ def test_run_endpoint_send_no_keys(client, access_token):  # noqa: F811
     }
 
     data = {
-        'request_id': '100',
+        'request_id': random_request_id(),
         'body': {
             'action': 'produce',
             'topic': 'diaspora-cicd',
@@ -168,7 +169,7 @@ def test_run_endpoint_send_one_key(client, access_token):  # noqa: F811
     }
 
     data = {
-        'request_id': '100',
+        'request_id': random_request_id(),
         'body': {
             'action': 'produce',
             'topic': 'diaspora-cicd',
@@ -197,7 +198,7 @@ def test_run_endpoint_send_multiple_keys(client, access_token):  # noqa: F811
     }
 
     data = {
-        'request_id': '100',
+        'request_id': random_request_id(),
         'body': {
             'action': 'produce',
             'topic': 'diaspora-cicd',
@@ -226,7 +227,7 @@ def test_run_endpoint_bad_topic(client, access_token):  # noqa: F811
     }
 
     data = {
-        'request_id': '100',
+        'request_id': random_request_id(),
         'body': {
             'action': 'produce',
             'topic': '__bad_topic',

@@ -6,11 +6,13 @@ import logging
 
 from kafka import TopicPartition
 
+from action_provider.utils import random_request_id
 from testing.fixtures import access_token  # noqa: F401
 from testing.fixtures import client  # noqa: F401
 
 ACCEPTED_STATUS_CODE = 202
 SUCCESS_STATUS_STRING = 'SUCCEEDED'
+ACTIVE_STATUS_STRING = 'ACTIVE'
 FAILED_STATUS_STRING = 'FAILED'
 
 logging.basicConfig(level=logging.INFO)
@@ -27,7 +29,7 @@ def test_run_endpoint_bad_topic(client, access_token):  # noqa: F811
     }
 
     data = {
-        'request_id': '100',
+        'request_id': random_request_id(),
         'body': {
             'action': 'consume',
             'topic': '__bad_topic',
@@ -50,7 +52,7 @@ def test_run_endpoint_from_curr_ts(client, access_token):  # noqa: F811
     }
 
     data = {
-        'request_id': '100',
+        'request_id': random_request_id(),
         'body': {
             'action': 'consume',
             'topic': 'diaspora-cicd',
@@ -62,7 +64,10 @@ def test_run_endpoint_from_curr_ts(client, access_token):  # noqa: F811
     logger.info(f'Response data: {response_data}')
 
     assert response.status_code == ACCEPTED_STATUS_CODE
-    assert response_data['status'] == SUCCESS_STATUS_STRING
+    assert response_data['status'] in [
+        SUCCESS_STATUS_STRING,
+        ACTIVE_STATUS_STRING,
+    ]
 
 
 def test_run_endpoint_no_records(client, access_token, mocker):  # noqa: F811
@@ -84,7 +89,7 @@ def test_run_endpoint_no_records(client, access_token, mocker):  # noqa: F811
     mock_seek = mocker.patch('kafka.KafkaConsumer.seek')
 
     data = {
-        'request_id': '100',
+        'request_id': random_request_id(),
         'body': {
             'action': 'consume',
             'topic': 'diaspora-cicd',
@@ -97,8 +102,11 @@ def test_run_endpoint_no_records(client, access_token, mocker):  # noqa: F811
     logger.info(f'Response code: {response.status_code}')
     logger.info(f'Response data: {response_data}')
 
-    assert response.status_code == ACCEPTED_STATUS_CODE  # ACCEPTED_STATUS_CODE
-    assert response_data['status'] == 'SUCCEEDED'  # SUCCESS_STATUS_STRING
+    assert response.status_code == ACCEPTED_STATUS_CODE
+    assert response_data['status'] in [
+        SUCCESS_STATUS_STRING,
+        ACTIVE_STATUS_STRING,
+    ]
     assert response_data['details'] == {}  # Ensure no messages are present
 
     # Ensure offsets_for_times was called
@@ -121,7 +129,7 @@ def test_run_endpoint_empty_topic(client, access_token, mocker):  # noqa: F811
     )
 
     data = {
-        'request_id': '100',
+        'request_id': random_request_id(),
         'body': {
             'action': 'consume',
             'topic': 'diaspora-cicd',
@@ -147,7 +155,7 @@ def test_run_endpoint_with_group_id(client, access_token):  # noqa: F811
     }
 
     data = {
-        'request_id': '100',
+        'request_id': random_request_id(),
         'body': {
             'action': 'consume',
             'topic': 'diaspora-cicd',
@@ -160,4 +168,7 @@ def test_run_endpoint_with_group_id(client, access_token):  # noqa: F811
     logger.info(f'Response data: {response_data}')
 
     assert response.status_code == ACCEPTED_STATUS_CODE
-    assert response_data['status'] == SUCCESS_STATUS_STRING
+    assert response_data['status'] in [
+        SUCCESS_STATUS_STRING,
+        ACTIVE_STATUS_STRING,
+    ]

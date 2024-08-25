@@ -266,13 +266,25 @@ def action_consume(
                     consumer.seek(tp, offset.offset)
 
         messages = filter_msgs(consumer, ts, filters)
-        status = build_action_status(
-            auth,
-            ActionStatusValue.SUCCEEDED,
-            request,
-            messages,
-        )
+        # print('messages:', dict(messages))
 
+        n_msgs = sum(len(vs) for vs in messages.values())
+
+        if n_msgs > 0:
+            status = build_action_status(
+                auth,
+                ActionStatusValue.SUCCEEDED,
+                request,
+                messages,
+            )
+
+        else:
+            status = build_action_status(
+                auth,
+                ActionStatusValue.ACTIVE,
+                request,
+                messages,
+            )
         if group_id is not None:
             consumer.commit()
 
