@@ -55,30 +55,19 @@ def load_schema() -> dict[str, Any]:
 
 def build_action_status(
     auth: AuthState,
-    status_value: ActionStatusValue | None = None,
-    request: ActionRequest | None = None,
+    status_value: ActionStatusValue,
+    request: ActionRequest,
     result: dict[str, Any] | None = None,
 ) -> ActionStatus:
-    """Build an ActionStatus object depending on whetherrequest is None."""
-    if request is None:
-        return ActionStatus(
-            status=ActionStatusValue.SUCCEEDED,
-            creator_id=auth.effective_identity,
-            start_time=str(datetime.datetime.now().isoformat()),
-            completion_time=str(datetime.datetime.now().isoformat()),
-            release_after='P30D',
-            display_status=ActionStatusValue.SUCCEEDED,
-            details={'result': None},
-        )
-    else:
-        return ActionStatus(
-            status=status_value,
-            creator_id=auth.effective_identity,
-            monitor_by=request.monitor_by,
-            manage_by=request.manage_by,
-            start_time=str(datetime.datetime.now().isoformat()),
-            completion_time=str(datetime.datetime.now().isoformat()),
-            release_after=request.release_after or 'P30D',
-            display_status=status_value,
-            details=result,
-        )
+    """Build an ActionStatus object."""
+    return ActionStatus(
+        status=status_value,
+        creator_id=auth.effective_identity,
+        monitor_by=request.monitor_by,
+        manage_by=request.manage_by,
+        start_time=str(datetime.datetime.now().isoformat()),
+        completion_time=str(datetime.datetime.now().isoformat()),
+        release_after=request.release_after or 'P30D',
+        display_status=status_value,
+        details=result,
+    )

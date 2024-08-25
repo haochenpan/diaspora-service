@@ -55,6 +55,181 @@ def test_status_endpoint(client, access_token):  # noqa: F811
     # assert response_data['status'] == SUCCESS_STATUS_STRING
 
 
+def test_endpoints_complex1(client, access_token):  # noqa: F811
+    """Test multiple endpoints with an action id."""
+    # First, send an request with error.
+    headers = {
+        'Authorization': f'Bearer {access_token}',
+        'Content-Type': 'application/json',
+    }
+
+    req_id = random_request_id()
+    logger.info(f'req_id: {req_id}')
+
+    data = {
+        'request_id': req_id,
+        'body': {
+            'action': 'consume',
+            'topic': 'diaspora-cicd',
+            'filters': [
+                {
+                    'Pattern': {
+                        'value': {'content': [{'prefix': req_id}]},
+                    },
+                },
+            ],
+        },
+    }
+    response = client.post('/run', json=data, headers=headers)
+    response_data = json.loads(response.data.decode('utf-8'))
+    logger.info(f'Response code: {response.status_code}')
+    logger.info(f'Response data: {response_data}')
+
+    # status endpoint (should show active)
+    action_id = response_data['action_id']
+    headers = {
+        'Authorization': f'Bearer {access_token}',
+    }
+
+    response = client.get(f'/{action_id}/status', headers=headers)
+    response_data = json.loads(response.data.decode('utf-8'))
+    logger.info(f'Response code: {response.status_code}')
+    logger.info(f'Response data: {response_data}')
+
+    # release endpoint (should fail because it does not complete)
+    response = client.post(f'/{action_id}/release', headers=headers)
+    response_data = json.loads(response.data.decode('utf-8'))
+    logger.info(f'Response code: {response.status_code}')
+    logger.info(f'Response data: {response_data}')
+
+    # cancel endpoint
+    response = client.post(f'/{action_id}/cancel', headers=headers)
+    response_data = json.loads(response.data.decode('utf-8'))
+    logger.info(f'Response code: {response.status_code}')
+    logger.info(f'Response data: {response_data}')
+
+    # cancel endpoint (should return FAILED)
+    response = client.post(f'/{action_id}/cancel', headers=headers)
+    response_data = json.loads(response.data.decode('utf-8'))
+    logger.info(f'Response code: {response.status_code}')
+    logger.info(f'Response data: {response_data}')
+
+    # release endpoint
+    response = client.post(f'/{action_id}/release', headers=headers)
+    response_data = json.loads(response.data.decode('utf-8'))
+    logger.info(f'Response code: {response.status_code}')
+    logger.info(f'Response data: {response_data}')
+
+
+def test_endpoints_complex2(client, access_token):  # noqa: F811
+    """Test multiple endpoints with an action id."""
+    headers = {
+        'Authorization': f'Bearer {access_token}',
+        'Content-Type': 'application/json',
+    }
+
+    req_id = random_request_id()
+    logger.info(f'req_id: {req_id}')
+
+    data = {
+        'request_id': req_id,
+        'body': {
+            'action': 'produce',
+            'topic': 'diaspora-cicd',
+            'msgs': [
+                {'content': 'hello world1'},
+                {'content': 'hello world2'},
+                {'content': 'hello world3'},
+            ],
+        },
+    }
+    response = client.post('/run', json=data, headers=headers)
+    response_data = json.loads(response.data.decode('utf-8'))
+    logger.info(f'Response code: {response.status_code}')
+    logger.info(f'Response data: {response_data}')
+
+    # same request, already succeed, do nothing
+    data = {
+        'request_id': req_id,
+        'body': {
+            'action': 'produce',
+            'topic': 'diaspora-cicd',
+            'msgs': [
+                {'content': 'hello world1'},
+                {'content': 'hello world2'},
+                {'content': 'hello world3'},
+            ],
+        },
+    }
+    response = client.post('/run', json=data, headers=headers)
+    response_data = json.loads(response.data.decode('utf-8'))
+    logger.info(f'Response code: {response.status_code}')
+    logger.info(f'Response data: {response_data}')
+
+
+def test_endpoints_complex3(client, access_token):  # noqa: F811
+    """Test multiple endpoints with an action id."""
+    headers = {
+        'Authorization': f'Bearer {access_token}',
+        'Content-Type': 'application/json',
+    }
+
+    req_id = random_request_id()
+    logger.info(f'req_id: {req_id}')
+
+    data = {
+        'request_id': req_id,
+        'body': {
+            'action': 'consume',
+            'topic': 'diaspora-cicd',
+            'filters': [  # a new param
+                {
+                    'Pattern': {
+                        'value': {'content': [{'prefix': req_id}]},
+                    },
+                },
+            ],
+        },
+    }
+    response = client.post('/run', json=data, headers=headers)
+    response_data = json.loads(response.data.decode('utf-8'))
+    logger.info(f'Response code: {response.status_code}')
+    logger.info(f'Response data: {response_data}')
+
+    # same request, will return ACTIVE as well.
+    data = {
+        'request_id': req_id,
+        'body': {
+            'action': 'consume',
+            'topic': 'diaspora-cicd',
+            'filters': [  # a new param
+                {
+                    'Pattern': {
+                        'value': {'content': [{'prefix': req_id}]},
+                    },
+                },
+            ],
+        },
+    }
+    response = client.post('/run', json=data, headers=headers)
+    response_data = json.loads(response.data.decode('utf-8'))
+    logger.info(f'Response code: {response.status_code}')
+    logger.info(f'Response data: {response_data}')
+
+    # a different request, raise ActionConflict
+    data = {
+        'request_id': req_id,
+        'body': {
+            'action': 'consume',
+            'topic': 'diaspora-cicd',
+        },
+    }
+    response = client.post('/run', json=data, headers=headers)
+    response_data = json.loads(response.data.decode('utf-8'))
+    logger.info(f'Response code: {response.status_code}')
+    logger.info(f'Response data: {response_data}')
+
+
 def test_cancel_endpoint(client, access_token):  # noqa: F811
     """Test the cancel endpoint."""
     action_id = 'my_action_id'

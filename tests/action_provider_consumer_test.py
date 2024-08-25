@@ -60,8 +60,8 @@ def test_run_endpoint_from_curr_ts(client, access_token):  # noqa: F811
     }
     response = client.post('/run', json=data, headers=headers)
     response_data = json.loads(response.data.decode('utf-8'))
-    logger.info(f'Response code 123: {response.status_code}')
-    logger.info(f'Response data 123: {response_data}')
+    logger.info(f'Response code: {response.status_code}')
+    logger.info(f'Response data: {response_data}')
 
     assert response.status_code == ACCEPTED_STATUS_CODE
     assert response_data['status'] in [

@@ -22,7 +22,6 @@ from globus_action_provider_tools.authorization import (
 from globus_action_provider_tools.flask import add_action_routes_to_blueprint
 from globus_action_provider_tools.flask.exceptions import ActionConflict
 from globus_action_provider_tools.flask.exceptions import ActionNotFound
-from globus_action_provider_tools.flask.exceptions import BadActionRequest
 from globus_action_provider_tools.flask.helpers import assign_json_provider
 from globus_action_provider_tools.flask.types import ActionCallbackReturn
 
@@ -173,10 +172,6 @@ def action_run(
             raise ActionConflict(
                 f'Request {request_id} already present with different param. ',
             )
-        elif action_status.status != 'ACTIVE':
-            raise BadActionRequest(
-                f'Request {request_id} status {action_status.status} invalid.',
-            )
         else:
             print('here3 - status = ', action_status.status)
 
@@ -237,13 +232,13 @@ def action_release(action_id: str, auth: AuthState) -> ActionCallbackReturn:
 
     _fake_action_db.pop(action_id)
     # Both fake and badly inefficient
-    remove_req_id: str | None = None
-    for req_id, req_and_action_id in _fake_request_db.items():
-        if req_and_action_id[1] == action_id:
-            remove_req_id = req_id
-            break
-    if remove_req_id is not None:
-        _fake_request_db.pop(remove_req_id)
+    # remove_req_id: str | None = None
+    # for req_id, req_and_action_id in _fake_request_db.items():
+    #     if req_and_action_id[1] == action_id:
+    #         remove_req_id = req_id
+    #         break
+    # if remove_req_id is not None:
+    #     _fake_request_db.pop(remove_req_id)
     return status, 200
 
 
