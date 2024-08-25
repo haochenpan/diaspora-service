@@ -4,10 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "diaspora-service"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
     "aws-msk-iam-sasl-signer-python",
     "boto3",
+    "cachetools",
     "diaspora-event-sdk",
     "fastapi",
     "flask",
