@@ -9,6 +9,8 @@ from __future__ import annotations
 import datetime
 import json
 import os
+from random import choice
+from string import ascii_uppercase
 from typing import Any
 
 from aws_msk_iam_sasl_signer import MSKAuthTokenProvider
@@ -32,6 +34,11 @@ class MSKTokenProviderFromRole:
             f'arn:aws:iam::845889416464:role/ap/{self.open_id}-role',
         )
         return token
+
+
+def random_request_id() -> str:
+    """Get a random request ID."""
+    return str(''.join(choice(ascii_uppercase) for i in range(12)))
 
 
 def load_schema() -> dict[str, Any]:

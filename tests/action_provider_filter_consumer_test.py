@@ -4,6 +4,7 @@ import json
 import logging
 import time
 
+from action_provider.utils import random_request_id
 from testing.fixtures import access_token  # noqa: F401
 from testing.fixtures import client  # noqa: F401
 
@@ -31,7 +32,7 @@ def test_run_endpoint_send_one_key(client, access_token):  # noqa: F811
     }
 
     data = {
-        'request_id': '100',
+        'request_id': random_request_id(),
         'body': {
             'action': 'produce',
             'topic': 'diaspora-cicd',
@@ -45,8 +46,8 @@ def test_run_endpoint_send_one_key(client, access_token):  # noqa: F811
     }
     response = client.post('/run', json=data, headers=headers)
     response_data = json.loads(response.data.decode('utf-8'))
-    logger.info(f'Response code: {response.status_code}')
-    logger.info(f'Response data: {response_data}')
+    logger.info(f'Response code 456: {response.status_code}')
+    logger.info(f'Response data 456: {response_data}')
 
     assert response.status_code == ACCEPTED_STATUS_CODE
     assert response_data['status'] == SUCCESS_STATUS_STRING
@@ -63,7 +64,7 @@ def test_run_endpoint_consume_with_bad_filter(
     }
 
     data = {
-        'request_id': '101',
+        'request_id': random_request_id(),
         'body': {
             'action': 'consume',
             'topic': 'diaspora-cicd',
@@ -102,7 +103,7 @@ def test_run_endpoint_consume_with_suffix_and_hello_world1(
     }
 
     data = {
-        'request_id': '101',
+        'request_id': random_request_id(),
         'body': {
             'action': 'consume',
             'topic': 'diaspora-cicd',
@@ -148,7 +149,7 @@ def test_run_endpoint_consume_with_suffix_and_hello_world2(
     }
 
     data = {
-        'request_id': '104',
+        'request_id': random_request_id(),
         'body': {
             'action': 'consume',
             'topic': 'diaspora-cicd',
@@ -194,7 +195,7 @@ def test_run_endpoint_consume_with_suffix_and_hello_world3(
     }
 
     data = {
-        'request_id': '104',
+        'request_id': random_request_id(),
         'body': {
             'action': 'consume',
             'topic': 'diaspora-cicd',
