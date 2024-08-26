@@ -155,13 +155,17 @@ def action_run(
     - `action_produce` for publishing events.
     - `action_consume` for retrieving events.
     """
-    print(request)
-
     caller_id = auth.effective_identity
     request_id = request.request_id
     full_request_id = f'{caller_id}:{request_id}'
+    print('Run endpoint is called with full_request_id =', full_request_id)
+    print(request)
+
     prev_request = _fake_request_db.get(full_request_id)
     if prev_request is not None:
+        print('Previous request is found =', prev_request)
+        print(prev_request)
+
         action_id = prev_request[1]
         action_status = _fake_action_db[action_id]
         if action_status.status in ['SUCCEEDED', 'FAILED']:
@@ -189,16 +193,16 @@ def action_run(
 
 
 def action_status(action_id: str, auth: AuthState) -> ActionCallbackReturn:
-    """Placeholder status endpoint."""
-    # status = build_action_status(auth)
+    """Action status endpoint."""
+    print('Status endpoint is called with action_id =', action_id)
     status = _retrieve_action_status(action_id)
     authorize_action_access_or_404(status, auth)
     return status, 200
 
 
 def action_cancel(action_id: str, auth: AuthState) -> ActionCallbackReturn:
-    """Placeholder cancel endpoint."""
-    # status = build_action_status(auth)
+    """Action cancel endpoint."""
+    print('Cancel endpoint is called with action_id =', action_id)
     status = _retrieve_action_status(action_id)
     authorize_action_management_or_404(status, auth)
 
@@ -216,10 +220,8 @@ def action_cancel(action_id: str, auth: AuthState) -> ActionCallbackReturn:
 
 
 def action_release(action_id: str, auth: AuthState) -> ActionCallbackReturn:
-    """Placeholder release endpoint."""
-    # status = build_action_status(auth)
-    # return status
-
+    """Action release endpoint."""
+    print('Release endpoint is called with action_id =', action_id)
     status = _retrieve_action_status(action_id)
     authorize_action_management_or_404(status, auth)
 
