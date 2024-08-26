@@ -44,7 +44,7 @@ _fake_request_db: TTLCache[str, tuple[ActionRequest, str]] = TTLCache(
     maxsize=CACHE_SIZE,
     ttl=CACHE_TTL,
 )
-_fake_action_db: TTLCache[str, ActionStatus] = TTLCache(
+_fake_action_db: TTLCache[str, tuple[ActionRequest, ActionStatus]] = TTLCache(
     maxsize=CACHE_SIZE,
     ttl=CACHE_TTL,
 )
@@ -167,7 +167,7 @@ def action_run(
         print(prev_request)
 
         action_id = prev_request[1]
-        action_status = _fake_action_db[action_id]
+        action_status, _ = _fake_action_db[action_id]
         if action_status.status in ['SUCCEEDED', 'FAILED']:
             print('here1 - do nothing', action_status)
             return action_status
@@ -187,7 +187,7 @@ def action_run(
 
     print('here 4 - action status', action_status)
     _fake_request_db[full_request_id] = (request, action_status.action_id)
-    _fake_action_db[action_status.action_id] = action_status
+    _fake_action_db[action_status.action_id] = (action_status, request)
 
     return action_status
 
@@ -195,15 +195,19 @@ def action_run(
 def action_status(action_id: str, auth: AuthState) -> ActionCallbackReturn:
     """Action status endpoint."""
     print('Status endpoint is called with action_id =', action_id)
-    status = _retrieve_action_status(action_id)
+    status, request = _retrieve_action_status(action_id)
+    print('old status = ', status)
     authorize_action_access_or_404(status, auth)
+
+    status = action_run(request, auth)
+    print('new status = ', status)
     return status, 200
 
 
 def action_cancel(action_id: str, auth: AuthState) -> ActionCallbackReturn:
     """Action cancel endpoint."""
     print('Cancel endpoint is called with action_id =', action_id)
-    status = _retrieve_action_status(action_id)
+    status, request = _retrieve_action_status(action_id)
     authorize_action_management_or_404(status, auth)
 
     # If action is already in complete state, return completion details
@@ -222,7 +226,7 @@ def action_cancel(action_id: str, auth: AuthState) -> ActionCallbackReturn:
 def action_release(action_id: str, auth: AuthState) -> ActionCallbackReturn:
     """Action release endpoint."""
     print('Release endpoint is called with action_id =', action_id)
-    status = _retrieve_action_status(action_id)
+    status, request = _retrieve_action_status(action_id)
     authorize_action_management_or_404(status, auth)
 
     # Error if attempt to release an active Action
