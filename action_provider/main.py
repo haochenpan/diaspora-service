@@ -236,7 +236,7 @@ def action_release(action_id: str, auth: AuthState) -> ActionCallbackReturn:
     ):
         raise ActionConflict('Action is not complete')
 
-    _fake_action_db.pop(action_id)
+    # _fake_action_db.pop(action_id)
     # Both fake and badly inefficient
     # remove_req_id: str | None = None
     # for req_id, req_and_action_id in _fake_request_db.items():
