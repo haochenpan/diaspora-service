@@ -24,7 +24,7 @@ from globus_action_provider_tools import ActionStatusValue
 from globus_action_provider_tools import AuthState
 from globus_action_provider_tools.flask.exceptions import ActionNotFound
 
-dynamodb = boto3.resource('dynamodb')
+dynamodb = boto3.resource('dynamodb', region_name='us-east-1')
 request_table = dynamodb.Table('diaspora-request')
 action_table = dynamodb.Table('diaspora-action')
 
