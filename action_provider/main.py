@@ -221,14 +221,16 @@ def create_app() -> Flask:
     return app
 
 
+EnvironmentChecker.check_env_variables(
+    'AWS_ACCESS_KEY_ID',
+    'AWS_SECRET_ACCESS_KEY',
+    'CLIENT_ID',
+    'CLIENT_SECRET',
+    'CLIENT_SCOPE',
+    'DEFAULT_SERVERS',
+)
+app = create_app()  # required by Dockerfile
+
+
 if __name__ == '__main__':
-    EnvironmentChecker.check_env_variables(
-        'AWS_ACCESS_KEY_ID',
-        'AWS_SECRET_ACCESS_KEY',
-        'CLIENT_ID',
-        'CLIENT_SECRET',
-        'CLIENT_SCOPE',
-        'DEFAULT_SERVERS',
-    )
-    app = create_app()
     app.run(host='0.0.0.0', port=8000, debug=True)
