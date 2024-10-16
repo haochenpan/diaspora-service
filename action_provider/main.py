@@ -109,14 +109,7 @@ def action_run(
         )
 
     prev_action_id = prev_request['action_id']
-    prev_action = _get_action_from_dynamo(prev_action_id)
-    if not prev_action:
-        raise ActionNotFound(
-            f'No action with id {prev_action_id}',
-        )
-
-    prev_status_dict = json.loads(prev_action['action_status'])
-    prev_status = ActionStatus(**prev_status_dict)
+    prev_status, _ = _get_status_request(prev_action_id)
     if prev_status.status in (
         ActionStatusValue.SUCCEEDED,
         ActionStatusValue.FAILED,

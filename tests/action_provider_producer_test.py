@@ -133,6 +133,54 @@ def test_run_endpoint_lens_mismatch_2(client, access_token):  # noqa: F811
     )
 
 
+def test_run_endpoint_send_key_and_value(client, access_token):  # noqa: F811
+    """Test the run endpoint (send without keys)."""
+    headers = {
+        'Authorization': f'Bearer {access_token}',
+        'Content-Type': 'application/json',
+    }
+
+    data = {
+        'request_id': random_request_id(),
+        'body': {
+            'action': 'produce',
+            'topic': 'diaspora-cicd',
+            'key': 'my-key-123',
+            'value': {'content': 'hello world1'},
+        },
+    }
+    response = client.post('/run', json=data, headers=headers)
+    response_data = json.loads(response.data.decode('utf-8'))
+    logger.info(f'Response code: {response.status_code}')
+    logger.info(f'Response data: {response_data}')
+
+    assert response.status_code == ACCEPTED_STATUS_CODE
+    assert response_data['status'] == SUCCESS_STATUS_STRING
+
+def test_run_endpoint_send_value(client, access_token):  # noqa: F811
+    """Test the run endpoint (send without keys)."""
+    headers = {
+        'Authorization': f'Bearer {access_token}',
+        'Content-Type': 'application/json',
+    }
+
+    data = {
+        'request_id': random_request_id(),
+        'body': {
+            'action': 'produce',
+            'topic': 'diaspora-cicd',
+            'value': {'content': 'hello world1'},
+        },
+    }
+    response = client.post('/run', json=data, headers=headers)
+    response_data = json.loads(response.data.decode('utf-8'))
+    logger.info(f'Response code: {response.status_code}')
+    logger.info(f'Response data: {response_data}')
+
+    assert response.status_code == ACCEPTED_STATUS_CODE
+    assert response_data['status'] == SUCCESS_STATUS_STRING
+
+
 def test_run_endpoint_send_no_keys(client, access_token):  # noqa: F811
     """Test the run endpoint (send without keys)."""
     headers = {

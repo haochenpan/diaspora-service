@@ -103,7 +103,7 @@ def _insert_into_request_table(
                 'ttl': _get_ttl_for_one_year(),
             },
         )
-    except ClientError as e:
+    except ClientError as e: # pragma: no cover
         print(f"Failed to insert: {e.response['Error']['Message']}")
 
 
@@ -120,7 +120,7 @@ def _insert_into_action_table(
                 'ttl': _get_ttl_for_one_year(),
             },
         )
-    except ClientError as e:
+    except ClientError as e: # pragma: no cover
         print(f"Failed to insert: {e.response['Error']['Message']}")
 
 
@@ -130,13 +130,10 @@ def _get_request_from_dynamo(full_request_id: str) -> dict[str, str] | None:
         if 'Item' in response:
             item = response['Item']
             return item
-        else:
-            return None
-    except ClientError as e:
+    except ClientError as e: # pragma: no cover
         print(
             f"Failed to retrieve: {e.response['Error']['Message']}",
         )
-        return None
 
 
 def _get_action_from_dynamo(action_id: str) -> dict[str, str] | None:
@@ -145,13 +142,10 @@ def _get_action_from_dynamo(action_id: str) -> dict[str, str] | None:
         if 'Item' in response:
             item = response['Item']
             return item
-        else:
-            return None
-    except ClientError as e:
+    except ClientError as e: # pragma: no cover
         print(
             f"Failed to retrieve: {e.response['Error']['Message']}",
         )
-        return None
 
 
 def _get_status_request(action_id: str) -> tuple[ActionStatus, ActionRequest]:
@@ -174,9 +168,9 @@ def _delete_request(full_request_id: str) -> None:
         code = response.get('ResponseMetadata', {}).get('HTTPStatusCode')
         if code == DELETE_SUCCEED:
             pass
-        else:
+        else: # pragma: no cover
             print(f'Failed to delete request {full_request_id}: {response}')
-    except ClientError as e:
+    except ClientError as e: # pragma: no cover
         print(f"Failed to delete request: {e.response['Error']['Message']}")
 
 
@@ -188,9 +182,9 @@ def _delete_action(action_id: str) -> None:
         code = response.get('ResponseMetadata', {}).get('HTTPStatusCode')
         if code == DELETE_SUCCEED:
             pass
-        else:
+        else: # pragma: no cover
             print(f'Failed to delete action {action_id}: {response}')
-    except ClientError as e:
+    except ClientError as e: # pragma: no cover
         print(f"Failed to delete action: {e.response['Error']['Message']}")
 
 
