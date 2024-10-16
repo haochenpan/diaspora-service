@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import importlib.metadata as importlib_metadata
-import json
 import os
 
 from flask import Blueprint
@@ -21,7 +20,6 @@ from globus_action_provider_tools.authorization import (
 )
 from globus_action_provider_tools.flask import add_action_routes_to_blueprint
 from globus_action_provider_tools.flask.exceptions import ActionConflict
-from globus_action_provider_tools.flask.exceptions import ActionNotFound
 from globus_action_provider_tools.flask.helpers import assign_json_provider
 from globus_action_provider_tools.flask.types import ActionCallbackReturn
 
@@ -29,7 +27,6 @@ from action_provider.action_consume import action_consume
 from action_provider.action_produce import action_produce
 from action_provider.utils import _delete_action
 from action_provider.utils import _delete_request
-from action_provider.utils import _get_action_from_dynamo
 from action_provider.utils import _get_request_from_dynamo
 from action_provider.utils import _get_status_request
 from action_provider.utils import _insert_into_action_table

@@ -9,7 +9,7 @@ To test the Action Provider in a virtual environment, run:
 ```bash
 pytest tests/action_provider_test.py
 
-coverage erase  
+coverage erase
 coverage run -m pytest
 coverage report
 ```

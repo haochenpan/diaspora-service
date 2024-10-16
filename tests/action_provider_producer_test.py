@@ -157,6 +157,7 @@ def test_run_endpoint_send_key_and_value(client, access_token):  # noqa: F811
     assert response.status_code == ACCEPTED_STATUS_CODE
     assert response_data['status'] == SUCCESS_STATUS_STRING
 
+
 def test_run_endpoint_send_value(client, access_token):  # noqa: F811
     """Test the run endpoint (send without keys)."""
     headers = {
