@@ -229,7 +229,7 @@ EnvironmentChecker.check_env_variables(
     'CLIENT_SCOPE',
     'DEFAULT_SERVERS',
 )
-app = create_app() # required by Dockerfile
+app = create_app()  # required by Dockerfile
 
 
 if __name__ == '__main__':
