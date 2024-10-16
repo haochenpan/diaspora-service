@@ -254,9 +254,9 @@ def action_consume(
                     f'Invalid filter pattern: {filter_pattern}',
                 )
 
-        # if ts and no group_id, seek to the offset then retrieve msgs
-        ts = request.body.get('ts', None)
-        if ts and group_id is None:
+        # If without group_id, call offsets_for_times to retrieve msgs
+        ts = request.body.get('ts', 0)  # UNIX epoch
+        if group_id is None:
             topic_partitions = [TopicPartition(topic, p) for p in partitions]
             timestamps = {tp: ts for tp in topic_partitions}
             offsets = consumer.offsets_for_times(timestamps)
@@ -265,6 +265,7 @@ def action_consume(
                 if offset:  # TODO: sometimes the tests fail here, rerun!
                     consumer.seek(tp, offset.offset)
 
+        # With or without group_id, filter based on ts and filters
         messages = filter_msgs(consumer, ts, filters)
         # print('messages:', dict(messages))
 

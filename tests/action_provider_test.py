@@ -114,6 +114,12 @@ def test_endpoints_complex1(client, access_token):  # noqa: F811
     logger.info(f'Response code: {response.status_code}')
     logger.info(f'Response data: {response_data}')
 
+    # get status (should return FAILED)
+    response = client.get(f'/{action_id}/status', headers=headers)
+    response_data = json.loads(response.data.decode('utf-8'))
+    logger.info(f'Response code123: {response.status_code}')
+    logger.info(f'Response data123: {response_data}')
+
     # release endpoint
     response = client.post(f'/{action_id}/release', headers=headers)
     response_data = json.loads(response.data.decode('utf-8'))

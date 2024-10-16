@@ -55,32 +55,45 @@ def action_produce(
     )
 
     try:
-        msgs = request.body.get('msgs', None)
-        keys = request.body.get('keys', None)
-
-        if msgs is None:
-            raise ValueError("'msgs' does not exist.")
-
-        if len(msgs) == 0:
-            raise ValueError("'msgs' is empty.")
-
-        if isinstance(keys, list) and len(keys) != len(msgs):
-            raise ValueError(
-                f"The len of 'keys' ({len(keys)}) must match "
-                f"that of 'msgs' ({len(msgs)}).",
-            )
-
-        if keys is None or isinstance(keys, str):
-            keys = [keys] * len(msgs)
-
-        msg_futures = []
-        for msg, key in zip(msgs, keys):
+        key = request.body.get('key', None)
+        value = request.body.get('value', None)
+        if value is not None:
+            msg_futures = []
             msg_future = producer.send(
                 topic,
-                value=msg,
+                value=value,
                 key=key.encode('utf-8') if key else None,
             )
             msg_futures.append(msg_future)
+
+        else:
+            msgs = request.body.get('msgs', None)
+            keys = request.body.get('keys', None)
+
+            if msgs is None:
+                raise ValueError("'msgs' does not exist.")
+
+            if len(msgs) == 0:
+                raise ValueError("'msgs' is empty.")
+
+            if isinstance(keys, list) and len(keys) != len(msgs):
+                raise ValueError(
+                    f"The len of 'keys' ({len(keys)}) must match "
+                    f"that of 'msgs' ({len(msgs)}).",
+                )
+
+            if keys is None or isinstance(keys, str):
+                keys = [keys] * len(msgs)
+
+            msg_futures = []
+            for msg, key in zip(msgs, keys):
+                msg_future = producer.send(
+                    topic,
+                    value=msg,
+                    key=key.encode('utf-8') if key else None,
+                )
+                msg_futures.append(msg_future)
+
         resolved_futures = [future.get(timeout=10) for future in msg_futures]
 
         result = {}
