@@ -7,6 +7,7 @@ Kafka operations, and building action statuses.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from datetime import datetime
 from datetime import timedelta
@@ -160,8 +161,9 @@ def _get_status_request(action_id: str) -> tuple[ActionStatus, ActionRequest]:
             f'No Action with id {action_id}',
         )
     print('prev_action_status', prev_action)
-    status, request = prev_action['action_status'], prev_action['request']
-    return ActionStatus(**status), ActionRequest(**request)
+    prev_status_dict = json.loads(prev_action['action_status'])
+    prev_request_dict = json.loads(prev_action['request'])
+    return ActionStatus(**prev_status_dict), ActionRequest(**prev_request_dict)
 
 
 def _delete_request(full_request_id: str) -> None:
@@ -190,3 +192,43 @@ def _delete_action(action_id: str) -> None:
             print(f'Failed to delete action {action_id}: {response}')
     except ClientError as e:
         print(f"Failed to delete action: {e.response['Error']['Message']}")
+
+
+def setup_logging(
+        logger_name: str = __name__,
+        log_file: str = 'log_output.log',
+        level: int = logging.DEBUG
+) -> logging.Logger:
+    """Set up logging for the application."""
+    logger = logging.getLogger(logger_name)
+    logger.setLevel(level)
+
+    # Console handler
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(level)
+
+    # File handler
+    file_handler = logging.FileHandler(log_file)
+    file_handler.setLevel(level)
+
+    # Formatter
+    formatter = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    console_handler.setFormatter(formatter)
+    file_handler.setFormatter(formatter)
+
+    # Add handlers
+    logger.addHandler(console_handler)
+    logger.addHandler(file_handler)
+
+    # Set levels for external libraries
+    # logging.getLogger('boto3').setLevel(logging.WARNING)
+    # logging.getLogger('botocore').setLevel(logging.WARNING)
+    # logging.getLogger('fsevents').setLevel(logging.WARNING)
+    # logging.getLogger('globus_action_provider_tools').setLevel(logging.WARNING)
+    # logging.getLogger('globus_sdk').setLevel(logging.WARNING)
+    # logging.getLogger('kafka').setLevel(logging.WARNING)
+    # logging.getLogger('urllib3').setLevel(logging.WARNING)
+    # logging.getLogger('werkzeug').setLevel(logging.WARNING)
+
+    return logger

@@ -3,7 +3,7 @@
     "type": "object",
     "properties": {
         "action": {
-            "description": "The action to perform: 'produce' for publishing events, 'consume' for retrieving recent events.",
+            "description": "'produce' to publish events, 'consume' to retrieve events.",
             "type": "string",
             "enum": [
                 "produce",
@@ -11,50 +11,58 @@
             ]
         },
         "topic": {
-            "description": "The topic to publish or retrieve the events.",
+            "description": "Topic to publish or retrieve events.",
             "type": "string"
         },
-        "msgs": {
-            "type": "array",
-            "description": "List of events, each formatted as a JSON string. Required for 'produce' action.",
-            "items": {
-                "type": "object"
-            }
+        "key": {
+            "type": "string",
+            "description": "Optional key paired with 'value' for 'produce'."
+        },
+        "value": {
+            "type": "object",
+            "description": "Single JSON event. Use either 'value' or 'msgs'."
         },
         "keys": {
             "oneOf": [
                 {
                     "type": "string",
-                    "description": "Optional single event key for 'produce' action."
+                    "description": "Optional key paired with 'msgs' for 'produce'."
                 },
                 {
                     "type": "array",
-                    "description": "Optional list of event keys for 'produce' action.",
+                    "description": "Optional list of keys paired with 'msgs' for 'produce'.",
                     "items": {
                         "type": "string"
                     }
                 }
             ]
         },
+        "msgs": {
+            "type": "array",
+            "description": "List of JSON events. Use either 'value' or 'msgs'.",
+            "items": {
+                "type": "object"
+            }
+        },
         "ts": {
-            "description": "Timestamp in milliseconds since the beginning of the epoch to start retrieving messages from. Required for 'consume' action.",
+            "description": "Epoch timestamp to retrieve messages from (optional for 'consume').",
             "type": "integer",
             "minimum": 0
         },
-        "servers": {
-            "description": "Optional list of diaspora servers separated by commas (dev use only).",
-            "type": "string"
-        },
         "group_id": {
-            "description": "The group ID to which the message belongs. Optional for 'consume' action.",
+            "description": "Group ID for the message (optional for 'consume').",
             "type": "string"
         },
         "filters": {
             "type": "array",
-            "description": "Array of filters to apply when retrieving events. Optional for 'consume' action.",
+            "description": "Filters for retrieving events (optional for 'consume').",
             "items": {
                 "type": "object"
             }
+        },
+        "servers": {
+            "description": "List of diaspora servers (dev use).",
+            "type": "string"
         }
     },
     "additionalProperties": false,
@@ -71,11 +79,24 @@
                             "const": "produce"
                         },
                         "msgs": {
+                            "type": "array",
                             "minItems": 1
+                        },
+                        "value": {
+                            "type": "object"
                         }
                     },
-                    "required": [
-                        "msgs"
+                    "oneOf": [
+                        {
+                            "required": [
+                                "msgs"
+                            ]
+                        },
+                        {
+                            "required": [
+                                "value"
+                            ]
+                        }
                     ]
                 },
                 {
