@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import importlib.metadata as importlib_metadata
+import json
 import os
 
-from cachetools import TTLCache
 from flask import Blueprint
 from flask import Flask
 from globus_action_provider_tools import ActionProviderDescription
@@ -24,37 +24,44 @@ from globus_action_provider_tools.flask.exceptions import ActionConflict
 from globus_action_provider_tools.flask.exceptions import ActionNotFound
 from globus_action_provider_tools.flask.helpers import assign_json_provider
 from globus_action_provider_tools.flask.types import ActionCallbackReturn
+from utils import _delete_action
+from utils import _delete_request
+from utils import _get_action_from_dynamo
+from utils import _get_request_from_dynamo
+from utils import _get_status_request
+from utils import _insert_into_action_table
+from utils import _insert_into_request_table
 
 from action_provider.action_consume import action_consume
 from action_provider.action_produce import action_produce
 from action_provider.utils import load_schema
 from common.utils import EnvironmentChecker
 
-# from action_provider.utils import build_action_status
-
-
 CLIENT_ID = os.environ['CLIENT_ID']
 CLIENT_SECRET = os.environ['CLIENT_SECRET']
 CLIENT_SCOPE = os.environ['CLIENT_SCOPE']
 DEFAULT_SERVERS = os.environ['DEFAULT_SERVERS']
-CACHE_SIZE = 1000
-CACHE_TTL = 24 * 60  # in seconds
-
-_fake_request_db: TTLCache[str, tuple[ActionRequest, str]] = TTLCache(
-    maxsize=CACHE_SIZE,
-    ttl=CACHE_TTL,
-)
-_fake_action_db: TTLCache[str, tuple[ActionRequest, ActionStatus]] = TTLCache(
-    maxsize=CACHE_SIZE,
-    ttl=CACHE_TTL,
-)
 
 
-def _retrieve_action_status(action_id: str) -> ActionStatus:
-    status = _fake_action_db.get(action_id)
-    if status is None:
-        raise ActionNotFound(f'No Action with id {action_id}')
-    return status
+def perform_action(
+    full_request_id: str,
+    request: ActionRequest,
+    auth: AuthState,
+) -> ActionStatus:
+    """Perform a produce or consume action."""
+    action = request.body['action']
+    if action == 'produce':
+        action_status = action_produce(request, auth)
+    else:
+        action_status = action_consume(request, auth)
+
+    _insert_into_request_table(
+        full_request_id,
+        request,
+        action_status.action_id,
+    )
+    _insert_into_action_table(action_status, request)
+    return action_status
 
 
 def action_run(
@@ -161,90 +168,98 @@ def action_run(
     print('Run endpoint is called with full_request_id =', full_request_id)
     print(request)
 
-    prev_request = _fake_request_db.get(full_request_id)
-    if prev_request is not None:
-        print('Previous request is found =', prev_request)
-        print(prev_request)
+    prev_request = _get_request_from_dynamo(full_request_id)
+    print('prev_request', prev_request)
 
-        action_id = prev_request[1]
-        action_status, _ = _fake_action_db[action_id]
-        if action_status.status in ['SUCCEEDED', 'FAILED']:
-            print('here1 - do nothing', action_status)
-            return action_status
-        elif prev_request[0] != request:
-            print('here2 - conflict', action_status)
-            raise ActionConflict(
-                f'Request {request_id} already present with different param. ',
-            )
-        else:
-            print('here3 - status = ', action_status.status)
+    # new action
+    if not prev_request:
+        action_status = perform_action(full_request_id, request, auth)
+        return action_status
 
-    action = request.body['action']
-    if action == 'produce':
-        action_status = action_produce(request, auth)
-    else:
-        action_status = action_consume(request, auth)
+    if prev_request['request'] != request.json():
+        raise ActionConflict(
+            f'Request {request_id} already present with different param. ',
+        )
 
-    print('here 4 - action status', action_status)
-    _fake_request_db[full_request_id] = (request, action_status.action_id)
-    _fake_action_db[action_status.action_id] = (action_status, request)
+    prev_action_id = prev_request['action_id']
+    prev_action = _get_action_from_dynamo(prev_action_id)
+    if not prev_action:
+        raise ActionNotFound(
+            f'No Action with id {prev_action_id}',
+        )
 
+    prev_status = json.loads(prev_action['action_status'])
+    if prev_status['status'] in ['SUCCEEDED', 'FAILED']:
+        return ActionStatus(**prev_status)
+
+    # unfinished action
+    action_status = perform_action(full_request_id, request, auth)
     return action_status
 
 
 def action_status(action_id: str, auth: AuthState) -> ActionCallbackReturn:
     """Action status endpoint."""
     print('Status endpoint is called with action_id =', action_id)
-    status, request = _retrieve_action_status(action_id)
-    print('old status = ', status)
+    status, request = _get_status_request(action_id)
     authorize_action_access_or_404(status, auth)
 
-    status = action_run(request, auth)
-    print('new status = ', status)
-    return status, 200
-
-
-def action_cancel(action_id: str, auth: AuthState) -> ActionCallbackReturn:
-    """Action cancel endpoint."""
-    print('Cancel endpoint is called with action_id =', action_id)
-    status, request = _retrieve_action_status(action_id)
-    authorize_action_management_or_404(status, auth)
-
-    # If action is already in complete state, return completion details
+    # If action is already completed, return it
+    print('old status = ', status)
     if status.status in (
         ActionStatusValue.SUCCEEDED,
         ActionStatusValue.FAILED,
     ):
         return status
 
-    # Process Action cancellation
+    # otherwise, perform the action
+    caller_id = auth.effective_identity
+    request_id = request.request_id
+    full_request_id = f'{caller_id}:{request_id}'
+    action_status = perform_action(full_request_id, request, auth)
+    return action_status, 200
+
+
+def action_cancel(action_id: str, auth: AuthState) -> ActionCallbackReturn:
+    """Action cancel endpoint."""
+    print('Cancel endpoint is called with action_id =', action_id)
+    status, request = _get_status_request(action_id)
+    authorize_action_management_or_404(status, auth)
+
+    # If action is already completed, return it
+    print('old status = ', status)
+    if status.status in (
+        ActionStatusValue.SUCCEEDED,
+        ActionStatusValue.FAILED,
+    ):
+        return status
+
+    # otherwise, cancel the action
     status.status = ActionStatusValue.FAILED
     status.display_status = 'Canceled by user request'
+    _insert_into_action_table(status, request)
     return status
 
 
 def action_release(action_id: str, auth: AuthState) -> ActionCallbackReturn:
     """Action release endpoint."""
     print('Release endpoint is called with action_id =', action_id)
-    status, request = _retrieve_action_status(action_id)
+    status, request = _get_status_request(action_id)
     authorize_action_management_or_404(status, auth)
 
-    # Error if attempt to release an active Action
+    # If action is already completed, raise an error
     if status.status not in (
         ActionStatusValue.SUCCEEDED,
         ActionStatusValue.FAILED,
     ):
         raise ActionConflict('Action is not complete')
 
-    # _fake_action_db.pop(action_id)
-    # Both fake and badly inefficient
-    # remove_req_id: str | None = None
-    # for req_id, req_and_action_id in _fake_request_db.items():
-    #     if req_and_action_id[1] == action_id:
-    #         remove_req_id = req_id
-    #         break
-    # if remove_req_id is not None:
-    #     _fake_request_db.pop(remove_req_id)
+    # otherwise, free action and request
+    _delete_action(action_id)
+
+    caller_id = auth.effective_identity
+    request_id = request.request_id
+    full_request_id = f'{caller_id}:{request_id}'
+    _delete_request(full_request_id)
     return status, 200
 
 
