@@ -195,9 +195,9 @@ def _delete_action(action_id: str) -> None:
 
 
 def setup_logging(
-        logger_name: str = __name__,
-        log_file: str = 'log_output.log',
-        level: int = logging.DEBUG
+    logger_name: str = __name__,
+    log_file: str = 'log_output.log',
+    level: int = logging.DEBUG,
 ) -> logging.Logger:
     """Set up logging for the application."""
     logger = logging.getLogger(logger_name)
@@ -213,7 +213,8 @@ def setup_logging(
 
     # Formatter
     formatter = logging.Formatter(
-        '%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    )
     console_handler.setFormatter(formatter)
     file_handler.setFormatter(formatter)
 
@@ -222,13 +223,13 @@ def setup_logging(
     logger.addHandler(file_handler)
 
     # Set levels for external libraries
-    # logging.getLogger('boto3').setLevel(logging.WARNING)
-    # logging.getLogger('botocore').setLevel(logging.WARNING)
-    # logging.getLogger('fsevents').setLevel(logging.WARNING)
-    # logging.getLogger('globus_action_provider_tools').setLevel(logging.WARNING)
-    # logging.getLogger('globus_sdk').setLevel(logging.WARNING)
-    # logging.getLogger('kafka').setLevel(logging.WARNING)
-    # logging.getLogger('urllib3').setLevel(logging.WARNING)
-    # logging.getLogger('werkzeug').setLevel(logging.WARNING)
+    logging.getLogger('boto3').setLevel(logging.WARNING)
+    logging.getLogger('botocore').setLevel(logging.WARNING)
+    logging.getLogger('fsevents').setLevel(logging.WARNING)
+    logging.getLogger('globus_action_provider_tools').setLevel(logging.WARNING)
+    logging.getLogger('globus_sdk').setLevel(logging.WARNING)
+    logging.getLogger('kafka').setLevel(logging.WARNING)
+    logging.getLogger('urllib3').setLevel(logging.WARNING)
+    logging.getLogger('werkzeug').setLevel(logging.WARNING)
 
     return logger

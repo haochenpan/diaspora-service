@@ -93,7 +93,7 @@ def action_produce(
                     key=key.encode('utf-8') if key else None,
                 )
                 msg_futures.append(msg_future)
-                
+
         resolved_futures = [future.get(timeout=10) for future in msg_futures]
 
         result = {}
