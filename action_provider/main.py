@@ -208,7 +208,6 @@ def create_app() -> Flask:
         blueprint=skeleton_blueprint,
         client_id=CLIENT_ID,
         client_secret=CLIENT_SECRET,
-        client_name=None,
         provider_description=provider_description,
         action_run_callback=action_run,
         action_status_callback=action_status,
