@@ -201,14 +201,15 @@ def create_app() -> Flask:
         visible_to=['public'],
     )
 
-    app.config.DIASPORA_CLIENT_ID = CLIENT_ID
-    app.config.DIASPORA_CLIENT_SECRET = CLIENT_SECRET
+    app.config['DIASPORA_CLIENT_ID'] = CLIENT_ID
+    app.config['DIASPORA_CLIENT_SECRET'] = CLIENT_SECRET
+
     ap_blueprint = ActionProviderBlueprint(
         name='diaspora',
         import_name=__name__,
         provider_description=provider_description,
     )
-    
+
     # Contributor: Stephen Rosen
     # https://github.com/haochenpan/diaspora-service/pull/42
     # register routes
