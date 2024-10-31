@@ -5,7 +5,6 @@ from __future__ import annotations
 import importlib.metadata as importlib_metadata
 import os
 
-from flask import Blueprint
 from flask import Flask
 from globus_action_provider_tools import ActionProviderDescription
 from globus_action_provider_tools import ActionRequest
@@ -18,7 +17,7 @@ from globus_action_provider_tools.authorization import (
 from globus_action_provider_tools.authorization import (
     authorize_action_management_or_404,
 )
-from globus_action_provider_tools.flask import add_action_routes_to_blueprint
+from globus_action_provider_tools.flask import ActionProviderBlueprint
 from globus_action_provider_tools.flask.exceptions import ActionConflict
 from globus_action_provider_tools.flask.helpers import assign_json_provider
 from globus_action_provider_tools.flask.types import ActionCallbackReturn
@@ -190,8 +189,6 @@ def create_app() -> Flask:
     assign_json_provider(app)
     app.url_map.strict_slashes = False
 
-    skeleton_blueprint = Blueprint('diaspora', __name__)
-
     provider_description = ActionProviderDescription(
         globus_auth_scope=CLIENT_SCOPE,
         title='Diaspora Action Provider',
@@ -204,18 +201,23 @@ def create_app() -> Flask:
         visible_to=['public'],
     )
 
-    add_action_routes_to_blueprint(
-        blueprint=skeleton_blueprint,
-        client_id=CLIENT_ID,
-        client_secret=CLIENT_SECRET,
+    app.config.DIASPORA_CLIENT_ID = CLIENT_ID
+    app.config.DIASPORA_CLIENT_SECRET = CLIENT_SECRET
+    ap_blueprint = ActionProviderBlueprint(
+        name='diaspora',
+        import_name=__name__,
         provider_description=provider_description,
-        action_run_callback=action_run,
-        action_status_callback=action_status,
-        action_cancel_callback=action_cancel,
-        action_release_callback=action_release,
     )
+    
+    # Contributor: Stephen Rosen
+    # https://github.com/haochenpan/diaspora-service/pull/42
+    # register routes
+    ap_blueprint.action_run(action_run)
+    ap_blueprint.action_status(action_status)
+    ap_blueprint.action_cancel(action_cancel)
+    ap_blueprint.action_release(action_release)
 
-    app.register_blueprint(skeleton_blueprint)
+    app.register_blueprint(ap_blueprint)
 
     return app
 
