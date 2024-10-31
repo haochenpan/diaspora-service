@@ -208,6 +208,9 @@ def create_app() -> Flask:
         import_name=__name__,
         provider_description=provider_description,
     )
+    
+    # Contributor: Stephen Rosen
+    # https://github.com/haochenpan/diaspora-service/pull/42
     # register routes
     ap_blueprint.action_run(action_run)
     ap_blueprint.action_status(action_status)
