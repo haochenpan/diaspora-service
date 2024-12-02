@@ -127,11 +127,9 @@ def filter_messages_on_ts(
     ts: int,
 ) -> dict[str, list[dict[str, Any]]]:
     """Update the messages dictionary with the list of filters."""
-    for topic_partition in messages:
+    for topic_partition, topic_messages in messages.items():
         messages[topic_partition] = [
-            message
-            for message in messages[topic_partition]
-            if message['timestamp'] >= ts
+            message for message in topic_messages if message['timestamp'] >= ts
         ]
     return messages
 
