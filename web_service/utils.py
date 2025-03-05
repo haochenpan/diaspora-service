@@ -134,7 +134,7 @@ class AuthManager:
             return self.error_response(
                 (
                     'Not in the audience set. ',
-                    f"introspected = {introspection_response.get('aud')}",
+                    f'introspected = {introspection_response.get("aud")}',
                     f'server_client_id = {self.server_client_id}',
                 ),
             )
