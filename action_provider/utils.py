@@ -104,7 +104,7 @@ def _insert_into_request_table(
             },
         )
     except ClientError as e:  # pragma: no cover
-        print(f"Failed to insert: {e.response['Error']['Message']}")
+        print(f'Failed to insert: {e.response["Error"]["Message"]}')
 
 
 def _insert_into_action_table(
@@ -121,7 +121,7 @@ def _insert_into_action_table(
             },
         )
     except ClientError as e:  # pragma: no cover
-        print(f"Failed to insert: {e.response['Error']['Message']}")
+        print(f'Failed to insert: {e.response["Error"]["Message"]}')
 
 
 def _get_request_from_dynamo(full_request_id: str) -> dict[str, str] | None:
@@ -134,7 +134,7 @@ def _get_request_from_dynamo(full_request_id: str) -> dict[str, str] | None:
             return None
     except ClientError as e:  # pragma: no cover
         print(
-            f"Failed to retrieve: {e.response['Error']['Message']}",
+            f'Failed to retrieve: {e.response["Error"]["Message"]}',
         )
         return None
 
@@ -149,7 +149,7 @@ def _get_action_from_dynamo(action_id: str) -> dict[str, str] | None:
             return None
     except ClientError as e:  # pragma: no cover
         print(
-            f"Failed to retrieve: {e.response['Error']['Message']}",
+            f'Failed to retrieve: {e.response["Error"]["Message"]}',
         )
         return None
 
@@ -177,7 +177,7 @@ def _delete_request(full_request_id: str) -> None:
         else:  # pragma: no cover
             print(f'Failed to delete request {full_request_id}: {response}')
     except ClientError as e:  # pragma: no cover
-        print(f"Failed to delete request: {e.response['Error']['Message']}")
+        print(f'Failed to delete request: {e.response["Error"]["Message"]}')
 
 
 def _delete_action(action_id: str) -> None:
@@ -191,7 +191,7 @@ def _delete_action(action_id: str) -> None:
         else:  # pragma: no cover
             print(f'Failed to delete action {action_id}: {response}')
     except ClientError as e:  # pragma: no cover
-        print(f"Failed to delete action: {e.response['Error']['Message']}")
+        print(f'Failed to delete action: {e.response["Error"]["Message"]}')
 
 
 def setup_logging(

@@ -375,13 +375,13 @@ class DiasporaService:
         try:
             function_configs, trigger_configs = {}, {}
             body = await request.json()
-            assert (
-                'function' in body
-            ), 'Function configuration must be included in the request.'
+            assert 'function' in body, (
+                'Function configuration must be included in the request.'
+            )
 
-            assert (
-                'trigger' in body
-            ), 'Trigger configuration must be included in the request.'
+            assert 'trigger' in body, (
+                'Trigger configuration must be included in the request.'
+            )
 
             if 'Code' in body['function']:
                 if 'ZipFile' not in body['function']['Code']:
