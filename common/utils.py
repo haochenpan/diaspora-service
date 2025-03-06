@@ -19,8 +19,10 @@ if __name__ == '__main__':
     EnvironmentChecker.check_env_variables(
         'AWS_ACCESS_KEY_ID',
         'AWS_SECRET_ACCESS_KEY',
-        'CLIENT_ID',
-        'CLIENT_SECRET',
-        'CLIENT_SCOPE',
-        'DEFAULT_SERVERS',
+        'SERVER_CLIENT_ID',
+        'SERVER_SECRET',
+        'AWS_ACCOUNT_ID',
+        'AWS_ACCOUNT_REGION',
+        'MSK_CLUSTER_NAME',
+        'MSK_CLUSTER_ARN_SUFFIX',
     )

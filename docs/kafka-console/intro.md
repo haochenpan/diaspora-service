@@ -1,9 +1,9 @@
 ## Diaspora Admin Console Startup Script
 
 ### Overview
-This startup script is designed for the Diaspora Admin Console running on an AWS Lightsail instance at [184.73.61.163](http://184.73.61.163/). 
-It automates the setup of a Docker environment, installs Docker Compose, and configures a Kafka UI service with essential security and environment settings. 
-Additionally, it establishes a systemd service for managing the Docker Compose application, redirects HTTP traffic from port 80 to port 8080, 
+This startup script is designed for the Diaspora Admin Console running on an AWS Lightsail instance at [184.73.61.163](http://184.73.61.163/).
+It automates the setup of a Docker environment, installs Docker Compose, and configures a Kafka UI service with essential security and environment settings.
+Additionally, it establishes a systemd service for managing the Docker Compose application, redirects HTTP traffic from port 80 to port 8080,
 and schedules an automated reboot every three days.
 
 ### Masked Credentials

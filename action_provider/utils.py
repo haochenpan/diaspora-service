@@ -36,13 +36,15 @@ class MSKTokenProviderFromRole:
 
     def __init__(self, open_id: str) -> None:
         """MSKTokenProviderFromRole init."""
+        if open_id == '2b9d2f5c-fa32-45b5-875b-b24cd343b917':
+            open_id = 'diaspora-cicd'
         self.open_id = open_id
 
     def token(self) -> str:
         """MSKTokenProviderFromRole token."""
         token, _ = MSKAuthTokenProvider.generate_auth_token_from_role_arn(
             'us-east-1',
-            f'arn:aws:iam::845889416464:role/ap/{self.open_id}-role',
+            f'arn:aws:iam::{os.getenv("AWS_ACCOUNT_ID")}:role/ap/{self.open_id}-role',
         )
         return token
 

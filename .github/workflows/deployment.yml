@@ -103,6 +103,10 @@ jobs:
           echo "$image_name"
 
           containers=$(jq -n --arg image_name "$image_name" \
+              --arg aws_account_id "${{ secrets.DOCKER_AWS_ACCOUNT_ID }}" \
+              --arg aws_accound_region "${{ secrets.DOCKER_AWS_ACCOUNT_REGION }}" \
+              --arg msk_cluster_name "${{ secrets.DOCKER_MSK_CLUSTER_NAME }}" \
+              --arg msk_cluster_arn_suffix "${{ secrets.DOCKER_MSK_CLUSTER_ARN_SUFFIX }}" \
               --arg aws_access_key_id "${{ secrets.DOCKER_AWS_ACCESS_KEY_ID }}" \
               --arg aws_secret_access_key "${{ secrets.DOCKER_AWS_SECRET_ACCESS_KEY }}" \
               --arg client_id "${{ secrets.DOCKER_CLIENT_ID }}" \
@@ -117,6 +121,10 @@ jobs:
                       "8000": "HTTP"
                   },
                   "environment": {
+                      "AWS_ACCOUNT_ID": $aws_account_id,
+                      "AWS_ACCOUNT_REGION": $aws_accound_region,
+                      "MSK_CLUSTER_NAME": $msk_cluster_name,
+                      "MSK_CLUSTER_ARN_SUFFIX": $msk_cluster_arn_suffix,
                       "AWS_ACCESS_KEY_ID": $aws_access_key_id,
                       "AWS_SECRET_ACCESS_KEY": $aws_secret_access_key,
                       "CLIENT_ID": $client_id,

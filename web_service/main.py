@@ -57,6 +57,10 @@ class DiasporaService:
             'AWS_SECRET_ACCESS_KEY',
             'SERVER_CLIENT_ID',
             'SERVER_SECRET',
+            'AWS_ACCOUNT_ID',
+            'AWS_ACCOUNT_REGION',
+            'MSK_CLUSTER_NAME',
+            'MSK_CLUSTER_ARN_SUFFIX',
         )
 
         self.auth = AuthManager(
@@ -66,14 +70,13 @@ class DiasporaService:
         )
 
         self.aws = AWSManager(
-            '845889416464',
-            'us-east-1',
-            'diaspora',
-            '0b48e9a3-c32b-4783-9993-30798cdda646-9',
-            'b-1-public.diaspora.fy49oq.c9.kafka.us-east-1.amazonaws.com:9198,b-2-public.diaspora.fy49oq.c9.kafka.us-east-1.amazonaws.com:9198',
-            'b-1-public.diaspora.fy49oq.c9.kafka.us-east-1.amazonaws.com:9198,b-2-public.diaspora.fy49oq.c9.kafka.us-east-1.amazonaws.com:9198',
+            os.getenv('AWS_ACCOUNT_ID'),
+            os.getenv('AWS_ACCOUNT_REGION'),
+            os.getenv('MSK_CLUSTER_NAME'),
+            os.getenv('MSK_CLUSTER_ARN_SUFFIX'),
+            os.getenv('DEFAULT_SERVERS'),
+            os.getenv('DEFAULT_SERVERS'),
         )
-
         self.app = FastAPI(
             title='Diaspora Web Service',
             docs_url='/',

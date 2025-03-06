@@ -205,7 +205,7 @@ class MSKTokenProviderFromRole:
         """Generate and return an MSK auth token using a role ARN."""
         token, _ = MSKAuthTokenProvider.generate_auth_token_from_role_arn(
             'us-east-1',
-            f'arn:aws:iam::845889416464:role/ap/{self.open_id}-role',
+            f'arn:aws:iam::{os.getenv("AWS_ACCOUNT_ID")}:role/ap/{self.open_id}-role',
         )
         return token
 
@@ -277,6 +277,9 @@ class AWSManager:
                             'kafka-cluster:WriteData',
                             'kafka-cluster:DescribeGroup',
                             'kafka-cluster:AlterGroup',
+                            'kafka-cluster:WriteDataIdempotently',  # new
+                            'kafka-cluster:DescribeTransactionalId',  # new
+                            'kafka-cluster:AlterTransactionalId',  # new
                         ],
                         'Resource': [
                             f'arn:aws:kafka:us-east-1:{self.account_id}:group/{self.cluster_name}/*',
@@ -349,12 +352,15 @@ class AWSManager:
 
         def ap_trust_policy(self):
             """Generate a trust policy for an application role."""
+            principal_arn = f'arn:aws:iam::{os.getenv("AWS_ACCOUNT_ID")}:root'
             return {
                 'Version': '2012-10-17',
                 'Statement': [
                     {
                         'Effect': 'Allow',
-                        'Principal': {'AWS': 'arn:aws:iam::845889416464:root'},
+                        'Principal': {
+                            'AWS': principal_arn,
+                        },
                         'Action': 'sts:AssumeRole',
                         'Condition': {},
                     },
@@ -1342,6 +1348,10 @@ if __name__ == '__main__':
         'AWS_SECRET_ACCESS_KEY',
         'SERVER_CLIENT_ID',
         'SERVER_SECRET',
+        'AWS_ACCOUNT_ID',
+        'AWS_ACCOUNT_REGION',
+        'MSK_CLUSTER_NAME',
+        'MSK_CLUSTER_ARN_SUFFIX',
     )
     auth_manager = AuthManager(
         os.getenv('SERVER_CLIENT_ID'),
@@ -1349,10 +1359,10 @@ if __name__ == '__main__':
         'c5d4fab4-7f0d-422e-b0c8-5c74329b52fe',
     )
     aws = AWSManager(
-        '845889416464',
-        'us-east-1',
-        'diaspora',
-        '0b48e9a3-c32b-4783-9993-30798cdda646-9',
-        'b-1-public.diaspora.fy49oq.c9.kafka.us-east-1.amazonaws.com:9198,b-2-public.diaspora.fy49oq.c9.kafka.us-east-1.amazonaws.com:9198',
-        'b-1-public.diaspora.fy49oq.c9.kafka.us-east-1.amazonaws.com:9198,b-2-public.diaspora.fy49oq.c9.kafka.us-east-1.amazonaws.com:9198',
+        os.getenv('AWS_ACCOUNT_ID'),
+        os.getenv('AWS_ACCOUNT_REGION'),
+        os.getenv('MSK_CLUSTER_NAME'),
+        os.getenv('MSK_CLUSTER_ARN_SUFFIX'),
+        os.getenv('DEFAULT_SERVERS'),
+        os.getenv('DEFAULT_SERVERS'),
     )

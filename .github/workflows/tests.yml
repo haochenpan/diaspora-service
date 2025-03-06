@@ -37,6 +37,10 @@ jobs:
       DEFAULT_SERVERS: ${{ secrets.DOCKER_DEFAULT_SERVERS }}
       SERVER_CLIENT_ID: ${{ secrets.DOCKER_SERVER_CLIENT_ID }}
       SERVER_SECRET: ${{ secrets.DOCKER_SERVER_SECRET }}
+      AWS_ACCOUNT_ID: ${{ secrets.DOCKER_AWS_ACCOUNT_ID }}
+      AWS_ACCOUNT_REGION: ${{ secrets.DOCKER_AWS_ACCOUNT_REGION }}
+      MSK_CLUSTER_NAME: ${{ secrets.DOCKER_MSK_CLUSTER_NAME }}
+      MSK_CLUSTER_ARN_SUFFIX: ${{ secrets.DOCKER_MSK_CLUSTER_ARN_SUFFIX }}
 
     steps:
       - name: Checkout
