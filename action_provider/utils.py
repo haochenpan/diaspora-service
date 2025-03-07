@@ -34,7 +34,7 @@ DELETE_SUCCEED = 200
 class MSKTokenProviderFromRole:
     """MSKTokenProviderFromRole."""
 
-    def __init__(self, open_id: str) -> None:
+    def __init__(self, open_id: str) -> None:  # pragma: no cover
         """MSKTokenProviderFromRole init."""
         if open_id == '2b9d2f5c-fa32-45b5-875b-b24cd343b917':
             open_id = 'diaspora-cicd'
