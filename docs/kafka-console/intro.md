@@ -64,9 +64,9 @@ mkdir /srv/docker
 # Create a Docker Compose configuration file
 cat <<EOF > /srv/docker/docker-compose.yml
 services:
-  kafka-ui:
-    container_name: kafka-ui
-    image: provectuslabs/kafka-ui:latest
+  kafbat-ui:
+    container_name: kafbat-ui
+    image: ghcr.io/kafbat/kafka-ui:latest
     ports:
       - "8080:8080"
     environment:
