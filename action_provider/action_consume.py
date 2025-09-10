@@ -256,7 +256,7 @@ def action_consume(
         ts = request.body.get('ts', 0)  # UNIX epoch
         if group_id is None:
             topic_partitions = [TopicPartition(topic, p) for p in partitions]
-            timestamps = {tp: ts for tp in topic_partitions}
+            timestamps = dict.fromkeys(topic_partitions, ts)
             offsets = consumer.offsets_for_times(timestamps)
             consumer.poll(timeout_ms=10000)  # avoid unassigned partition error
             for tp, offset in offsets.items():
