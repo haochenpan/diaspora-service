@@ -15,7 +15,7 @@ Welcome to the Diaspora Event Fabric Service documentation! Our goal in the Dias
 - **[Project Description](https://diaspora-project.github.io/)**: Learn more about the Diaspora project.
 - **[Docs and Demo](https://haochenpan.github.io/diaspora-service/)**: Access detailed documentation and code demonstrations.
 - **[Service Status](https://haochenpan.github.io/diaspora-uptime-monitor/)**: Check the current status of the Diaspora Event Fabric.
-    - [Diaspora Web Service](https://diaspora-web-service.ml22sevubfnks.us-east-1.cs.amazonlightsail.com)
+    - [Diaspora Web Service](https://diaspora-web-service.qpp943wkvr7b2.us-east-1.cs.amazonlightsail.com)
     ![7-day response time](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fhaochenpan%2Fdiaspora-uptime-monitor%2FHEAD%2Fapi%2Fdiaspora-web-service%2Fresponse-time-week.json)
     ![7-day uptime](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fhaochenpan%2Fdiaspora-uptime-monitor%2FHEAD%2Fapi%2Fdiaspora-web-service%2Fuptime-week.json)
     - [Diaspora Action Provider](https://diaspora-action-provider.ml22sevubfnks.us-east-1.cs.amazonlightsail.com)
