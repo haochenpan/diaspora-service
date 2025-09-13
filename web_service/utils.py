@@ -30,6 +30,7 @@ from kafka.admin import ResourcePattern
 from kafka.admin import ResourcePatternFilter
 from kafka.admin import ResourceType
 from kafka.errors import TopicAlreadyExistsError
+from kafka.sasl.oauth import AbstractTokenProvider
 
 WEB_SERVICE_DESC = (
     '[Docs and Demo](https://haochenpan.github.io/diaspora-service/)'
@@ -185,7 +186,7 @@ class AuthManager:
             }
 
 
-class MSKTokenProvider:
+class MSKTokenProvider(AbstractTokenProvider):
     """Provide tokens for MSK authentication."""
 
     def token(self):
@@ -1366,3 +1367,10 @@ if __name__ == '__main__':
         os.getenv('DEFAULT_SERVERS'),
         os.getenv('DEFAULT_SERVERS'),
     )
+    # print(aws.create_user_and_key("tomo-user"))
+    # print(aws.register_topic("tomo-user", "tomo-alpha-1"))
+    # print(aws.register_topic("tomo-user", "tomo-alpha-2"))
+    # print(aws.register_topic("search-user-1", "search-alpha-3-test"))
+    # print(aws.register_topic("search-user-1", "search-alpha-4-test"))
+    # print(aws.register_topic("search-user-1", "search-alpha-5-test"))
+    print(aws.create_user_and_key('e2a8169b-feef-4d56-8eba-ab12747bee03'))
