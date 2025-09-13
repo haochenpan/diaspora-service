@@ -74,7 +74,7 @@ services:
       - AUTH_TYPE=LOGIN_FORM
       - SPRING_SECURITY_USER_NAME=******
       - SPRING_SECURITY_USER_PASSWORD=******
-      - AWS_ACCESS_KEY_I=******
+      - AWS_ACCESS_KEY_ID=******
       - AWS_SECRET_ACCESS_KEY=******
     volumes:
       - /srv/docker/config.yml:/etc/kafkaui/dynamic_config.yaml

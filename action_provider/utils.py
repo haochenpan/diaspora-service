@@ -23,6 +23,7 @@ from globus_action_provider_tools import ActionStatus
 from globus_action_provider_tools import ActionStatusValue
 from globus_action_provider_tools import AuthState
 from globus_action_provider_tools.flask.exceptions import ActionNotFound
+from kafka.sasl.oauth import AbstractTokenProvider
 
 dynamodb = boto3.resource('dynamodb', region_name='us-east-1')
 request_table = dynamodb.Table('diaspora-request')
@@ -31,7 +32,7 @@ action_table = dynamodb.Table('diaspora-action')
 DELETE_SUCCEED = 200
 
 
-class MSKTokenProviderFromRole:
+class MSKTokenProviderFromRole(AbstractTokenProvider):
     """MSKTokenProviderFromRole."""
 
     def __init__(self, open_id: str) -> None:  # pragma: no cover
