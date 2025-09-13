@@ -1354,11 +1354,13 @@ if __name__ == '__main__':
         'MSK_CLUSTER_NAME',
         'MSK_CLUSTER_ARN_SUFFIX',
     )
+
     auth_manager = AuthManager(
         os.getenv('SERVER_CLIENT_ID'),
         os.getenv('SERVER_SECRET'),
         'c5d4fab4-7f0d-422e-b0c8-5c74329b52fe',
     )
+
     aws = AWSManager(
         os.getenv('AWS_ACCOUNT_ID'),
         os.getenv('AWS_ACCOUNT_REGION'),
