@@ -616,7 +616,7 @@ class AWSManager:
             ),
         )
 
-        result, error = self.admin.describe_acls(acl_filter)
+        result, _ = self.admin.describe_acls(acl_filter)
         topics = [acl.resource_pattern.resource_name for acl in result]
         return sorted(set(topics))
 
@@ -633,7 +633,7 @@ class AWSManager:
                 pattern_type=ACLResourcePatternType.ANY,
             ),
         )
-        result, error = self.admin.describe_acls(acl_filter)
+        result, _ = self.admin.describe_acls(acl_filter)
 
         p_ops = defaultdict(lambda: set())
         for acl in result:
@@ -1291,7 +1291,7 @@ class AWSManager:
                 pattern_type=ACLResourcePatternType.ANY,
             ),
         )
-        result, error = self.admin.describe_acls(acl_filter)
+        result, _ = self.admin.describe_acls(acl_filter)
         sorted_result = sorted(
             result,
             key=lambda acl: (
