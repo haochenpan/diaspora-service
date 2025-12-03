@@ -18,6 +18,8 @@ on:
         description: "Comma-separated paths to Dockerfiles"
         required: true
         default: "web_service/Dockerfile,action_provider/Dockerfile"
+  schedule:
+    - cron: "0 9 * * *" # 3 am CST
 
 jobs:
   deploy-lightsail-containers:
