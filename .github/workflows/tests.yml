@@ -9,6 +9,7 @@ on:
 
 jobs:
   tests:
+    name: tests (${{ matrix.os }}, ${{ matrix.python }})
     timeout-minutes: 10
 
     strategy:

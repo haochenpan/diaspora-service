@@ -67,6 +67,7 @@ def aws_manager(monkeypatch: MonkeyPatch) -> AWSManagerV3:
         region=env_values['AWS_ACCOUNT_REGION'],
         cluster_name=env_values['MSK_CLUSTER_NAME'],
         iam_vpc=env_values.get('DEFAULT_SERVERS'),
+        iam_public=env_values.get('DEFAULT_SERVERS'),
     )
     return manager
 

@@ -83,6 +83,7 @@ class DiasporaService:
             os.getenv('AWS_ACCOUNT_REGION') or '',
             os.getenv('MSK_CLUSTER_NAME') or '',
             os.getenv('DEFAULT_SERVERS'),
+            os.getenv('DEFAULT_SERVERS'),
         )
         self.app = FastAPI(
             title='Diaspora Web Service',

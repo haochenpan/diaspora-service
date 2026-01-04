@@ -96,11 +96,13 @@ class AWSManagerV3:
         region: str,
         cluster_name: str,
         iam_vpc: str | None = None,
+        iam_public: str | None = None,
     ) -> None:
         """Init AWS Manager V3."""
         self.account_id = account_id
         self.region = region
         self.cluster_name = cluster_name
+        self.iam_public = iam_public
         self.iam_policy_arn_prefix = (
             f'arn:aws:iam::{account_id}:policy/msk-policy/'
         )
@@ -253,6 +255,7 @@ class AWSManagerV3:
                 'username': subject,
                 'access_key': access_key,
                 'secret_key': secret_key,
+                'endpoint': self.iam_public,
                 'retrieved_from_ssm': False,
             }
 
@@ -356,6 +359,7 @@ class AWSManagerV3:
                 'username': key_data['subject'],
                 'access_key': key_data['access_key'],
                 'secret_key': key_data['secret_key'],
+                'endpoint': self.iam_public,
                 'create_date': key_data.get('create_date'),
                 'retrieved_from_ssm': True,
             }

@@ -68,7 +68,10 @@ class DiasporaService:
             os.getenv('AWS_ACCOUNT_ID') or '',
             os.getenv('AWS_ACCOUNT_REGION') or '',
             os.getenv('MSK_CLUSTER_NAME') or '',
-            os.getenv('DEFAULT_SERVERS'),
+            os.getenv('DEFAULT_SERVERS'),  # iam_vpc: for Kafka admin client
+            os.getenv(
+                'DEFAULT_SERVERS',
+            ),  # iam_public: for endpoint in API response
         )
         self.app = FastAPI(
             title='Diaspora Web Service V3',
