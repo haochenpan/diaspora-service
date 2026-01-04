@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import contextlib
 import json
-import os
 import threading
 from collections import defaultdict
+from typing import Any
 
 import boto3
 from kafka.admin import ACL
@@ -30,13 +30,18 @@ class AWSManagerV3:
     class NamingManager:
         """Handle naming conventions for AWS resources."""
 
-        def __init__(self, account_id, region, cluster_name):
+        def __init__(
+            self,
+            account_id: str,
+            region: str,
+            cluster_name: str,
+        ) -> None:
             """Initialize with the given parameters."""
             self.account_id = account_id
             self.region = region
             self.cluster_name = cluster_name
 
-        def iam_user_policy(self):
+        def iam_user_policy(self) -> dict[str, Any]:
             """Generate an IAM user policy for Kafka access."""
             return {
                 'Version': '2012-10-17',
@@ -64,11 +69,11 @@ class AWSManagerV3:
                 ],
             }
 
-        def ap_role_name(self, open_id):
+        def ap_role_name(self, open_id: str) -> str:
             """Generate a role name for an application based on the open ID."""
             return f'{open_id}-role'
 
-        def ap_trust_policy(self):
+        def ap_trust_policy(self) -> dict[str, Any]:
             """Generate a trust policy for an application role."""
             principal_arn = f'arn:aws:iam::{self.account_id}:root'
             return {
@@ -87,11 +92,11 @@ class AWSManagerV3:
 
     def __init__(
         self,
-        account_id,
-        region,
-        cluster_name,
-        iam_vpc=None,
-    ):
+        account_id: str,
+        region: str,
+        cluster_name: str,
+        iam_vpc: str | None = None,
+    ) -> None:
         """Init AWS Manager V3."""
         self.account_id = account_id
         self.region = region
@@ -119,7 +124,7 @@ class AWSManagerV3:
         else:
             self.admin = None
 
-    def create_user(self, subject):
+    def create_user(self, subject: str) -> None:
         """Create IAM user, policy, and role if not exists."""
         # Note: This method should be called within a locked context
         # 1. create IAM user
@@ -147,7 +152,7 @@ class AWSManagerV3:
         # 4. Create IAM role that attach to the same user policy
         self.create_user_role_if_not_exists(subject)
 
-    def delete_user(self, subject):
+    def delete_user(self, subject: str) -> None:
         """Delete IAM user and all associated resources."""
         with self.lock:
             # 1. Delete IAM access keys
@@ -211,7 +216,7 @@ class AWSManagerV3:
                 self.iam.delete_user(UserName=subject)
                 print(f'DEBUG - Deleted IAM user: {subject}')
 
-    def create_user_and_key(self, subject):
+    def create_user_and_key(self, subject: str) -> dict[str, Any]:
         """Create an IAM user if not exists and user credential."""
         with self.lock:
             # Create user, policy, and role
@@ -237,7 +242,10 @@ class AWSManagerV3:
             # Store the new_key and subject into AWS Systems Manager
             # Parameter Store
             self.store_key_to_ssm(
-                subject, access_key, secret_key, create_date,
+                subject,
+                access_key,
+                secret_key,
+                create_date,
             )
 
             return {
@@ -248,7 +256,7 @@ class AWSManagerV3:
                 'retrieved_from_ssm': False,
             }
 
-    def create_user_role_if_not_exists(self, subject):
+    def create_user_role_if_not_exists(self, subject: str) -> None:
         """Create an IAM role that attach to the same user policy."""
         try:
             response = self.iam.create_role(
@@ -272,8 +280,12 @@ class AWSManagerV3:
             print(f'Error attaching IAM policy for AP: {e}')
 
     def store_key_to_ssm(
-        self, subject, access_key, secret_key, create_date,
-    ):
+        self,
+        subject: str,
+        access_key: str,
+        secret_key: str,
+        create_date: Any,
+    ) -> None:
         """Store the key and subject into AWS Systems Manager Parameter Store."""  # noqa: E501
         parameter_name = f'/diaspora/v3/keys/{subject}'
         # Convert datetime to ISO format string for JSON serialization
@@ -281,12 +293,14 @@ class AWSManagerV3:
             create_date_str = create_date.isoformat()
         else:
             create_date_str = str(create_date)
-        parameter_value = json.dumps({
-            'subject': subject,
-            'access_key': access_key,
-            'secret_key': secret_key,
-            'create_date': create_date_str,
-        })
+        parameter_value = json.dumps(
+            {
+                'subject': subject,
+                'access_key': access_key,
+                'secret_key': secret_key,
+                'create_date': create_date_str,
+            },
+        )
 
         try:
             # Store as SecureString type for encryption
@@ -303,7 +317,10 @@ class AWSManagerV3:
             print(f'Error storing key to SSM Parameter Store: {e}')
             raise
 
-    def retrieve_key_from_ssm(self, subject):
+    def retrieve_key_from_ssm(
+        self,
+        subject: str,
+    ) -> dict[str, Any] | None:
         """Retrieve the key from AWS Systems Manager Parameter Store."""
         parameter_name = f'/diaspora/v3/keys/{subject}'
         try:
@@ -328,7 +345,7 @@ class AWSManagerV3:
             print(f'Error retrieving key from SSM Parameter Store: {e}')
             raise
 
-    def retrieve_or_create_key(self, subject):
+    def retrieve_or_create_key(self, subject: str) -> dict[str, Any]:
         """Retrieve key from SSM if exists, otherwise create and return."""
         # Try to retrieve from SSM first
         key_data = self.retrieve_key_from_ssm(subject)
@@ -346,7 +363,7 @@ class AWSManagerV3:
             # Key doesn't exist, create a new one
             return self.create_user_and_key(subject)
 
-    def delete_key(self, subject):
+    def delete_key(self, subject: str) -> dict[str, Any]:
         """Delete key from SSM Parameter Store only."""
         parameter_name = f'/diaspora/v3/keys/{subject}'
         try:
@@ -372,13 +389,13 @@ class AWSManagerV3:
             print(f'Error deleting key from SSM Parameter Store: {e}')
             raise
 
-    def _get_iam_policy(self, policy_arn):
+    def _get_iam_policy(self, policy_arn: str) -> dict[str, Any] | None:
         """Get IAM policy and delete non-default versions."""
         try:
             existing_policies = self.iam.list_policy_versions(
                 PolicyArn=policy_arn,
             )
-            policy = ''
+            policy: dict[str, Any] | None = None
             for ver in existing_policies['Versions']:
                 # 1. delete non-default policies to avoid reaching the quota
                 if not ver['IsDefaultVersion']:
@@ -396,8 +413,13 @@ class AWSManagerV3:
 
         except self.iam.exceptions.NoSuchEntityException:
             pass  # policy already deleted
+        return None
 
-    def _add_topic_to_policy(self, subject, topic):
+    def _add_topic_to_policy(
+        self,
+        subject: str,
+        topic: str,
+    ) -> bool:
         """Add topic to IAM policy."""
         policy_arn = self.iam_policy_arn_prefix + subject
         policy = self._get_iam_policy(policy_arn)
@@ -416,7 +438,11 @@ class AWSManagerV3:
         )
         return True  # updated
 
-    def _remove_topic_from_policy(self, subject, topic):
+    def _remove_topic_from_policy(
+        self,
+        subject: str,
+        topic: str,
+    ) -> bool:
         """Remove topic from IAM policy."""
         policy_arn = self.iam_policy_arn_prefix + subject
         policy = self._get_iam_policy(policy_arn)
@@ -435,7 +461,7 @@ class AWSManagerV3:
         )
         return True  # updated
 
-    def list_topics_for_principal(self, subject):
+    def list_topics_for_principal(self, subject: str) -> list[str]:
         """List topics that a subject has access to."""
         if not self.admin:
             return []
@@ -455,7 +481,7 @@ class AWSManagerV3:
         topics = [acl.resource_pattern.resource_name for acl in result]
         return sorted(set(topics))
 
-    def list_principals_for_topic(self, topic):
+    def list_principals_for_topic(self, topic: str) -> dict[str, Any]:
         """List subjects that have access to a topic."""
         if not self.admin:
             return {}
@@ -481,7 +507,11 @@ class AWSManagerV3:
             p_ops[principal].add(operation)
         return dict(p_ops)
 
-    def create_topic_and_acl(self, subject, topic):
+    def create_topic_and_acl(
+        self,
+        subject: str,
+        topic: str,
+    ) -> None:
         """Create topic and ACLs for the subject."""
         if not self.admin:
             raise ValueError('Kafka admin client not initialized')
@@ -523,7 +553,11 @@ class AWSManagerV3:
         )
         self.admin.create_acls([acl0, acl1, acl2, acl3])
 
-    def delete_topic_acl(self, subject, topic):
+    def delete_topic_acl(
+        self,
+        subject: str,
+        topic: str,
+    ) -> None:
         """Delete ACLs for a specific topic for the given subject."""
         if not self.admin:
             return
@@ -536,7 +570,11 @@ class AWSManagerV3:
         )
         self.admin.delete_acls([acl])
 
-    def register_topic(self, subject, topic):
+    def register_topic(
+        self,
+        subject: str,
+        topic: str,
+    ) -> dict[str, Any]:
         """Register a topic and grant access to the given subject."""
         if not self.admin:
             return {
@@ -570,7 +608,11 @@ class AWSManagerV3:
                 'message': f'Access granted to principal {subject}.',
             }
 
-    def unregister_topic(self, subject, topic):
+    def unregister_topic(
+        self,
+        subject: str,
+        topic: str,
+    ) -> dict[str, Any]:
         """Unregister a topic and revoke access from the given subject."""
         if not self.admin:
             return {
@@ -595,10 +637,9 @@ class AWSManagerV3:
                 'message': f'Access removed from principal {subject}.',
             }
 
-    def topic_listing_route(self, subject):
+    def topic_listing_route(self, subject: str) -> dict[str, Any]:
         """Return the list of topics for the given subject."""
         return {
             'status': 'success',
             'topics': self.list_topics_for_principal(subject),
         }
-

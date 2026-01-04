@@ -21,7 +21,6 @@ from web_service.utils import WEB_SERVICE_DESC
 from web_service.utils import WEB_SERVICE_LAMBDA_CONFIGS
 from web_service.utils import WEB_SERVICE_TAGS_METADATA
 from web_service.utils import WEB_SERVICE_TRIGGER_CONFIGS
-
 from web_service_v3.utils import AWSManagerV3
 
 
@@ -80,9 +79,9 @@ class DiasporaService:
             os.getenv('DEFAULT_SERVERS'),
         )
         self.aws_v3 = AWSManagerV3(
-            os.getenv('AWS_ACCOUNT_ID'),
-            os.getenv('AWS_ACCOUNT_REGION'),
-            os.getenv('MSK_CLUSTER_NAME'),
+            os.getenv('AWS_ACCOUNT_ID') or '',
+            os.getenv('AWS_ACCOUNT_REGION') or '',
+            os.getenv('MSK_CLUSTER_NAME') or '',
             os.getenv('DEFAULT_SERVERS'),
         )
         self.app = FastAPI(
@@ -198,7 +197,7 @@ class DiasporaService:
         subject: str = Depends(extract_val('subject')),
         token: str = Depends(extract_val('authorization')),
     ):
-        """Retrieve a key for the given subject, creating if not exists (v3)."""
+        """Retrieve a key for the given subject, creating if not exists."""
         if err := self.auth.validate_access_token(subject, token):
             return err
         return self.aws_v3.retrieve_or_create_key(subject)

@@ -6,10 +6,10 @@ import contextlib
 import os
 
 import pytest
+from _pytest.monkeypatch import MonkeyPatch
 
 from web_service.utils import EnvironmentChecker
 from web_service_v3.utils import AWSManagerV3
-
 
 # ============================================================================
 # Environment Variable Tests
@@ -31,8 +31,9 @@ EnvironmentChecker.check_env_variables(
 # Integration Tests with Real AWS Services
 # ============================================================================
 
+
 @pytest.fixture
-def aws_manager(monkeypatch):
+def aws_manager(monkeypatch: MonkeyPatch) -> AWSManagerV3:
     """Create an AWSManagerV3 instance with real AWS services."""
     required_vars = [
         'AWS_ACCOUNT_ID',
@@ -71,13 +72,16 @@ def aws_manager(monkeypatch):
 
 
 @pytest.fixture
-def random_subject():
+def random_subject() -> str:
     """Generate a random subject for each test."""
     return f'test-subject-{os.urandom(8).hex()}'
 
 
 @pytest.mark.integration
-def test_create_user_and_key(aws_manager, random_subject):
+def test_create_user_and_key(
+    aws_manager: AWSManagerV3,
+    random_subject: str,
+) -> None:
     """Test create_user_and_key with real AWS services."""
     result = aws_manager.create_user_and_key(random_subject)
 
@@ -94,7 +98,10 @@ def test_create_user_and_key(aws_manager, random_subject):
 
 
 @pytest.mark.integration
-def test_retrieve_or_create_key_existing(aws_manager, random_subject):
+def test_retrieve_or_create_key_existing(
+    aws_manager: AWSManagerV3,
+    random_subject: str,
+) -> None:
     """Test retrieve_or_create_key retrieves existing key from SSM."""
     # First create a key
     create_result = aws_manager.create_user_and_key(random_subject)
@@ -106,12 +113,8 @@ def test_retrieve_or_create_key_existing(aws_manager, random_subject):
     assert retrieve_result is not None
     assert retrieve_result.get('status') == 'success'
     assert retrieve_result.get('retrieved_from_ssm') is True
-    assert (
-        retrieve_result.get('access_key') == create_result.get('access_key')
-    )
-    assert (
-        retrieve_result.get('secret_key') == create_result.get('secret_key')
-    )
+    assert retrieve_result.get('access_key') == create_result.get('access_key')
+    assert retrieve_result.get('secret_key') == create_result.get('secret_key')
 
     # Cleanup
     with contextlib.suppress(Exception):
@@ -119,7 +122,10 @@ def test_retrieve_or_create_key_existing(aws_manager, random_subject):
 
 
 @pytest.mark.integration
-def test_retrieve_or_create_key_new(aws_manager, random_subject):
+def test_retrieve_or_create_key_new(
+    aws_manager: AWSManagerV3,
+    random_subject: str,
+) -> None:
     """Test retrieve_or_create_key creates new key when not in SSM."""
     # Delete key if it exists
     with contextlib.suppress(Exception):
@@ -140,7 +146,10 @@ def test_retrieve_or_create_key_new(aws_manager, random_subject):
 
 
 @pytest.mark.integration
-def test_delete_key(aws_manager, random_subject):
+def test_delete_key(
+    aws_manager: AWSManagerV3,
+    random_subject: str,
+) -> None:
     """Test delete_key with real AWS services."""
     # First create a key
     create_result = aws_manager.create_user_and_key(random_subject)
@@ -159,7 +168,10 @@ def test_delete_key(aws_manager, random_subject):
 
 
 @pytest.mark.integration
-def test_delete_key_not_found(aws_manager, random_subject):
+def test_delete_key_not_found(
+    aws_manager: AWSManagerV3,
+    random_subject: str,
+) -> None:
     """Test delete_key handles key not found gracefully."""
     # Ensure key doesn't exist
     with contextlib.suppress(Exception):
@@ -174,7 +186,10 @@ def test_delete_key_not_found(aws_manager, random_subject):
 
 
 @pytest.mark.integration
-def test_topic_listing_route(aws_manager, random_subject):
+def test_topic_listing_route(
+    aws_manager: AWSManagerV3,
+    random_subject: str,
+) -> None:
     """Test topic_listing_route with real AWS services."""
     result = aws_manager.topic_listing_route(random_subject)
 
@@ -185,7 +200,10 @@ def test_topic_listing_route(aws_manager, random_subject):
 
 
 @pytest.mark.integration
-def test_register_topic(aws_manager, random_subject):
+def test_register_topic(
+    aws_manager: AWSManagerV3,
+    random_subject: str,
+) -> None:
     """Test register_topic with real AWS services."""
     topic = f'test-topic-{os.urandom(8).hex()}'
 
@@ -208,7 +226,10 @@ def test_register_topic(aws_manager, random_subject):
 
 
 @pytest.mark.integration
-def test_register_topic_already_exists(aws_manager, random_subject):
+def test_register_topic_already_exists(
+    aws_manager: AWSManagerV3,
+    random_subject: str,
+) -> None:
     """Test register_topic handles already registered topic."""
     topic = f'test-topic-{os.urandom(8).hex()}'
 
@@ -232,7 +253,10 @@ def test_register_topic_already_exists(aws_manager, random_subject):
 
 
 @pytest.mark.integration
-def test_unregister_topic(aws_manager, random_subject):
+def test_unregister_topic(
+    aws_manager: AWSManagerV3,
+    random_subject: str,
+) -> None:
     """Test unregister_topic with real AWS services."""
     topic = f'test-topic-{os.urandom(8).hex()}'
 
@@ -253,7 +277,10 @@ def test_unregister_topic(aws_manager, random_subject):
 
 
 @pytest.mark.integration
-def test_unregister_topic_no_access(aws_manager, random_subject):
+def test_unregister_topic_no_access(
+    aws_manager: AWSManagerV3,
+    random_subject: str,
+) -> None:
     """Test unregister_topic handles topic with no access."""
     topic = f'test-topic-{os.urandom(8).hex()}'
 
