@@ -30,7 +30,7 @@ jobs:
         include:
           - service_name: diaspora-web-service
             container_name: docker
-            dockerfile_path: web_service/Dockerfile
+            dockerfile_path: web_service_v3/Dockerfile
           # - service_name: diaspora-action-provider
           #   container_name: docker
           #   dockerfile_path: action_provider/Dockerfile
