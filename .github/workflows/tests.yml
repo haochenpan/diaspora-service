@@ -15,17 +15,13 @@ jobs:
       matrix:
         include:
         - os: ubuntu-latest
-          python: '3.9'
-          toxenv: py39
-        - os: ubuntu-latest
-          python: '3.10'
-          toxenv: py310
-        - os: ubuntu-latest
           python: '3.11'
-          toxenv: py311
-        # - os: ubuntu-latest
-          # python: '3.12'
-          # toxenv: py312
+        - os: ubuntu-latest
+          python: '3.12'
+        - os: ubuntu-latest
+          python: '3.13'
+        - os: ubuntu-latest
+          python: '3.14'
     runs-on: ${{ matrix.os }}
 
     env:
@@ -65,7 +61,9 @@ jobs:
             tests-${{ matrix.os }}-pip-${{ matrix.python }}-
 
       - name: Install Packages
-        run: python -m pip install --upgrade pip tox setuptools
+        run: |
+          python -m pip install --upgrade pip setuptools
+          python -m pip install -e ".[dev]"
 
-      - name: Run Tox
-        run: tox -e ${{ matrix.toxenv }}
+      - name: Run Tests
+        run: pytest web_service_v3/test_main.py -v
