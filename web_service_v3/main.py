@@ -68,7 +68,6 @@ class DiasporaService:
             os.getenv('AWS_ACCOUNT_ID') or '',
             os.getenv('AWS_ACCOUNT_REGION') or '',
             os.getenv('MSK_CLUSTER_NAME') or '',
-            os.getenv('DEFAULT_SERVERS'),  # iam_vpc: for Kafka admin client
             os.getenv(
                 'DEFAULT_SERVERS',
             ),  # iam_public: for endpoint in API response
@@ -84,93 +83,161 @@ class DiasporaService:
 
     def add_routes(self) -> None:
         """Add routes to the FastAPI app."""
-        # Authentication
-        self.app.get('/api/v3/create_key', tags=['Authentication'])(
+        # User management routes
+        self.app.post('/api/v3/user', tags=['User'])(
+            self.create_user,
+        )
+        self.app.delete('/api/v3/user', tags=['User'])(
+            self.delete_user,
+        )
+
+        # Key management routes
+        self.app.post('/api/v3/key', tags=['Authentication'])(
             self.create_key,
         )
-        self.app.get('/api/v3/retrieve_key', tags=['Authentication'])(
-            self.retrieve_key,
+        self.app.get('/api/v3/key', tags=['Authentication'])(
+            self.get_key,
         )
-        self.app.delete('/api/v3/delete_key', tags=['Authentication'])(
+        self.app.delete('/api/v3/key', tags=['Authentication'])(
             self.delete_key,
         )
 
-        # Topic Management
-        self.app.get('/api/v3/topics', tags=['Topic'])(self.list_topics)
-        self.app.put('/api/v3/topic/{topic}', tags=['Topic'])(
-            self.register_topic,
+        # Namespace management routes
+        self.app.post('/api/v3/namespace', tags=['Namespace'])(
+            self.create_namespace,
         )
-        self.app.delete('/api/v3/topic/{topic}', tags=['Topic'])(
-            self.unregister_topic,
+        self.app.get('/api/v3/namespace', tags=['Namespace'])(
+            self.list_namespaces,
         )
+        self.app.delete('/api/v3/namespace', tags=['Namespace'])(
+            self.delete_namespace,
+        )
+
+        # Topic management routes
+        self.app.post('/api/v3/{namespace}/{topic}', tags=['Topic'])(
+            self.create_topic,
+        )
+        self.app.delete('/api/v3/{namespace}/{topic}', tags=['Topic'])(
+            self.delete_topic,
+        )
+
+    async def create_user(
+        self,
+        subject: str = Depends(extract_val('subject')),
+        token: str = Depends(extract_val('authorization')),
+    ) -> dict[str, Any]:
+        """Create an IAM user for the authenticated subject."""
+        if err := self.auth.validate_access_token(subject, token):
+            return err
+        return self.aws.create_user(subject)
+
+    async def delete_user(
+        self,
+        subject: str = Depends(extract_val('subject')),
+        token: str = Depends(extract_val('authorization')),
+    ) -> dict[str, Any]:
+        """Delete an IAM user for the authenticated subject."""
+        if err := self.auth.validate_access_token(subject, token):
+            return err
+        return self.aws.delete_user(subject)
 
     async def create_key(
         self,
         subject: str = Depends(extract_val('subject')),
         token: str = Depends(extract_val('authorization')),
     ) -> dict[str, Any]:
-        """Create a key for the given subject."""
+        """Create an access key for an existing IAM user."""
         if err := self.auth.validate_access_token(subject, token):
             return err
-        return self.aws.create_user_and_key(subject)
+        return self.aws.create_key(subject)
 
-    async def retrieve_key(
+    async def get_key(
         self,
         subject: str = Depends(extract_val('subject')),
         token: str = Depends(extract_val('authorization')),
     ) -> dict[str, Any]:
-        """Retrieve a key for the given subject, creating if not exists."""
+        """Get access key for a user, creating one if it doesn't exist."""
         if err := self.auth.validate_access_token(subject, token):
             return err
-        return self.aws.retrieve_or_create_key(subject)
+        return self.aws.get_key(subject)
 
     async def delete_key(
         self,
         subject: str = Depends(extract_val('subject')),
         token: str = Depends(extract_val('authorization')),
     ) -> dict[str, Any]:
-        """Delete a key for the given subject from SSM Parameter Store."""
+        """Delete access keys for a user."""
         if err := self.auth.validate_access_token(subject, token):
             return err
         return self.aws.delete_key(subject)
 
-    async def list_topics(
+    async def create_namespace(
         self,
         subject: str = Depends(extract_val('subject')),
         token: str = Depends(extract_val('authorization')),
+        namespace: str = Depends(extract_val('namespace')),
     ) -> dict[str, Any]:
-        """List topics for the given subject."""
+        """Create a namespace for a user."""
         if err := self.auth.validate_access_token(subject, token):
             return err
-        return self.aws.topic_listing_route(subject)
+        try:
+            return self.aws.create_namespace(subject, namespace)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
 
-    async def register_topic(
+    async def list_namespaces(
         self,
+        subject: str = Depends(extract_val('subject')),
+        token: str = Depends(extract_val('authorization')),
+    ) -> dict[str, Any]:
+        """List all namespaces owned by a user and their topics."""
+        if err := self.auth.validate_access_token(subject, token):
+            return err
+        return self.aws.list_namespaces(subject)
+
+    async def delete_namespace(
+        self,
+        subject: str = Depends(extract_val('subject')),
+        token: str = Depends(extract_val('authorization')),
+        namespace: str = Depends(extract_val('namespace')),
+    ) -> dict[str, Any]:
+        """Delete a namespace for a user."""
+        if err := self.auth.validate_access_token(subject, token):
+            return err
+        try:
+            return self.aws.delete_namespace(subject, namespace)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+    async def create_topic(
+        self,
+        namespace: str,
         topic: str,
         subject: str = Depends(extract_val('subject')),
         token: str = Depends(extract_val('authorization')),
     ) -> dict[str, Any]:
-        """Register a topic for the given subject."""
-        if err := (
-            self.auth.validate_access_token(subject, token)
-            or self.auth.validate_name(topic)
-        ):
+        """Create a topic under a namespace."""
+        if err := self.auth.validate_access_token(subject, token):
             return err
-        return self.aws.register_topic(subject, topic)
+        try:
+            return self.aws.create_topic(subject, namespace, topic)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
 
-    async def unregister_topic(
+    async def delete_topic(
         self,
+        namespace: str,
         topic: str,
         subject: str = Depends(extract_val('subject')),
         token: str = Depends(extract_val('authorization')),
     ) -> dict[str, Any]:
-        """Unregister a topic for the given subject."""
-        if err := (
-            self.auth.validate_access_token(subject, token)
-            or self.auth.validate_name(topic)
-        ):
+        """Delete a topic from a namespace."""
+        if err := self.auth.validate_access_token(subject, token):
             return err
-        return self.aws.unregister_topic(subject, topic)
+        try:
+            return self.aws.delete_topic(subject, namespace, topic)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 service = DiasporaService()
