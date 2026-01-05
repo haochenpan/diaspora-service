@@ -106,6 +106,9 @@ class DiasporaService:
         self.app.post('/api/v3/namespace', tags=['Namespace'])(
             self.create_namespace,
         )
+        self.app.get('/api/v3/namespace', tags=['Namespace'])(
+            self.list_namespaces,
+        )
         self.app.delete('/api/v3/namespace', tags=['Namespace'])(
             self.delete_namespace,
         )
@@ -172,7 +175,7 @@ class DiasporaService:
         self,
         subject: str = Depends(extract_val('subject')),
         token: str = Depends(extract_val('authorization')),
-        namespace: str = Body(...),
+        namespace: str = Depends(extract_val('namespace')),
     ) -> dict[str, Any]:
         """Create a namespace for a user."""
         if err := self.auth.validate_access_token(subject, token):
@@ -182,11 +185,21 @@ class DiasporaService:
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
 
+    async def list_namespaces(
+        self,
+        subject: str = Depends(extract_val('subject')),
+        token: str = Depends(extract_val('authorization')),
+    ) -> dict[str, Any]:
+        """List all namespaces owned by a user and their topics."""
+        if err := self.auth.validate_access_token(subject, token):
+            return err
+        return self.aws.list_namespaces(subject)
+
     async def delete_namespace(
         self,
         subject: str = Depends(extract_val('subject')),
         token: str = Depends(extract_val('authorization')),
-        namespace: str = Body(...),
+        namespace: str = Depends(extract_val('namespace')),
     ) -> dict[str, Any]:
         """Delete a namespace for a user."""
         if err := self.auth.validate_access_token(subject, token):

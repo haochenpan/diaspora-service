@@ -9,6 +9,12 @@ import threading
 from typing import Any
 
 import boto3
+from aws_msk_iam_sasl_signer import MSKAuthTokenProvider
+from kafka.admin import KafkaAdminClient
+from kafka.admin import NewTopic
+from kafka.errors import TopicAlreadyExistsError
+from kafka.errors import UnknownTopicOrPartitionError
+from kafka.sasl.oauth import AbstractTokenProvider
 
 from web_service.utils import AWSManager
 
@@ -18,6 +24,19 @@ MAX_NAMESPACE_LENGTH = 32
 
 # Global namespaces tracking key
 GLOBAL_NAMESPACES_KEY = '__global_namespaces__'
+
+
+class MSKTokenProvider(AbstractTokenProvider):
+    """Provide tokens for MSK authentication."""
+
+    def __init__(self, region: str) -> None:
+        """Initialize with AWS region."""
+        self.region = region
+
+    def token(self) -> str:
+        """Generate and return an MSK auth token."""
+        token, _ = MSKAuthTokenProvider.generate_auth_token(self.region)
+        return token
 
 
 class AWSManagerV3:
@@ -693,30 +712,38 @@ class AWSManagerV3:
         subject: str,
         namespace: str,
     ) -> dict[str, Any]:
-        """Delete a namespace for a user.
+        """Delete a namespace for a user (idempotent).
 
         Args:
             subject: User subject ID
             namespace: Namespace name to delete
 
         Returns:
-            dict with status, message, and remaining namespaces list
-
-        Raises:
-            ValueError: If namespace not found for user
+            dict with status, message, and remaining namespaces list.
+            Returns success message even if namespace doesn't exist.
         """
         with self.lock:
             # Get existing namespaces
             user_record = self._get_user_record(subject)
             if not user_record or 'namespaces' not in user_record:
-                raise ValueError(f'No namespaces found for {subject}')
+                # No namespaces found, already deleted (idempotent)
+                return {
+                    'status': 'success',
+                    'message': f'No namespaces found for {subject}',
+                    'namespaces': [],
+                }
 
             existing_namespaces = user_record['namespaces']
 
             if namespace not in existing_namespaces:
-                raise ValueError(
-                    f'Namespace {namespace} not found for {subject}',
-                )
+                # Namespace doesn't exist, already deleted (idempotent)
+                return {
+                    'status': 'success',
+                    'message': (
+                        f'Namespace {namespace} not found for {subject}'
+                    ),
+                    'namespaces': existing_namespaces,
+                }
 
             # Remove namespace from user's list
             remaining_namespaces = [
@@ -806,7 +833,7 @@ class AWSManagerV3:
         policy_arn = self.iam_policy_arn_prefix + subject
         policy = self._get_iam_policy(policy_arn)
         resources = policy['Statement'][0]['Resource']
-        topic_arn = f'{self.topic_arn_prefix}{namespace}/{topic}'
+        topic_arn = f'{self.topic_arn_prefix}{namespace}.{topic}'
         if topic_arn in resources:
             return False  # not updated
 
@@ -839,7 +866,7 @@ class AWSManagerV3:
         policy_arn = self.iam_policy_arn_prefix + subject
         policy = self._get_iam_policy(policy_arn)
         resources = policy['Statement'][0]['Resource']
-        topic_arn = f'{self.topic_arn_prefix}{namespace}/{topic}'
+        topic_arn = f'{self.topic_arn_prefix}{namespace}.{topic}'
         if topic_arn not in resources:
             return False  # not updated
 
@@ -934,6 +961,143 @@ class AWSManagerV3:
                 Key={'namespace': {'S': namespace}},
             )
 
+    def _create_kafka_topic(
+        self,
+        namespace: str,
+        topic: str,
+    ) -> dict[str, Any] | None:
+        """Create a Kafka topic (idempotent).
+
+        This method does NOT use a lock - caller must hold lock.
+
+        Args:
+            namespace: Namespace name
+            topic: Topic name
+
+        Returns:
+            dict with 'status': 'success' on success, or
+            dict with 'status': 'failure' and 'message' on failure
+            after retries, or None if Kafka endpoint is not configured.
+
+        The actual Kafka topic name will be '{namespace}.{topic}'.
+        """
+        if not self.iam_public:
+            # No Kafka endpoint configured, skip topic creation
+            return None
+
+        kafka_topic_name = f'{namespace}.{topic}'
+        max_retries = 3
+        last_exception: Exception | None = None
+
+        for attempt in range(max_retries):
+            try:
+                admin = KafkaAdminClient(
+                    bootstrap_servers=self.iam_public,
+                    security_protocol='SASL_SSL',
+                    sasl_mechanism='OAUTHBEARER',
+                    sasl_oauth_token_provider=MSKTokenProvider(self.region),
+                )
+                topic_list = [
+                    NewTopic(
+                        name=kafka_topic_name,
+                        num_partitions=1,
+                        replication_factor=2,
+                    ),
+                ]
+                admin.create_topics(new_topics=topic_list)
+                return {'status': 'success'}  # Success
+            except TopicAlreadyExistsError:
+                # Topic already exists, this is idempotent
+                return {'status': 'success'}
+            except Exception as e:
+                last_exception = e
+                if attempt == max_retries - 1:
+                    # Last attempt failed, return failure status
+                    return {
+                        'status': 'failure',
+                        'message': (
+                            f'Failed to create Kafka topic '
+                            f'{kafka_topic_name} after '
+                            f'{max_retries} attempts: {e!s}'
+                        ),
+                    }
+                # Retry on other exceptions
+                continue
+
+        # This should never be reached, but for type safety
+        return {
+            'status': 'failure',
+            'message': (
+                f'Failed to create Kafka topic {kafka_topic_name}: '
+                f'{str(last_exception) if last_exception else "Unknown error"}'
+            ),
+        }
+
+    def _delete_kafka_topic(
+        self,
+        namespace: str,
+        topic: str,
+    ) -> dict[str, Any] | None:
+        """Delete a Kafka topic (idempotent).
+
+        This method does NOT use a lock - caller must hold lock.
+
+        Args:
+            namespace: Namespace name
+            topic: Topic name
+
+        Returns:
+            dict with 'status': 'success' on success, or
+            dict with 'status': 'failure' and 'message' on failure
+            after retries, or None if Kafka endpoint is not configured.
+
+        The actual Kafka topic name will be '{namespace}.{topic}'.
+        """
+        if not self.iam_public:
+            # No Kafka endpoint configured, skip topic deletion
+            return None
+
+        kafka_topic_name = f'{namespace}.{topic}'
+        max_retries = 3
+        last_exception: Exception | None = None
+
+        for attempt in range(max_retries):
+            try:
+                admin = KafkaAdminClient(
+                    bootstrap_servers=self.iam_public,
+                    security_protocol='SASL_SSL',
+                    sasl_mechanism='OAUTHBEARER',
+                    sasl_oauth_token_provider=MSKTokenProvider(self.region),
+                )
+                admin.delete_topics(topics=[kafka_topic_name])
+                return {'status': 'success'}  # Success
+            except UnknownTopicOrPartitionError:
+                # Topic doesn't exist, this is idempotent
+                return {'status': 'success'}
+            except Exception as e:
+                last_exception = e
+                if attempt == max_retries - 1:
+                    # Last attempt failed, return failure status
+                    return {
+                        'status': 'failure',
+                        'message': (
+                            f'Failed to delete Kafka topic '
+                            f'{kafka_topic_name} after '
+                            f'{max_retries} attempts: {e!s}'
+                        ),
+                    }
+                # Retry on other exceptions
+                continue
+
+        # This should never be reached, but for type safety
+        return {
+            'status': 'failure',
+            'message': (
+                f'Failed to delete Kafka topic {kafka_topic_name}: '
+                f'{str(last_exception) if last_exception else "Unknown error"}'
+            ),
+        }
+
     def create_topic(
         self,
         subject: str,
@@ -971,8 +1135,21 @@ class AWSManagerV3:
 
             # Check if topic already exists (must be unique under namespace)
             if topic in existing_topics:
-                # Topic already exists, ensure it's in policy (idempotent)
+                # Topic already exists, ensure it's in policy and Kafka
+                # (idempotent)
+                self._ensure_user_exists(subject)
                 self._add_topic_to_policy(subject, namespace, topic)
+                kafka_result = self._create_kafka_topic(namespace, topic)
+                if kafka_result and kafka_result.get('status') == 'failure':
+                    return {
+                        'status': 'failure',
+                        'message': kafka_result.get(
+                            'message',
+                            'Unknown error',
+                        ),
+                        'namespace': namespace,
+                        'topic': topic,
+                    }
                 return {
                     'status': 'success',
                     'message': (
@@ -993,6 +1170,19 @@ class AWSManagerV3:
             # Add topic to IAM policy
             self._add_topic_to_policy(subject, namespace, topic)
 
+            # Create Kafka topic (idempotent)
+            kafka_result = self._create_kafka_topic(namespace, topic)
+            if kafka_result and kafka_result.get('status') == 'failure':
+                return {
+                    'status': 'failure',
+                    'message': kafka_result.get(
+                        'message',
+                        'Unknown error',
+                    ),
+                    'namespace': namespace,
+                    'topic': topic,
+                }
+
             return {
                 'status': 'success',
                 'message': f'Topic {topic} created in namespace {namespace}',
@@ -1006,7 +1196,7 @@ class AWSManagerV3:
         namespace: str,
         topic: str,
     ) -> dict[str, Any]:
-        """Delete a topic from a namespace.
+        """Delete a topic from a namespace (idempotent).
 
         Args:
             subject: User subject ID
@@ -1014,28 +1204,46 @@ class AWSManagerV3:
             topic: Topic name
 
         Returns:
-            dict with status and message
-
-        Raises:
-            ValueError: If namespace not owned by user or topic not found
+            dict with status and message.
+            Returns success message even if namespace or topic doesn't exist.
         """
         with self.lock:
             # Verify namespace belongs to user
             user_record = self._get_user_record(subject)
             if not user_record or 'namespaces' not in user_record:
-                raise ValueError(f'No namespaces found for {subject}')
+                # No namespaces found, already deleted (idempotent)
+                # Still try to remove from policy and Kafka
+                self._remove_topic_from_policy(subject, namespace, topic)
+                self._delete_kafka_topic(namespace, topic)
+                return {
+                    'status': 'success',
+                    'message': f'No namespaces found for {subject}',
+                    'namespace': namespace,
+                    'topic': topic,
+                }
             if namespace not in user_record['namespaces']:
-                raise ValueError(
-                    f'Namespace {namespace} not found for {subject}',
-                )
+                # Namespace doesn't exist, already deleted (idempotent)
+                # Still try to remove from policy and Kafka
+                self._remove_topic_from_policy(subject, namespace, topic)
+                self._delete_kafka_topic(namespace, topic)
+                return {
+                    'status': 'success',
+                    'message': (
+                        f'Namespace {namespace} not found for {subject}'
+                    ),
+                    'namespace': namespace,
+                    'topic': topic,
+                }
 
             # Get existing topics for namespace
             existing_topics = self._get_namespace_topics(namespace)
 
             # Check if topic exists
             if topic not in existing_topics:
-                # Topic doesn't exist, remove from policy anyway (idempotent)
+                # Topic doesn't exist, remove from policy and Kafka anyway
+                # (idempotent)
                 self._remove_topic_from_policy(subject, namespace, topic)
+                self._delete_kafka_topic(namespace, topic)
                 return {
                     'status': 'success',
                     'message': (
@@ -1055,9 +1263,59 @@ class AWSManagerV3:
             # Remove topic from IAM policy
             self._remove_topic_from_policy(subject, namespace, topic)
 
+            # Delete Kafka topic (idempotent)
+            kafka_result = self._delete_kafka_topic(namespace, topic)
+            if kafka_result and kafka_result.get('status') == 'failure':
+                return {
+                    'status': 'failure',
+                    'message': kafka_result.get(
+                        'message',
+                        'Unknown error',
+                    ),
+                    'namespace': namespace,
+                    'topic': topic,
+                }
+
             return {
                 'status': 'success',
                 'message': f'Topic {topic} deleted from namespace {namespace}',
                 'namespace': namespace,
                 'topic': topic,
+            }
+
+    def list_namespaces(
+        self,
+        subject: str,
+    ) -> dict[str, Any]:
+        """List all namespaces owned by a user and their topics.
+
+        Args:
+            subject: User subject ID
+
+        Returns:
+            dict with status, message, and namespaces dict
+            (namespace -> topics)  # noqa: E501
+        """
+        with self.lock:
+            # Get user record
+            user_record = self._get_user_record(subject)
+            if not user_record or 'namespaces' not in user_record:
+                return {
+                    'status': 'success',
+                    'message': f'No namespaces found for {subject}',
+                    'namespaces': {},
+                }
+
+            namespaces = user_record['namespaces']
+            result: dict[str, list[str]] = {}
+
+            # Get topics for each namespace
+            for namespace in namespaces:
+                topics = self._get_namespace_topics(namespace)
+                result[namespace] = topics
+
+            return {
+                'status': 'success',
+                'message': f'Namespaces retrieved for {subject}',
+                'namespaces': result,
             }

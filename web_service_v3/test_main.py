@@ -5,6 +5,8 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+from typing import Any
+from unittest.mock import patch
 
 import pytest
 from _pytest.monkeypatch import MonkeyPatch
@@ -743,6 +745,53 @@ def test_delete_key_no_keys_exception(
 
 
 @pytest.mark.integration
+def test_delete_key_with_existing_keys(
+    aws_manager: AWSManagerV3,
+    random_subject: str,
+) -> None:
+    """Test delete_key when user has existing keys."""
+    print(
+        f'\n[test_delete_key_with_existing_keys] '
+        f'Testing with user: {random_subject}',
+    )
+    # Create user and key
+    aws_manager.create_user(random_subject)
+    create_result = aws_manager.create_key(random_subject)
+    print(f'  Created key: {create_result.get("access_key", "N/A")[:20]}...')
+
+    # Verify key exists in IAM
+    keys = aws_manager.iam.list_access_keys(UserName=random_subject)
+    assert len(keys['AccessKeyMetadata']) == 1
+    access_key_id = keys['AccessKeyMetadata'][0]['AccessKeyId']
+
+    # Verify key exists in DynamoDB
+    stored_key = aws_manager._get_key_from_dynamodb(random_subject)
+    assert stored_key is not None
+    assert stored_key['access_key'] == access_key_id
+
+    # Delete key
+    delete_result = aws_manager.delete_key(random_subject)
+    print(f'  Delete result: {delete_result}')
+
+    # Verify deletion was successful
+    assert isinstance(delete_result, dict)
+    assert delete_result['status'] == 'success'
+    assert delete_result['keys_deleted'] == 'True'
+
+    # Verify key is deleted from IAM
+    keys_after = aws_manager.iam.list_access_keys(UserName=random_subject)
+    assert len(keys_after['AccessKeyMetadata']) == 0
+
+    # Verify key is deleted from DynamoDB
+    stored_key_after = aws_manager._get_key_from_dynamodb(random_subject)
+    assert stored_key_after is None
+
+    # Cleanup
+    with contextlib.suppress(Exception):
+        aws_manager.delete_user(random_subject)
+
+
+@pytest.mark.integration
 def test_get_key_from_dynamodb_table_not_exists(
     aws_manager: AWSManagerV3,
     random_subject: str,
@@ -830,7 +879,7 @@ def test_create_namespace(
     aws_manager.create_user(random_subject)
 
     # Create namespace
-    namespace = 'test-namespace-123'
+    namespace = f'test-ns-{random_subject[-8:]}'
     result = aws_manager.create_namespace(random_subject, namespace)
     print(f'  Result: {result}')
 
@@ -868,7 +917,7 @@ def test_create_namespace_idempotent(
     # Create user first
     aws_manager.create_user(random_subject)
 
-    namespace = 'test-namespace-456'
+    namespace = f'test-ns-{random_subject[-8:]}'
 
     # Create namespace first time
     result1 = aws_manager.create_namespace(random_subject, namespace)
@@ -905,7 +954,7 @@ def test_create_namespace_already_taken(
     aws_manager.create_user(subject1)
     aws_manager.create_user(subject2)
 
-    namespace = 'test-namespace-789'
+    namespace = f'test-ns-{random_subject[-8:]}'
 
     # First user creates namespace
     result1 = aws_manager.create_namespace(subject1, namespace)
@@ -966,7 +1015,7 @@ def test_delete_namespace(
     print(f'\n[test_delete_namespace] Testing with user: {random_subject}')
     # Create user and namespace first
     aws_manager.create_user(random_subject)
-    namespace = 'test-namespace-delete'
+    namespace = f'test-ns-{random_subject[-8:]}'
     aws_manager.create_namespace(random_subject, namespace)
 
     # Verify namespace exists
@@ -1013,13 +1062,17 @@ def test_delete_namespace_not_found(
     )
     # Create user and a namespace (so user has namespaces)
     aws_manager.create_user(random_subject)
-    existing_namespace = 'test-namespace-existing'
+    existing_namespace = f'test-ns-existing-{random_subject[-8:]}'
     aws_manager.create_namespace(random_subject, existing_namespace)
 
-    # Try to delete non-existent namespace
-    # (user has namespaces but not this one)
-    with pytest.raises(ValueError, match='not found'):
-        aws_manager.delete_namespace(random_subject, 'non-existent-ns')
+    # Try to delete non-existent namespace (idempotent, should succeed)
+    result = aws_manager.delete_namespace(random_subject, 'non-existent-ns')
+    print(f'  Delete result: {result}')
+
+    # Should succeed (idempotent behavior)
+    assert isinstance(result, dict)
+    assert result['status'] == 'success'
+    assert 'not found' in result['message']
 
     # Verify existing namespace is still there
     user_record = aws_manager._get_user_record(random_subject)
@@ -1045,9 +1098,15 @@ def test_delete_namespace_user_no_namespaces(
     # Create user but no namespace
     aws_manager.create_user(random_subject)
 
-    # Try to delete namespace (should fail)
-    with pytest.raises(ValueError, match='No namespaces found'):
-        aws_manager.delete_namespace(random_subject, 'some-namespace')
+    # Try to delete namespace (idempotent, should succeed)
+    result = aws_manager.delete_namespace(random_subject, 'some-namespace')
+    print(f'  Delete result: {result}')
+
+    # Should succeed (idempotent behavior)
+    assert isinstance(result, dict)
+    assert result['status'] == 'success'
+    assert 'No namespaces found' in result['message']
+    assert result['namespaces'] == []
 
     # Cleanup
     with contextlib.suppress(Exception):
@@ -1090,9 +1149,20 @@ def test_delete_namespace_owned_by_another_user(
     print(f'  Second user create result: {result2}')
     assert result2['status'] == 'success'
 
-    # Second user tries to delete namespace owned by first user (should fail)
-    with pytest.raises(ValueError, match='not found'):
-        aws_manager.delete_namespace(subject2, namespace)
+    # Second user tries to delete namespace owned by first user
+    # (idempotent, should succeed but namespace not found for subject2)
+    result = aws_manager.delete_namespace(subject2, namespace)
+    print(f'  Second user delete result: {result}')
+
+    # Should succeed (idempotent behavior)
+    assert isinstance(result, dict)
+    assert result['status'] == 'success'
+    assert 'not found' in result['message']
+
+    # Verify namespace is still owned by first user
+    user_record1_after = aws_manager._get_user_record(subject1)
+    assert user_record1_after is not None
+    assert namespace in user_record1_after['namespaces']
 
     # Verify namespace still exists for first user
     user_record1_after = aws_manager._get_user_record(subject1)
@@ -1124,8 +1194,8 @@ def test_create_and_delete_namespace_cycle(
     # Create user
     aws_manager.create_user(random_subject)
 
-    namespace1 = 'test-ns-cycle-1'
-    namespace2 = 'test-ns-cycle-2'
+    namespace1 = f'test-ns-cycle-1-{random_subject[-8:]}'
+    namespace2 = f'test-ns-cycle-2-{random_subject[-8:]}'
 
     # Create first namespace
     result1 = aws_manager.create_namespace(random_subject, namespace1)
@@ -1170,15 +1240,19 @@ def test_namespace_validation_rules(
     # Create user first
     aws_manager.create_user(random_subject)
 
-    # Valid names
+    # Valid names (make them unique to avoid conflicts)
+    suffix = random_subject[-6:]  # Use 6 chars to leave room for prefix
     valid_names = [
-        'abc',  # Minimum length
-        'a' * 32,  # Maximum length
-        'test-namespace-123',  # With dash
-        'test_namespace_123',  # With underscore
-        'TestNamespace123',  # Mixed case
-        '123test',  # Starts with number
+        f'abc-{suffix}',  # Minimum length (3 + 1 + 6 = 10 chars)
+        f'{"a" * 26}{suffix}',  # Maximum length (26 + 6 = 32 chars)
+        f'test-ns-{suffix}',  # With dash
+        f'test_ns_{suffix}',  # With underscore
+        f'TestNs{suffix}',  # Mixed case
+        f'123test{suffix}',  # Starts with number
     ]
+    # Ensure max length name is exactly 32 chars
+    max_len_name = f'{"a" * 26}{suffix}'
+    assert len(max_len_name) == 32  # noqa: PLR2004
 
     for valid_name in valid_names:
         try:
@@ -1231,7 +1305,7 @@ def test_create_topic(
     # Verify topic ARN is in IAM policy
     policy_arn = aws_manager.iam_policy_arn_prefix + random_subject
     policy = aws_manager._get_iam_policy(policy_arn)
-    topic_arn = f'{aws_manager.topic_arn_prefix}{namespace}/{topic}'
+    topic_arn = f'{aws_manager.topic_arn_prefix}{namespace}.{topic}'
     assert topic_arn in policy['Statement'][0]['Resource']
 
     # Cleanup
@@ -1423,7 +1497,7 @@ def test_delete_topic(
     # Verify topic ARN removed from IAM policy
     policy_arn = aws_manager.iam_policy_arn_prefix + random_subject
     policy = aws_manager._get_iam_policy(policy_arn)
-    topic_arn = f'{aws_manager.topic_arn_prefix}{namespace}/{topic}'
+    topic_arn = f'{aws_manager.topic_arn_prefix}{namespace}.{topic}'
     assert topic_arn not in policy['Statement'][0]['Resource']
 
     # Cleanup
@@ -1497,9 +1571,18 @@ def test_delete_topic_namespace_not_owned(
     aws_manager.create_namespace(subject2, other_namespace)
 
     # Second user tries to delete topic from first user's namespace
-    # (should fail)
-    with pytest.raises(ValueError, match='not found'):
-        aws_manager.delete_topic(subject2, namespace, topic)
+    # (idempotent, should succeed but namespace not found for subject2)
+    result = aws_manager.delete_topic(subject2, namespace, topic)
+    print(f'  Second user delete result: {result}')
+
+    # Should succeed (idempotent behavior)
+    assert isinstance(result, dict)
+    assert result['status'] == 'success'
+    assert 'not found' in result['message']
+
+    # Verify topic is still in first user's namespace
+    topics_after = aws_manager._get_namespace_topics(namespace)
+    assert topic in topics_after
 
     # Verify topic still exists for first user
     topics = aws_manager._get_namespace_topics(namespace)
@@ -1647,5 +1730,273 @@ def test_topic_uniqueness_under_namespace(
     # Cleanup
     with contextlib.suppress(Exception):
         aws_manager.delete_topic(random_subject, namespace, topic)
+        aws_manager.delete_namespace(random_subject, namespace)
+        aws_manager.delete_user(random_subject)
+
+
+@pytest.mark.integration
+def test_create_topic_kafka_failure_after_retries(
+    aws_manager: AWSManagerV3,
+    random_subject: str,
+) -> None:
+    """Test create_topic returns failure when Kafka topic creation fails."""
+    print(
+        f'\n[test_create_topic_kafka_failure_after_retries] '
+        f'Testing with user: {random_subject}',
+    )
+    # Create user and namespace first
+    aws_manager.create_user(random_subject)
+    namespace = f'test-ns-{random_subject[-8:]}'
+    aws_manager.create_namespace(random_subject, namespace)
+
+    # Mock _create_kafka_topic to return failure after retries
+    def mock_create_kafka_topic_failure(
+        self: AWSManagerV3,
+        namespace: str,
+        topic: str,
+    ) -> dict[str, Any]:
+        return {
+            'status': 'failure',
+            'message': (
+                'Failed to create Kafka topic test-ns.123 after '
+                '3 attempts: Connection timeout'
+            ),
+        }
+
+    topic = 'test-topic-123'
+    with patch.object(
+        AWSManagerV3,
+        '_create_kafka_topic',
+        mock_create_kafka_topic_failure,
+    ):
+        result = aws_manager.create_topic(random_subject, namespace, topic)
+        print(f'  Result: {result}')
+
+        # Should return failure status
+        assert isinstance(result, dict)
+        assert result['status'] == 'failure'
+        assert 'message' in result
+        assert 'Failed to create Kafka topic' in result['message']
+        assert result['namespace'] == namespace
+        assert result['topic'] == topic
+
+        # Note: Topic IS added to namespace record before Kafka check
+        # (this is the current implementation behavior)
+        # Verify topic is in namespace record
+        topics = aws_manager._get_namespace_topics(namespace)
+        assert topic in topics
+
+    # Cleanup
+    with contextlib.suppress(Exception):
+        aws_manager.delete_topic(random_subject, namespace, topic)
+        aws_manager.delete_namespace(random_subject, namespace)
+        aws_manager.delete_user(random_subject)
+
+
+@pytest.mark.integration
+def test_create_topic_kafka_success(
+    aws_manager: AWSManagerV3,
+    random_subject: str,
+) -> None:
+    """Test create_topic succeeds when _create_kafka_topic succeeds."""
+    print(
+        f'\n[test_create_topic_kafka_success] '
+        f'Testing with user: {random_subject}',
+    )
+    # Create user and namespace first
+    aws_manager.create_user(random_subject)
+    namespace = f'test-ns-{random_subject[-8:]}'
+    aws_manager.create_namespace(random_subject, namespace)
+
+    # Mock _create_kafka_topic to return success
+    def mock_create_kafka_topic_success(
+        self: AWSManagerV3,
+        namespace: str,
+        topic: str,
+    ) -> dict[str, Any]:
+        return {'status': 'success'}
+
+    topic = 'test-topic-456'
+    with patch.object(
+        AWSManagerV3,
+        '_create_kafka_topic',
+        mock_create_kafka_topic_success,
+    ):
+        result = aws_manager.create_topic(random_subject, namespace, topic)
+        print(f'  Result: {result}')
+
+        # Should succeed when Kafka creation succeeds
+        assert isinstance(result, dict)
+        assert result['status'] == 'success'
+        assert result['namespace'] == namespace
+        assert result['topic'] == topic
+
+        # Verify topic is in namespace record
+        topics = aws_manager._get_namespace_topics(namespace)
+        assert topic in topics
+
+    # Cleanup
+    with contextlib.suppress(Exception):
+        aws_manager.delete_topic(random_subject, namespace, topic)
+        aws_manager.delete_namespace(random_subject, namespace)
+        aws_manager.delete_user(random_subject)
+
+
+@pytest.mark.integration
+def test_create_topic_kafka_no_endpoint(
+    aws_manager: AWSManagerV3,
+    random_subject: str,
+) -> None:
+    """Test create_topic when iam_public is None (no Kafka endpoint)."""
+    print(
+        f'\n[test_create_topic_kafka_no_endpoint] '
+        f'Testing with user: {random_subject}',
+    )
+    # Create user and namespace first
+    aws_manager.create_user(random_subject)
+    namespace = f'test-ns-{random_subject[-8:]}'
+    aws_manager.create_namespace(random_subject, namespace)
+
+    # Save original iam_public
+    original_iam_public = aws_manager.iam_public
+
+    # Set iam_public to None
+    aws_manager.iam_public = None
+
+    topic = 'test-topic-789'
+    result = aws_manager.create_topic(random_subject, namespace, topic)
+    print(f'  Result: {result}')
+
+    # Should succeed (Kafka creation is skipped when iam_public is None)
+    assert isinstance(result, dict)
+    assert result['status'] == 'success'
+    assert result['namespace'] == namespace
+    assert result['topic'] == topic
+
+    # Verify topic was added to namespace record
+    topics = aws_manager._get_namespace_topics(namespace)
+    assert topic in topics
+
+    # Restore original iam_public
+    aws_manager.iam_public = original_iam_public
+
+    # Cleanup
+    with contextlib.suppress(Exception):
+        aws_manager.delete_topic(random_subject, namespace, topic)
+        aws_manager.delete_namespace(random_subject, namespace)
+        aws_manager.delete_user(random_subject)
+
+
+# ============================================================================
+# List Namespaces Tests
+# ============================================================================
+
+
+@pytest.mark.integration
+def test_list_namespaces(
+    aws_manager: AWSManagerV3,
+    random_subject: str,
+) -> None:
+    """Test list_namespaces with real AWS services."""
+    print(f'\n[test_list_namespaces] Testing with user: {random_subject}')
+    # Create user and namespaces with topics
+    aws_manager.create_user(random_subject)
+    namespace1 = f'test-ns-1-{random_subject[-8:]}'
+    namespace2 = f'test-ns-2-{random_subject[-8:]}'
+    aws_manager.create_namespace(random_subject, namespace1)
+    aws_manager.create_namespace(random_subject, namespace2)
+
+    # Create topics in namespaces
+    topic1 = 'test-topic-1'
+    topic2 = 'test-topic-2'
+    aws_manager.create_topic(random_subject, namespace1, topic1)
+    aws_manager.create_topic(random_subject, namespace1, topic2)
+    aws_manager.create_topic(random_subject, namespace2, topic1)
+
+    # List namespaces
+    result = aws_manager.list_namespaces(random_subject)
+    print(f'  Result: {result}')
+
+    # Assert on result
+    assert isinstance(result, dict)
+    assert result['status'] == 'success'
+    assert random_subject in result['message']
+    assert 'namespaces' in result
+    assert isinstance(result['namespaces'], dict)
+
+    # Verify namespaces and topics
+    namespaces = result['namespaces']
+    assert namespace1 in namespaces
+    assert namespace2 in namespaces
+    assert topic1 in namespaces[namespace1]
+    assert topic2 in namespaces[namespace1]
+    assert topic1 in namespaces[namespace2]
+    assert len(namespaces[namespace1]) == 2  # noqa: PLR2004
+    assert len(namespaces[namespace2]) == 1
+
+    # Cleanup
+    with contextlib.suppress(Exception):
+        aws_manager.delete_topic(random_subject, namespace1, topic1)
+        aws_manager.delete_topic(random_subject, namespace1, topic2)
+        aws_manager.delete_topic(random_subject, namespace2, topic1)
+        aws_manager.delete_namespace(random_subject, namespace1)
+        aws_manager.delete_namespace(random_subject, namespace2)
+        aws_manager.delete_user(random_subject)
+
+
+@pytest.mark.integration
+def test_list_namespaces_empty(
+    aws_manager: AWSManagerV3,
+    random_subject: str,
+) -> None:
+    """Test list_namespaces when user has no namespaces."""
+    print(
+        f'\n[test_list_namespaces_empty] Testing with user: {random_subject}',
+    )
+    # Create user but no namespaces
+    aws_manager.create_user(random_subject)
+
+    # List namespaces
+    result = aws_manager.list_namespaces(random_subject)
+    print(f'  Result: {result}')
+
+    # Assert on result
+    assert isinstance(result, dict)
+    assert result['status'] == 'success'
+    assert 'No namespaces found' in result['message']
+    assert result['namespaces'] == {}
+
+    # Cleanup
+    with contextlib.suppress(Exception):
+        aws_manager.delete_user(random_subject)
+
+
+@pytest.mark.integration
+def test_list_namespaces_with_empty_namespace(
+    aws_manager: AWSManagerV3,
+    random_subject: str,
+) -> None:
+    """Test list_namespaces when namespace has no topics."""
+    print(
+        f'\n[test_list_namespaces_with_empty_namespace] '
+        f'Testing with user: {random_subject}',
+    )
+    # Create user and namespace but no topics
+    aws_manager.create_user(random_subject)
+    namespace = f'test-ns-empty-{random_subject[-8:]}'
+    aws_manager.create_namespace(random_subject, namespace)
+
+    # List namespaces
+    result = aws_manager.list_namespaces(random_subject)
+    print(f'  Result: {result}')
+
+    # Assert on result
+    assert isinstance(result, dict)
+    assert result['status'] == 'success'
+    assert namespace in result['namespaces']
+    assert result['namespaces'][namespace] == []
+
+    # Cleanup
+    with contextlib.suppress(Exception):
         aws_manager.delete_namespace(random_subject, namespace)
         aws_manager.delete_user(random_subject)
