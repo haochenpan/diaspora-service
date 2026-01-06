@@ -339,6 +339,10 @@ def test_delete_user_with_access_keys(
     with pytest.raises(aws_manager.iam.exceptions.NoSuchEntityException):
         aws_manager.iam.get_user(UserName=random_subject)
 
+    # Cleanup
+    with contextlib.suppress(Exception):
+        aws_manager.delete_user(random_subject)
+
 
 def test_delete_user_idempotent(
     aws_manager: AWSManagerV3,
@@ -377,6 +381,10 @@ def test_delete_user_idempotent(
     # Verify user is still deleted
     with pytest.raises(aws_manager.iam.exceptions.NoSuchEntityException):
         aws_manager.iam.get_user(UserName=random_subject)
+
+    # Cleanup
+    with contextlib.suppress(Exception):
+        aws_manager.delete_user(random_subject)
 
 
 def test_create_user_existing_policy(
@@ -962,8 +970,11 @@ def test_create_namespace_already_taken(
     assert result1['status'] == 'success'
 
     # Second user tries to create same namespace (should fail)
-    with pytest.raises(ValueError, match='already taken'):
-        aws_manager.create_namespace(subject2, namespace)
+    result = aws_manager.create_namespace(subject2, namespace)
+    assert result['status'] == 'failure'
+    assert 'already taken' in result['message']
+    assert 'namespace' in result
+    assert result['namespace'] == namespace
 
     # Cleanup
     with contextlib.suppress(Exception):
@@ -985,21 +996,25 @@ def test_create_namespace_invalid_name(
     # Create user first
     aws_manager.create_user(random_subject)
 
-    # Test various invalid names
+    # Test various invalid names with expected error messages
     invalid_names = [
-        'ab',  # Too short
-        'a' * 33,  # Too long
-        'test-namespace!',  # Invalid character
-        'test namespace',  # Space not allowed
-        '-test-namespace',  # Starts with hyphen
-        'test-namespace-',  # Ends with hyphen
-        '_test-namespace',  # Starts with underscore
-        'test-namespace_',  # Ends with underscore
+        ('ab', 'must be between'),  # Too short
+        ('a' * 33, 'must be between'),  # Too long
+        ('test-namespace!', 'can only contain letters'),  # Invalid character
+        ('test namespace', 'can only contain letters'),  # Space not allowed
+        ('-test-namespace', 'cannot start or end'),  # Starts with hyphen
+        ('test-namespace-', 'cannot start or end'),  # Ends with hyphen
+        ('_test-namespace', 'cannot start or end'),  # Starts with underscore
+        ('test-namespace_', 'cannot start or end'),  # Ends with underscore
     ]
 
-    for invalid_name in invalid_names:
-        with pytest.raises(ValueError, match='Namespace name'):
-            aws_manager.create_namespace(random_subject, invalid_name)
+    for invalid_name, expected_msg in invalid_names:
+        result = aws_manager.create_namespace(random_subject, invalid_name)
+        assert result['status'] == 'failure'
+        assert 'message' in result
+        assert expected_msg in result['message']
+        assert 'namespace' in result
+        assert result['namespace'] == invalid_name
 
     # Cleanup
     with contextlib.suppress(Exception):
@@ -1305,6 +1320,7 @@ def test_create_topic(
     # Verify topic ARN is in IAM policy
     policy_arn = aws_manager.iam_policy_arn_prefix + random_subject
     policy = aws_manager._get_iam_policy(policy_arn)
+    assert policy is not None
     topic_arn = f'{aws_manager.topic_arn_prefix}{namespace}.{topic}'
     assert topic_arn in policy['Statement'][0]['Resource']
 
@@ -1371,25 +1387,31 @@ def test_create_topic_invalid_name(
     namespace = f'test-ns-{random_subject[-8:]}'
     aws_manager.create_namespace(random_subject, namespace)
 
-    # Test various invalid names
+    # Test various invalid names with expected error messages
     invalid_names = [
-        'ab',  # Too short
-        'a' * 33,  # Too long
-        'test-topic!',  # Invalid character
-        'test topic',  # Space not allowed
-        '-test-topic',  # Starts with hyphen
-        'test-topic-',  # Ends with hyphen
-        '_test-topic',  # Starts with underscore
-        'test-topic_',  # Ends with underscore
+        ('ab', 'must be between'),  # Too short
+        ('a' * 33, 'must be between'),  # Too long
+        ('test-topic!', 'can only contain letters'),  # Invalid character
+        ('test topic', 'can only contain letters'),  # Space not allowed
+        ('-test-topic', 'cannot start or end'),  # Starts with hyphen
+        ('test-topic-', 'cannot start or end'),  # Ends with hyphen
+        ('_test-topic', 'cannot start or end'),  # Starts with underscore
+        ('test-topic_', 'cannot start or end'),  # Ends with underscore
     ]
 
-    for invalid_name in invalid_names:
-        with pytest.raises(ValueError, match='Namespace name'):
-            aws_manager.create_topic(
-                random_subject,
-                namespace,
-                invalid_name,
-            )
+    for invalid_name, expected_msg in invalid_names:
+        result = aws_manager.create_topic(
+            random_subject,
+            namespace,
+            invalid_name,
+        )
+        assert result['status'] == 'failure'
+        assert 'message' in result
+        assert expected_msg in result['message']
+        assert 'namespace' in result
+        assert result['namespace'] == namespace
+        assert 'topic' in result
+        assert result['topic'] == invalid_name
 
     # Cleanup
     with contextlib.suppress(Exception):
@@ -1424,8 +1446,11 @@ def test_create_topic_namespace_not_owned(
     aws_manager.create_namespace(subject2, other_namespace)
 
     # Second user tries to create topic in first user's namespace (should fail)
-    with pytest.raises(ValueError, match='not found'):
-        aws_manager.create_topic(subject2, namespace, topic)
+    result = aws_manager.create_topic(subject2, namespace, topic)
+    assert result['status'] == 'failure'
+    assert 'not found' in result['message']
+    assert result['namespace'] == namespace
+    assert result['topic'] == topic
 
     # Cleanup
     with contextlib.suppress(Exception):
@@ -1452,8 +1477,11 @@ def test_create_topic_user_no_namespaces(
     topic = 'test-topic'
 
     # Try to create topic (should fail)
-    with pytest.raises(ValueError, match='No namespaces found'):
-        aws_manager.create_topic(random_subject, namespace, topic)
+    result = aws_manager.create_topic(random_subject, namespace, topic)
+    assert result['status'] == 'failure'
+    assert 'No namespaces found' in result['message']
+    assert result['namespace'] == namespace
+    assert result['topic'] == topic
 
     # Cleanup
     with contextlib.suppress(Exception):
@@ -1497,6 +1525,7 @@ def test_delete_topic(
     # Verify topic ARN removed from IAM policy
     policy_arn = aws_manager.iam_policy_arn_prefix + random_subject
     policy = aws_manager._get_iam_policy(policy_arn)
+    assert policy is not None
     topic_arn = f'{aws_manager.topic_arn_prefix}{namespace}.{topic}'
     assert topic_arn not in policy['Statement'][0]['Resource']
 
@@ -1876,6 +1905,199 @@ def test_create_topic_kafka_no_endpoint(
     # Verify topic was added to namespace record
     topics = aws_manager._get_namespace_topics(namespace)
     assert topic in topics
+
+    # Restore original iam_public
+    aws_manager.iam_public = original_iam_public
+
+    # Cleanup
+    with contextlib.suppress(Exception):
+        aws_manager.delete_topic(random_subject, namespace, topic)
+        aws_manager.delete_namespace(random_subject, namespace)
+        aws_manager.delete_user(random_subject)
+
+
+# ============================================================================
+# Recreate Topic Tests
+# ============================================================================
+
+
+@pytest.mark.integration
+def test_recreate_topic(
+    aws_manager: AWSManagerV3,
+    random_subject: str,
+) -> None:
+    """Test recreate_topic with real AWS services."""
+    print(
+        f'\n[test_recreate_topic] Testing with user: {random_subject}',
+    )
+    # Create user, namespace, and topic first
+    aws_manager.create_user(random_subject)
+    namespace = f'test-ns-{random_subject[-8:]}'
+    aws_manager.create_namespace(random_subject, namespace)
+    topic = 'test-topic-recreate'
+    aws_manager.create_topic(random_subject, namespace, topic)
+
+    # Verify topic exists
+    topics = aws_manager._get_namespace_topics(namespace)
+    assert topic in topics
+
+    # Recreate topic
+    result = aws_manager.recreate_topic(random_subject, namespace, topic)
+    print(f'  Recreate result: {result}')
+
+    # Assert on result
+    assert isinstance(result, dict)
+    assert result['status'] == 'success'
+    assert 'recreated' in result['message']
+    assert result['namespace'] == namespace
+    assert result['topic'] == topic
+
+    # Verify topic still exists in namespace
+    topics_after = aws_manager._get_namespace_topics(namespace)
+    assert topic in topics_after
+
+    # Cleanup
+    with contextlib.suppress(Exception):
+        aws_manager.delete_topic(random_subject, namespace, topic)
+        aws_manager.delete_namespace(random_subject, namespace)
+        aws_manager.delete_user(random_subject)
+
+
+@pytest.mark.integration
+def test_recreate_topic_no_namespaces(
+    aws_manager: AWSManagerV3,
+    random_subject: str,
+) -> None:
+    """Test recreate_topic when user has no namespaces."""
+    print(
+        f'\n[test_recreate_topic_no_namespaces] '
+        f'Testing with user: {random_subject}',
+    )
+    # Create user but no namespace
+    aws_manager.create_user(random_subject)
+
+    namespace = f'test-ns-{random_subject[-8:]}'
+    topic = 'test-topic'
+
+    # Try to recreate topic (should fail)
+    result = aws_manager.recreate_topic(random_subject, namespace, topic)
+    assert result['status'] == 'failure'
+    assert 'No namespaces found' in result['message']
+    assert result['namespace'] == namespace
+    assert result['topic'] == topic
+
+    # Cleanup
+    with contextlib.suppress(Exception):
+        aws_manager.delete_user(random_subject)
+
+
+@pytest.mark.integration
+def test_recreate_topic_namespace_not_owned(
+    aws_manager: AWSManagerV3,
+    random_subject: str,
+) -> None:
+    """Test recreate_topic fails when namespace doesn't belong to user."""
+    print(
+        f'\n[test_recreate_topic_namespace_not_owned] '
+        f'Testing with user: {random_subject}',
+    )
+    # Create two users
+    subject1 = random_subject
+    subject2 = f'{random_subject}-2'
+    aws_manager.create_user(subject1)
+    aws_manager.create_user(subject2)
+
+    namespace = f'test-ns-{random_subject[-8:]}'
+    topic = 'test-topic-789'
+
+    # First user creates namespace and topic
+    aws_manager.create_namespace(subject1, namespace)
+    aws_manager.create_topic(subject1, namespace, topic)
+
+    # Second user creates their own namespace (so they have namespaces)
+    other_namespace = f'test-ns-other-{random_subject[-8:]}'
+    aws_manager.create_namespace(subject2, other_namespace)
+
+    # Second user tries to recreate topic in first user's namespace
+    # (should fail)
+    result = aws_manager.recreate_topic(subject2, namespace, topic)
+    assert result['status'] == 'failure'
+    assert 'not found' in result['message']
+    assert result['namespace'] == namespace
+    assert result['topic'] == topic
+
+    # Cleanup
+    with contextlib.suppress(Exception):
+        aws_manager.delete_topic(subject1, namespace, topic)
+        aws_manager.delete_namespace(subject1, namespace)
+        aws_manager.delete_namespace(subject2, other_namespace)
+        aws_manager.delete_user(subject1)
+        aws_manager.delete_user(subject2)
+
+
+@pytest.mark.integration
+def test_recreate_topic_not_found(
+    aws_manager: AWSManagerV3,
+    random_subject: str,
+) -> None:
+    """Test recreate_topic fails when topic doesn't exist in namespace."""
+    print(
+        f'\n[test_recreate_topic_not_found] '
+        f'Testing with user: {random_subject}',
+    )
+    # Create user and namespace but no topic
+    aws_manager.create_user(random_subject)
+    namespace = f'test-ns-{random_subject[-8:]}'
+    aws_manager.create_namespace(random_subject, namespace)
+
+    topic = 'non-existent-topic'
+
+    # Try to recreate non-existent topic (should fail)
+    result = aws_manager.recreate_topic(random_subject, namespace, topic)
+    assert result['status'] == 'failure'
+    assert 'not found' in result['message']
+    assert result['namespace'] == namespace
+    assert result['topic'] == topic
+
+    # Cleanup
+    with contextlib.suppress(Exception):
+        aws_manager.delete_namespace(random_subject, namespace)
+        aws_manager.delete_user(random_subject)
+
+
+@pytest.mark.integration
+def test_recreate_topic_kafka_no_endpoint(
+    aws_manager: AWSManagerV3,
+    random_subject: str,
+) -> None:
+    """Test recreate_topic when iam_public is None (no Kafka endpoint)."""
+    print(
+        f'\n[test_recreate_topic_kafka_no_endpoint] '
+        f'Testing with user: {random_subject}',
+    )
+    # Create user, namespace, and topic first
+    aws_manager.create_user(random_subject)
+    namespace = f'test-ns-{random_subject[-8:]}'
+    aws_manager.create_namespace(random_subject, namespace)
+    topic = 'test-topic-recreate'
+    aws_manager.create_topic(random_subject, namespace, topic)
+
+    # Save original iam_public
+    original_iam_public = aws_manager.iam_public
+
+    # Set iam_public to None
+    aws_manager.iam_public = None
+
+    # Try to recreate topic (should fail)
+    result = aws_manager.recreate_topic(random_subject, namespace, topic)
+    print(f'  Result: {result}')
+
+    # Should fail when Kafka endpoint is not configured
+    assert isinstance(result, dict)
+    assert result['status'] == 'failure'
+    assert 'Kafka endpoint not configured' in result['message']
+    assert result['namespace'] == namespace
+    assert result['topic'] == topic
 
     # Restore original iam_public
     aws_manager.iam_public = original_iam_public

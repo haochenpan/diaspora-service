@@ -484,7 +484,10 @@ class AWSManagerV3:
                         VersionId=ver['VersionId'],
                     )
 
-    def _validate_namespace_name(self, namespace: str) -> None:
+    def _validate_namespace_name(
+        self,
+        namespace: str,
+    ) -> dict[str, Any] | None:
         """Validate namespace name according to rules.
 
         Rules:
@@ -492,25 +495,37 @@ class AWSManagerV3:
         - Only lowercase, uppercase, numbers, dash, underscore
         - Cannot start or end with hyphen or underscore
 
-        Raises:
-            ValueError: If namespace name is invalid
+        Returns:
+            None if valid, or dict with 'status': 'failure' and 'message'
+            if invalid
         """
         if not (
             MIN_NAMESPACE_LENGTH <= len(namespace) <= MAX_NAMESPACE_LENGTH
         ):
-            raise ValueError(
-                f'Namespace name must be between {MIN_NAMESPACE_LENGTH} '
-                f'and {MAX_NAMESPACE_LENGTH} characters',
-            )
+            return {
+                'status': 'failure',
+                'message': (
+                    f'Namespace name must be between {MIN_NAMESPACE_LENGTH} '
+                    f'and {MAX_NAMESPACE_LENGTH} characters'
+                ),
+            }
         if not re.match(r'^[a-zA-Z0-9_-]+$', namespace):
-            raise ValueError(
-                'Namespace name can only contain letters, numbers, '
-                'dash, and underscore',
-            )
+            return {
+                'status': 'failure',
+                'message': (
+                    'Namespace name can only contain letters, numbers, '
+                    'dash, and underscore'
+                ),
+            }
         if namespace[0] in ('-', '_') or namespace[-1] in ('-', '_'):
-            raise ValueError(
-                'Namespace name cannot start or end with hyphen or underscore',
-            )
+            return {
+                'status': 'failure',
+                'message': (
+                    'Namespace name cannot start or end with hyphen or '
+                    'underscore'
+                ),
+            }
+        return None
 
     def _create_users_table(self) -> None:
         """Create DynamoDB table for user records if it doesn't exist."""
@@ -662,14 +677,15 @@ class AWSManagerV3:
             namespace: Namespace name to create
 
         Returns:
-            dict with status, message, and namespaces list
-
-        Raises:
-            ValueError: If namespace name is invalid or already taken
+            dict with status, message, and namespaces list (on success)
+            or status 'failure' with message (if namespace already taken)
         """
         with self.lock:
             # Validate namespace name
-            self._validate_namespace_name(namespace)
+            validation_error = self._validate_namespace_name(namespace)
+            if validation_error:
+                validation_error['namespace'] = namespace
+                return validation_error
 
             # Get global namespaces registry
             global_namespaces = self._get_global_namespaces()
@@ -683,7 +699,11 @@ class AWSManagerV3:
             # Check if namespace is already taken by another user
             if namespace in global_namespaces:
                 if namespace not in existing_namespaces:
-                    raise ValueError(f'Namespace already taken: {namespace}')
+                    return {
+                        'status': 'failure',
+                        'message': f'Namespace already taken: {namespace}',
+                        'namespace': namespace,
+                    }
                 # Namespace already owned by this user, return existing list
                 return {
                     'status': 'success',
@@ -772,7 +792,10 @@ class AWSManagerV3:
                 'namespaces': remaining_namespaces,
             }
 
-    def _get_iam_policy(self, policy_arn: str) -> dict[str, Any]:
+    def _get_iam_policy(
+        self,
+        policy_arn: str,
+    ) -> dict[str, Any] | None:
         """Get IAM policy document, deleting non-default versions.
 
         This method does NOT use a lock - caller must hold lock.
@@ -781,10 +804,7 @@ class AWSManagerV3:
             policy_arn: IAM policy ARN
 
         Returns:
-            Policy document dictionary
-
-        Raises:
-            ClientError: If policy doesn't exist
+            Policy document dictionary, or None if policy not found
         """
         with contextlib.suppress(
             self.iam.exceptions.NoSuchEntityException,
@@ -810,7 +830,7 @@ class AWSManagerV3:
                         VersionId=ver['VersionId'],
                     )['PolicyVersion']['Document']
             return policy
-        raise ValueError(f'Policy {policy_arn} not found')
+        return None
 
     def _add_topic_to_policy(
         self,
@@ -832,6 +852,10 @@ class AWSManagerV3:
         """
         policy_arn = self.iam_policy_arn_prefix + subject
         policy = self._get_iam_policy(policy_arn)
+        if policy is None:
+            # Policy doesn't exist - this shouldn't happen in normal flow
+            # but handle gracefully
+            return False
         resources = policy['Statement'][0]['Resource']
         topic_arn = f'{self.topic_arn_prefix}{namespace}.{topic}'
         if topic_arn in resources:
@@ -865,6 +889,10 @@ class AWSManagerV3:
         """
         policy_arn = self.iam_policy_arn_prefix + subject
         policy = self._get_iam_policy(policy_arn)
+        if policy is None:
+            # Policy doesn't exist - this shouldn't happen in normal flow
+            # but handle gracefully
+            return False
         resources = policy['Statement'][0]['Resource']
         topic_arn = f'{self.topic_arn_prefix}{namespace}.{topic}'
         if topic_arn not in resources:
@@ -1098,7 +1126,7 @@ class AWSManagerV3:
             ),
         }
 
-    def create_topic(
+    def create_topic(  # noqa: PLR0911
         self,
         subject: str,
         namespace: str,
@@ -1112,23 +1140,36 @@ class AWSManagerV3:
             topic: Topic name
 
         Returns:
-            dict with status, message, and topic info
-
-        Raises:
-            ValueError: If validation fails or namespace not owned by user
+            dict with status, message, and topic info (on success)
+            or status 'failure' with message (if validation fails or
+            namespace not owned by user)
         """
         with self.lock:
             # Validate topic name (same rules as namespace)
-            self._validate_namespace_name(topic)
+            validation_error = self._validate_namespace_name(topic)
+            if validation_error:
+                validation_error['namespace'] = namespace
+                validation_error['topic'] = topic
+                return validation_error
 
             # Verify namespace belongs to user
             user_record = self._get_user_record(subject)
             if not user_record or 'namespaces' not in user_record:
-                raise ValueError(f'No namespaces found for {subject}')
+                return {
+                    'status': 'failure',
+                    'message': f'No namespaces found for {subject}',
+                    'namespace': namespace,
+                    'topic': topic,
+                }
             if namespace not in user_record['namespaces']:
-                raise ValueError(
-                    f'Namespace {namespace} not found for {subject}',
-                )
+                return {
+                    'status': 'failure',
+                    'message': (
+                        f'Namespace {namespace} not found for {subject}'
+                    ),
+                    'namespace': namespace,
+                    'topic': topic,
+                }
 
             # Get existing topics for namespace
             existing_topics = self._get_namespace_topics(namespace)
@@ -1319,3 +1360,122 @@ class AWSManagerV3:
                 'message': f'Namespaces retrieved for {subject}',
                 'namespaces': result,
             }
+
+    def recreate_topic(  # noqa: PLR0911
+        self,
+        subject: str,
+        namespace: str,
+        topic: str,
+    ) -> dict[str, Any]:
+        """Recreate a topic by deleting and recreating it via KafkaAdminClient.
+
+        Authenticates the client with namespace and topic access, then:
+        1. Verifies the subject owns the namespace
+        2. Verifies the topic exists in the namespace
+        3. Creates a KafkaAdminClient
+        4. Deletes the Kafka topic
+        5. Recreates the Kafka topic
+
+        Args:
+            subject: User subject ID
+            namespace: Namespace name
+            topic: Topic name
+
+        Returns:
+            dict with status, message, namespace, and topic info
+        """
+        with self.lock:
+            # Verify namespace belongs to user
+            user_record = self._get_user_record(subject)
+            if not user_record or 'namespaces' not in user_record:
+                return {
+                    'status': 'failure',
+                    'message': f'No namespaces found for {subject}',
+                    'namespace': namespace,
+                    'topic': topic,
+                }
+            if namespace not in user_record['namespaces']:
+                return {
+                    'status': 'failure',
+                    'message': (
+                        f'Namespace {namespace} not found for {subject}'
+                    ),
+                    'namespace': namespace,
+                    'topic': topic,
+                }
+
+            # Verify topic exists in namespace
+            namespace_topics = self._get_namespace_topics(namespace)
+            if topic not in namespace_topics:
+                return {
+                    'status': 'failure',
+                    'message': (
+                        f'Topic {topic} not found in namespace {namespace} '
+                        f'for {subject}'
+                    ),
+                    'namespace': namespace,
+                    'topic': topic,
+                }
+
+            # Check if Kafka endpoint is configured
+            if not self.iam_public:
+                return {
+                    'status': 'failure',
+                    'message': 'Kafka endpoint not configured',
+                    'namespace': namespace,
+                    'topic': topic,
+                }
+
+            kafka_topic_name = f'{namespace}.{topic}'
+
+            try:
+                # Create KafkaAdminClient
+                admin = KafkaAdminClient(
+                    bootstrap_servers=self.iam_public,
+                    security_protocol='SASL_SSL',
+                    sasl_mechanism='OAUTHBEARER',
+                    sasl_oauth_token_provider=MSKTokenProvider(self.region),
+                )
+
+                # Delete the topic
+                with contextlib.suppress(UnknownTopicOrPartitionError):
+                    admin.delete_topics(topics=[kafka_topic_name])
+
+                # Recreate the topic
+                topic_list = [
+                    NewTopic(
+                        name=kafka_topic_name,
+                        num_partitions=1,
+                        replication_factor=2,
+                    ),
+                ]
+                admin.create_topics(new_topics=topic_list)
+
+                return {
+                    'status': 'success',
+                    'message': (
+                        f'Topic {topic} recreated in namespace {namespace}'
+                    ),
+                    'namespace': namespace,
+                    'topic': topic,
+                }
+            except TopicAlreadyExistsError:
+                # Topic was recreated successfully
+                return {
+                    'status': 'success',
+                    'message': (
+                        f'Topic {topic} recreated in namespace {namespace}'
+                    ),
+                    'namespace': namespace,
+                    'topic': topic,
+                }
+            except Exception as e:
+                return {
+                    'status': 'failure',
+                    'message': (
+                        f'Failed to recreate topic {topic} in namespace '
+                        f'{namespace}: {e!s}'
+                    ),
+                    'namespace': namespace,
+                    'topic': topic,
+                }
