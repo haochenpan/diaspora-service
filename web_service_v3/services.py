@@ -16,6 +16,7 @@ from kafka.errors import UnknownTopicOrPartitionError
 
 from web_service_v3.responses import create_failure_result
 from web_service_v3.responses import create_success_result
+from web_service_v3.utils import MSKTokenProvider
 
 # Namespace validation constants
 MIN_NAMESPACE_LENGTH = 3
@@ -753,8 +754,6 @@ class KafkaService:
             # No Kafka endpoint configured, skip topic creation
             return None
 
-        from web_service_v3.utils import MSKTokenProvider
-
         kafka_topic_name = f'{namespace}.{topic}'
         max_retries = 3
         last_exception: Exception | None = None
@@ -816,8 +815,6 @@ class KafkaService:
         if not self.bootstrap_servers:
             # No Kafka endpoint configured, skip topic deletion
             return None
-
-        from web_service_v3.utils import MSKTokenProvider
 
         kafka_topic_name = f'{namespace}.{topic}'
         max_retries = 3
