@@ -12,7 +12,20 @@ import pytest
 from _pytest.monkeypatch import MonkeyPatch
 
 from web_service.utils import EnvironmentChecker
+from web_service_v3.services import MAX_NAMESPACE_LENGTH
 from web_service_v3.utils import AWSManagerV3
+
+# ============================================================================
+# Test Constants
+# ============================================================================
+
+# Default namespace length: 'ns-' (3 chars) + 12 chars = 15 total
+DEFAULT_NAMESPACE_LENGTH = 15
+# Retry constants
+MAX_RETRIES = 10
+INITIAL_ATTEMPT = 1
+TOTAL_ATTEMPTS_AFTER_MAX_RETRIES = INITIAL_ATTEMPT + MAX_RETRIES  # 11
+SECOND_RETRY_ATTEMPT = 2
 
 # ============================================================================
 # Environment Variable Tests
@@ -77,6 +90,111 @@ def random_subject() -> str:
     return f'test-subject-{os.urandom(8).hex()}'
 
 
+@pytest.fixture
+def cleanup_user(aws_manager: AWSManagerV3) -> Any:
+    """Fixture that provides cleanup function for test users."""
+    created_users: list[str] = []
+
+    def _cleanup(subject: str) -> None:
+        """Mark a user for cleanup."""
+        if subject not in created_users:
+            created_users.append(subject)
+
+    yield _cleanup
+
+    # Cleanup all created users
+    for subject in created_users:
+        with contextlib.suppress(Exception):
+            aws_manager.delete_user(subject)
+
+
+# ============================================================================
+# Test Helper Functions
+# ============================================================================
+
+
+def assert_user_exists(
+    aws_manager: AWSManagerV3,
+    subject: str,
+    should_exist: bool = True,
+) -> None:
+    """Helper to assert user existence in IAM."""
+    try:
+        user = aws_manager.iam_service.iam.get_user(UserName=subject)
+        if not should_exist:
+            pytest.fail(f'User {subject} should not exist but does')
+        assert user['User']['UserName'] == subject
+    except aws_manager.iam_service.iam.exceptions.NoSuchEntityException:
+        if should_exist:
+            pytest.fail(f'User {subject} should exist but does not')
+
+
+def assert_policy_exists(
+    aws_manager: AWSManagerV3,
+    subject: str,
+    should_exist: bool = True,
+) -> None:
+    """Helper to assert policy existence."""
+    policy_arn = (
+        f'arn:aws:iam::{aws_manager.account_id}:policy/msk-policy/{subject}'
+    )
+    try:
+        policy = aws_manager.iam_service.iam.get_policy(PolicyArn=policy_arn)
+        if not should_exist:
+            pytest.fail(f'Policy {policy_arn} should not exist but does')
+        assert policy['Policy']['PolicyName'] == subject
+    except aws_manager.iam_service.iam.exceptions.NoSuchEntityException:
+        if should_exist:
+            pytest.fail(f'Policy {policy_arn} should exist but does not')
+
+
+def assert_policy_attached(
+    aws_manager: AWSManagerV3,
+    subject: str,
+    should_be_attached: bool = True,
+) -> None:
+    """Helper to assert policy attachment."""
+    policy_arn = (
+        f'arn:aws:iam::{aws_manager.account_id}:policy/msk-policy/{subject}'
+    )
+    attached_policies = (
+        aws_manager.iam_service.iam.list_attached_user_policies(
+            UserName=subject,
+        )
+    )
+    is_attached = any(
+        p['PolicyArn'] == policy_arn
+        for p in attached_policies['AttachedPolicies']
+    )
+    if should_be_attached and not is_attached:
+        pytest.fail(f'Policy {policy_arn} should be attached but is not')
+    if not should_be_attached and is_attached:
+        pytest.fail(f'Policy {policy_arn} should not be attached but is')
+
+
+def assert_namespace_in_user_record(
+    aws_manager: AWSManagerV3,
+    subject: str,
+    namespace: str,
+    should_exist: bool = True,
+) -> None:
+    """Helper to assert namespace in user record."""
+    user_record = aws_manager.dynamodb_service.get_user_record(subject)
+    if should_exist:
+        assert user_record is not None, f'User record for {subject} not found'
+        assert 'namespaces' in user_record, (
+            f'User record for {subject} has no namespaces field'
+        )
+        assert namespace in user_record['namespaces'], (
+            f'Namespace {namespace} not found in user {subject} namespaces'
+        )
+    elif user_record and 'namespaces' in user_record:
+        assert namespace not in user_record['namespaces'], (
+            f'Namespace {namespace} should not be in user {subject} '
+            'namespaces but is'
+        )
+
+
 def test_create_user(
     aws_manager: AWSManagerV3,
     random_subject: str,
@@ -99,31 +217,16 @@ def test_create_user(
     assert 'namespace' in result
     namespace = result['namespace']
     assert namespace.startswith('ns-')
-    assert len(namespace) == 15  # 'ns-' + 12 chars
+    assert len(namespace) == DEFAULT_NAMESPACE_LENGTH
 
-    # Verify user was created by checking it exists
-    try:
-        user = aws_manager.iam.get_user(UserName=random_subject)
-        assert user['User']['UserName'] == random_subject
-    except aws_manager.iam.exceptions.NoSuchEntityException:
-        pytest.fail('User was not created')
+    # Verify user was created
+    assert_user_exists(aws_manager, random_subject)
 
     # Verify policy was created
-    policy_arn = (
-        f'arn:aws:iam::{aws_manager.account_id}:'
-        f'policy/msk-policy/{random_subject}'
-    )
-    try:
-        policy = aws_manager.iam.get_policy(PolicyArn=policy_arn)
-        assert policy['Policy']['PolicyName'] == random_subject
-    except aws_manager.iam.exceptions.NoSuchEntityException:
-        pytest.fail('Policy was not created')
+    assert_policy_exists(aws_manager, random_subject)
 
     # Verify namespace was created in DynamoDB
-    user_record = aws_manager._get_user_record(random_subject)
-    assert user_record is not None
-    assert 'namespaces' in user_record
-    assert namespace in user_record['namespaces']
+    assert_namespace_in_user_record(aws_manager, random_subject, namespace)
 
     # Cleanup: delete the user (this will also clean up namespace)
     with contextlib.suppress(Exception):
@@ -170,17 +273,17 @@ def test_create_user_idempotent(
     # Namespace should be the same (or could be different if first was taken)
     # Both should be valid namespaces
     assert namespace2.startswith('ns-')
-    assert len(namespace2) == 15  # 'ns-' + 12 chars
+    assert len(namespace2) == 15  # 'ns-' + 12 chars # noqa: PLR2004
 
     # Verify user still exists
     try:
-        user = aws_manager.iam.get_user(UserName=random_subject)
+        user = aws_manager.iam_service.iam.get_user(UserName=random_subject)
         assert user['User']['UserName'] == random_subject
-    except aws_manager.iam.exceptions.NoSuchEntityException:
+    except aws_manager.iam_service.iam.exceptions.NoSuchEntityException:
         pytest.fail('User was deleted after second create call')
 
     # Verify namespace exists in DynamoDB
-    user_record = aws_manager._get_user_record(random_subject)
+    user_record = aws_manager.dynamodb_service.get_user_record(random_subject)
     assert user_record is not None
     assert 'namespaces' in user_record
     # The namespace from result2 should be in the user's namespaces
@@ -208,8 +311,8 @@ def test_delete_user(
 
     # Verify user exists
     try:
-        aws_manager.iam.get_user(UserName=random_subject)
-    except aws_manager.iam.exceptions.NoSuchEntityException:
+        aws_manager.iam_service.iam.get_user(UserName=random_subject)
+    except aws_manager.iam_service.iam.exceptions.NoSuchEntityException:
         pytest.fail('User was not created before delete test')
 
     # Delete user should not raise an exception
@@ -225,16 +328,20 @@ def test_delete_user(
     assert delete_result['user_deleted'] == 'True'
 
     # Verify user was deleted
-    with pytest.raises(aws_manager.iam.exceptions.NoSuchEntityException):
-        aws_manager.iam.get_user(UserName=random_subject)
+    with pytest.raises(
+        aws_manager.iam_service.iam.exceptions.NoSuchEntityException,
+    ):
+        aws_manager.iam_service.iam.get_user(UserName=random_subject)
 
     # Verify policy was deleted
     policy_arn = (
         f'arn:aws:iam::{aws_manager.account_id}:'
         f'policy/msk-policy/{random_subject}'
     )
-    with pytest.raises(aws_manager.iam.exceptions.NoSuchEntityException):
-        aws_manager.iam.get_policy(PolicyArn=policy_arn)
+    with pytest.raises(
+        aws_manager.iam_service.iam.exceptions.NoSuchEntityException,
+    ):
+        aws_manager.iam_service.iam.get_policy(PolicyArn=policy_arn)
 
 
 def test_delete_user_not_found(
@@ -286,8 +393,8 @@ def test_create_and_delete_user_cycle(
 
     # Verify it exists
     try:
-        aws_manager.iam.get_user(UserName=random_subject)
-    except aws_manager.iam.exceptions.NoSuchEntityException:
+        aws_manager.iam_service.iam.get_user(UserName=random_subject)
+    except aws_manager.iam_service.iam.exceptions.NoSuchEntityException:
         pytest.fail('User was not created')
 
     # Delete user
@@ -303,8 +410,10 @@ def test_create_and_delete_user_cycle(
     assert delete_result['user_deleted'] == 'True'
 
     # Verify it's deleted
-    with pytest.raises(aws_manager.iam.exceptions.NoSuchEntityException):
-        aws_manager.iam.get_user(UserName=random_subject)
+    with pytest.raises(
+        aws_manager.iam_service.iam.exceptions.NoSuchEntityException,
+    ):
+        aws_manager.iam_service.iam.get_user(UserName=random_subject)
 
     # Create again should work
     create_result2 = aws_manager.create_user(random_subject)
@@ -320,8 +429,8 @@ def test_create_and_delete_user_cycle(
 
     # Verify it exists again
     try:
-        aws_manager.iam.get_user(UserName=random_subject)
-    except aws_manager.iam.exceptions.NoSuchEntityException:
+        aws_manager.iam_service.iam.get_user(UserName=random_subject)
+    except aws_manager.iam_service.iam.exceptions.NoSuchEntityException:
         pytest.fail('User was not created in second cycle')
 
     # Cleanup
@@ -343,12 +452,16 @@ def test_delete_user_with_access_keys(
     print(f'  Create result: {create_result}')
 
     # Create access keys for the user
-    key_response = aws_manager.iam.create_access_key(UserName=random_subject)
+    key_response = aws_manager.iam_service.iam.create_access_key(
+        UserName=random_subject,
+    )
     access_key_id = key_response['AccessKey']['AccessKeyId']
     print(f'  Created access key: {access_key_id}')
 
     # Verify access key exists
-    keys = aws_manager.iam.list_access_keys(UserName=random_subject)
+    keys = aws_manager.iam_service.iam.list_access_keys(
+        UserName=random_subject,
+    )
     assert len(keys['AccessKeyMetadata']) > 0
 
     # Delete user should delete access keys too
@@ -365,8 +478,10 @@ def test_delete_user_with_access_keys(
     assert delete_result['user_deleted'] == 'True'
 
     # Verify user was deleted
-    with pytest.raises(aws_manager.iam.exceptions.NoSuchEntityException):
-        aws_manager.iam.get_user(UserName=random_subject)
+    with pytest.raises(
+        aws_manager.iam_service.iam.exceptions.NoSuchEntityException,
+    ):
+        aws_manager.iam_service.iam.get_user(UserName=random_subject)
 
     # Cleanup
     with contextlib.suppress(Exception):
@@ -408,8 +523,10 @@ def test_delete_user_idempotent(
     assert delete_result2['user_deleted'] == 'False'
 
     # Verify user is still deleted
-    with pytest.raises(aws_manager.iam.exceptions.NoSuchEntityException):
-        aws_manager.iam.get_user(UserName=random_subject)
+    with pytest.raises(
+        aws_manager.iam_service.iam.exceptions.NoSuchEntityException,
+    ):
+        aws_manager.iam_service.iam.get_user(UserName=random_subject)
 
     # Cleanup
     with contextlib.suppress(Exception):
@@ -431,15 +548,15 @@ def test_create_user_existing_policy(
         f'policy/msk-policy/{random_subject}'
     )
     try:
-        aws_manager.iam.create_policy(
+        aws_manager.iam_service.iam.create_policy(
             PolicyName=random_subject,
             Path='/msk-policy/',
             PolicyDocument=json.dumps(
-                aws_manager.naming.iam_user_policy_v3(random_subject),
+                aws_manager.iam_service.generate_user_policy(random_subject),
             ),
         )
         print(f'  Created policy manually: {policy_arn}')
-    except aws_manager.iam.exceptions.EntityAlreadyExistsException:
+    except aws_manager.iam_service.iam.exceptions.EntityAlreadyExistsException:
         pass  # Policy might already exist
 
     # Now create user - should attach existing policy
@@ -458,7 +575,7 @@ def test_create_user_existing_policy(
     assert 'namespace' in result
     namespace = result['namespace']
     assert namespace.startswith('ns-')
-    assert len(namespace) == 15  # 'ns-' + 12 chars
+    assert len(namespace) == DEFAULT_NAMESPACE_LENGTH
 
     # Cleanup
     with contextlib.suppress(Exception):
@@ -484,12 +601,12 @@ def test_delete_user_detached_policy(
         f'policy/msk-policy/{random_subject}'
     )
     try:
-        aws_manager.iam.detach_user_policy(
+        aws_manager.iam_service.iam.detach_user_policy(
             UserName=random_subject,
             PolicyArn=policy_arn,
         )
         print('  Detached policy manually')
-    except aws_manager.iam.exceptions.NoSuchEntityException:
+    except aws_manager.iam_service.iam.exceptions.NoSuchEntityException:
         pass
 
     # Delete user should still work
@@ -505,8 +622,10 @@ def test_delete_user_detached_policy(
     assert delete_result['user_deleted'] == 'True'
 
     # Verify user was deleted
-    with pytest.raises(aws_manager.iam.exceptions.NoSuchEntityException):
-        aws_manager.iam.get_user(UserName=random_subject)
+    with pytest.raises(
+        aws_manager.iam_service.iam.exceptions.NoSuchEntityException,
+    ):
+        aws_manager.iam_service.iam.get_user(UserName=random_subject)
 
 
 # ============================================================================
@@ -538,31 +657,13 @@ def test_ensure_user_exists_new_user(
     assert result['policy_attached'] is True
 
     # Verify user exists
-    try:
-        user = aws_manager.iam.get_user(UserName=random_subject)
-        assert user['User']['UserName'] == random_subject
-    except aws_manager.iam.exceptions.NoSuchEntityException:
-        pytest.fail('User was not created')
+    assert_user_exists(aws_manager, random_subject)
 
     # Verify policy exists
-    policy_arn = (
-        f'arn:aws:iam::{aws_manager.account_id}:'
-        f'policy/msk-policy/{random_subject}'
-    )
-    try:
-        policy = aws_manager.iam.get_policy(PolicyArn=policy_arn)
-        assert policy['Policy']['PolicyName'] == random_subject
-    except aws_manager.iam.exceptions.NoSuchEntityException:
-        pytest.fail('Policy was not created')
+    assert_policy_exists(aws_manager, random_subject)
 
     # Verify policy is attached
-    attached_policies = aws_manager.iam.list_attached_user_policies(
-        UserName=random_subject,
-    )
-    assert any(
-        p['PolicyArn'] == policy_arn
-        for p in attached_policies['AttachedPolicies']
-    )
+    assert_policy_attached(aws_manager, random_subject)
 
     # Cleanup
     with contextlib.suppress(Exception):
@@ -615,19 +716,19 @@ def test_ensure_user_exists_policy_already_exists(
     )
     # Detach policy first (though it's removed when user is deleted)
     with contextlib.suppress(Exception):
-        aws_manager.iam.detach_user_policy(
+        aws_manager.iam_service.iam.detach_user_policy(
             UserName=random_subject,
             PolicyArn=policy_arn,
         )
 
     with contextlib.suppress(Exception):
-        aws_manager.iam.delete_user(UserName=random_subject)
+        aws_manager.iam_service.iam.delete_user(UserName=random_subject)
 
     # Verify policy still exists
     try:
-        policy = aws_manager.iam.get_policy(PolicyArn=policy_arn)
+        policy = aws_manager.iam_service.iam.get_policy(PolicyArn=policy_arn)
         assert policy['Policy']['PolicyName'] == random_subject
-    except aws_manager.iam.exceptions.NoSuchEntityException:
+    except aws_manager.iam_service.iam.exceptions.NoSuchEntityException:
         pytest.fail('Policy was deleted when it should have been kept')
 
     # Call _ensure_user_exists (should create user, reuse policy, attach)
@@ -641,8 +742,10 @@ def test_ensure_user_exists_policy_already_exists(
     assert result['policy_attached'] is True
 
     # Verify policy is attached to new user
-    attached_policies = aws_manager.iam.list_attached_user_policies(
-        UserName=random_subject,
+    attached_policies = (
+        aws_manager.iam_service.iam.list_attached_user_policies(
+            UserName=random_subject,
+        )
     )
     assert any(
         p['PolicyArn'] == policy_arn
@@ -703,7 +806,7 @@ def test_ensure_user_exists_user_exists_policy_not_attached(
         f'policy/msk-policy/{random_subject}'
     )
     with contextlib.suppress(Exception):
-        aws_manager.iam.detach_user_policy(
+        aws_manager.iam_service.iam.detach_user_policy(
             UserName=random_subject,
             PolicyArn=policy_arn,
         )
@@ -719,8 +822,10 @@ def test_ensure_user_exists_user_exists_policy_not_attached(
     assert result['policy_attached'] is True
 
     # Verify policy is attached
-    attached_policies = aws_manager.iam.list_attached_user_policies(
-        UserName=random_subject,
+    attached_policies = (
+        aws_manager.iam_service.iam.list_attached_user_policies(
+            UserName=random_subject,
+        )
     )
     assert any(
         p['PolicyArn'] == policy_arn
@@ -773,8 +878,8 @@ def test_ensure_user_exists_idempotent_multiple_calls(
 
     # Verify everything still exists
     try:
-        aws_manager.iam.get_user(UserName=random_subject)
-    except aws_manager.iam.exceptions.NoSuchEntityException:
+        aws_manager.iam_service.iam.get_user(UserName=random_subject)
+    except aws_manager.iam_service.iam.exceptions.NoSuchEntityException:
         pytest.fail('User was deleted after multiple calls')
 
     # Cleanup
@@ -832,10 +937,12 @@ def test_ensure_namespace_exists_new_namespace(
 
     # Ensure namespace doesn't exist
     with contextlib.suppress(Exception):
-        user_record = aws_manager._get_user_record(random_subject)
+        user_record = aws_manager.dynamodb_service.get_user_record(
+            random_subject,
+        )
         if user_record and 'namespaces' in user_record:
             for ns in user_record['namespaces']:
-                aws_manager._delete_namespace_internal(random_subject, ns)
+                aws_manager.namespace_service.delete(random_subject, ns)
 
     # Call _ensure_namespace_exists
     with aws_manager.lock:
@@ -847,16 +954,16 @@ def test_ensure_namespace_exists_new_namespace(
     assert 'namespace' in result
     namespace = result['namespace']
     assert namespace.startswith('ns-')
-    assert len(namespace) == 15  # 'ns-' + 12 chars
+    assert len(namespace) == DEFAULT_NAMESPACE_LENGTH
 
     # Verify namespace exists in DynamoDB
-    user_record = aws_manager._get_user_record(random_subject)
+    user_record = aws_manager.dynamodb_service.get_user_record(random_subject)
     assert user_record is not None
     assert 'namespaces' in user_record
     assert namespace in user_record['namespaces']
 
     # Verify namespace is in global registry
-    global_namespaces = aws_manager._get_global_namespaces()
+    global_namespaces = aws_manager.dynamodb_service.get_global_namespaces()
     assert namespace in global_namespaces
 
     # Cleanup
@@ -887,7 +994,7 @@ def test_ensure_namespace_exists_namespace_already_exists(
     assert result['namespace'] == expected_namespace
 
     # Verify namespace still exists
-    user_record = aws_manager._get_user_record(random_subject)
+    user_record = aws_manager.dynamodb_service.get_user_record(random_subject)
     assert user_record is not None
     assert expected_namespace in user_record['namespaces']
 
@@ -913,9 +1020,7 @@ def test_ensure_namespace_exists_retry_with_random(
         aws_manager._ensure_user_exists(random_subject)
 
     # Calculate expected namespace based on subject
-    expected_namespace = (
-        f'ns-{random_subject.replace("-", "")[-12:]}'
-    )
+    expected_namespace = f'ns-{random_subject.replace("-", "")[-12:]}'
 
     # Create another user with a subject that would generate same namespace
     # (very unlikely but we can manually create the namespace)
@@ -927,7 +1032,7 @@ def test_ensure_namespace_exists_retry_with_random(
     with aws_manager.lock:
         # Create namespace for other user
         aws_manager._ensure_user_exists(other_subject)
-        aws_manager._create_namespace_internal(
+        aws_manager.namespace_service.create(
             other_subject,
             expected_namespace,
         )
@@ -943,12 +1048,12 @@ def test_ensure_namespace_exists_retry_with_random(
     assert 'namespace' in result
     namespace = result['namespace']
     assert namespace.startswith('ns-')
-    assert len(namespace) == 15
+    assert len(namespace) == 15  # noqa: PLR2004
     # Should be different from expected (since it was taken)
     assert namespace != expected_namespace
 
     # Verify namespace exists for original subject
-    user_record = aws_manager._get_user_record(random_subject)
+    user_record = aws_manager.dynamodb_service.get_user_record(random_subject)
     assert user_record is not None
     assert namespace in user_record['namespaces']
 
@@ -973,10 +1078,12 @@ def test_ensure_namespace_exists_idempotent_multiple_calls(
 
     # Ensure namespace doesn't exist
     with contextlib.suppress(Exception):
-        user_record = aws_manager._get_user_record(random_subject)
+        user_record = aws_manager.dynamodb_service.get_user_record(
+            random_subject,
+        )
         if user_record and 'namespaces' in user_record:
             for ns in user_record['namespaces']:
-                aws_manager._delete_namespace_internal(random_subject, ns)
+                aws_manager.namespace_service.delete(random_subject, ns)
 
     # First call - should create namespace
     with aws_manager.lock:
@@ -1001,7 +1108,7 @@ def test_ensure_namespace_exists_idempotent_multiple_calls(
     assert result3['namespace'] == namespace1
 
     # Verify namespace exists and appears only once
-    user_record = aws_manager._get_user_record(random_subject)
+    user_record = aws_manager.dynamodb_service.get_user_record(random_subject)
     assert user_record is not None
     assert user_record['namespaces'].count(namespace1) == 1
 
@@ -1122,11 +1229,8 @@ def test_ensure_namespace_exists_retry_loop_break_on_other_error(
     with aws_manager.lock:
         aws_manager._ensure_user_exists(random_subject)
 
-    # Mock _create_namespace_internal to return a non-taken error
-    original_method = aws_manager._create_namespace_internal
-
+    # Mock namespace_service.create to return a non-taken error
     def mock_create_namespace_validation_error(
-        self: AWSManagerV3,
         subject: str,
         namespace: str,
     ) -> dict[str, Any]:
@@ -1138,14 +1242,11 @@ def test_ensure_namespace_exists_retry_loop_break_on_other_error(
         }
 
     # Patch the method
-    aws_manager._create_namespace_internal = (
-        mock_create_namespace_validation_error.__get__(
-            aws_manager,
-            AWSManagerV3,
-        )
-    )
-
-    try:
+    with patch.object(
+        aws_manager.namespace_service,
+        'create',
+        side_effect=mock_create_namespace_validation_error,
+    ):
         # Call _ensure_namespace_exists - should break immediately
         with aws_manager.lock:
             result = aws_manager._ensure_namespace_exists(random_subject)
@@ -1155,9 +1256,6 @@ def test_ensure_namespace_exists_retry_loop_break_on_other_error(
         assert result['status'] == 'failure'
         assert 'message' in result
         assert 'already taken' not in result['message'].lower()
-    finally:
-        # Restore original method
-        aws_manager._create_namespace_internal = original_method
 
     # Cleanup
     with contextlib.suppress(Exception):
@@ -1180,10 +1278,7 @@ def test_ensure_namespace_exists_max_retries_exhausted(
     # Track how many times it's called
     call_count = {'count': 0}
 
-    original_method = aws_manager._create_namespace_internal
-
     def mock_create_namespace_always_taken(
-        self: AWSManagerV3,
         subject: str,
         namespace: str,
     ) -> dict[str, Any]:
@@ -1196,14 +1291,11 @@ def test_ensure_namespace_exists_max_retries_exhausted(
         }
 
     # Patch the method
-    aws_manager._create_namespace_internal = (
-        mock_create_namespace_always_taken.__get__(
-            aws_manager,
-            AWSManagerV3,
-        )
-    )
-
-    try:
+    with patch.object(
+        aws_manager.namespace_service,
+        'create',
+        side_effect=mock_create_namespace_always_taken,
+    ):
         # Call _ensure_namespace_exists
         with aws_manager.lock:
             result = aws_manager._ensure_namespace_exists(random_subject)
@@ -1213,10 +1305,7 @@ def test_ensure_namespace_exists_max_retries_exhausted(
         assert result['status'] == 'failure'
         assert 'message' in result
         # Should have been called 11 times (1 initial + 10 retries)
-        assert call_count['count'] == 11
-    finally:
-        # Restore original method
-        aws_manager._create_namespace_internal = original_method
+        assert call_count['count'] == TOTAL_ATTEMPTS_AFTER_MAX_RETRIES
 
     # Cleanup
     with contextlib.suppress(Exception):
@@ -1239,10 +1328,7 @@ def test_ensure_namespace_exists_succeeds_on_second_retry(
     # Track calls
     call_count = {'count': 0}
 
-    original_method = aws_manager._create_namespace_internal
-
     def mock_create_namespace_second_succeeds(
-        self: AWSManagerV3,
         subject: str,
         namespace: str,
     ) -> dict[str, Any]:
@@ -1262,14 +1348,11 @@ def test_ensure_namespace_exists_succeeds_on_second_retry(
         }
 
     # Patch the method
-    aws_manager._create_namespace_internal = (
-        mock_create_namespace_second_succeeds.__get__(
-            aws_manager,
-            AWSManagerV3,
-        )
-    )
-
-    try:
+    with patch.object(
+        aws_manager.namespace_service,
+        'create',
+        side_effect=mock_create_namespace_second_succeeds,
+    ):
         # Call _ensure_namespace_exists
         with aws_manager.lock:
             result = aws_manager._ensure_namespace_exists(random_subject)
@@ -1278,10 +1361,7 @@ def test_ensure_namespace_exists_succeeds_on_second_retry(
         assert isinstance(result, dict)
         assert result['status'] == 'success'
         assert 'namespace' in result
-        assert call_count['count'] == 2
-    finally:
-        # Restore original method
-        aws_manager._create_namespace_internal = original_method
+        assert call_count['count'] == SECOND_RETRY_ATTEMPT
 
     # Cleanup
     with contextlib.suppress(Exception):
@@ -1303,10 +1383,12 @@ def test_ensure_namespace_exists_concurrent_safety(
 
     # Ensure namespace doesn't exist
     with contextlib.suppress(Exception):
-        user_record = aws_manager._get_user_record(random_subject)
+        user_record = aws_manager.dynamodb_service.get_user_record(
+            random_subject,
+        )
         if user_record and 'namespaces' in user_record:
             for ns in user_record['namespaces']:
-                aws_manager._delete_namespace_internal(random_subject, ns)
+                aws_manager.namespace_service.delete(random_subject, ns)
 
     # Call multiple times while lock is held (simulating sequential calls)
     with aws_manager.lock:
@@ -1353,18 +1435,20 @@ def test_create_key(
 
     # Verify user was created
     try:
-        user = aws_manager.iam.get_user(UserName=random_subject)
+        user = aws_manager.iam_service.iam.get_user(UserName=random_subject)
         assert user['User']['UserName'] == random_subject
-    except aws_manager.iam.exceptions.NoSuchEntityException:
+    except aws_manager.iam_service.iam.exceptions.NoSuchEntityException:
         pytest.fail('User was not created')
 
     # Verify access key exists in IAM
-    keys = aws_manager.iam.list_access_keys(UserName=random_subject)
+    keys = aws_manager.iam_service.iam.list_access_keys(
+        UserName=random_subject,
+    )
     assert len(keys['AccessKeyMetadata']) == 1
     assert keys['AccessKeyMetadata'][0]['AccessKeyId'] == result['access_key']
 
     # Verify key is stored in DynamoDB
-    stored_key = aws_manager._get_key_from_dynamodb(random_subject)
+    stored_key = aws_manager.dynamodb_service.get_key(random_subject)
     assert stored_key is not None
     assert stored_key['access_key'] == result['access_key']
     assert stored_key['secret_key'] == result['secret_key']
@@ -1390,18 +1474,21 @@ def test_delete_user_with_policy_versions(
     create_result = aws_manager.create_user(random_subject)
     assert create_result['status'] == 'success'
 
-    # Get policy ARN (using same construction as in utils.py)
-    policy_arn = aws_manager.iam_policy_arn_prefix + random_subject
+    # Get policy ARN (using same construction as in services.py)
+    policy_arn = (
+        f'arn:aws:iam::{aws_manager.account_id}:'
+        f'policy/msk-policy/{random_subject}'
+    )
 
     # Create a new policy version (non-default)
     # First, get the current policy document
-    policy_versions = aws_manager.iam.list_policy_versions(
+    policy_versions = aws_manager.iam_service.iam.list_policy_versions(
         PolicyArn=policy_arn,
     )
     default_version = next(
         v for v in policy_versions['Versions'] if v['IsDefaultVersion']
     )
-    policy_doc = aws_manager.iam.get_policy_version(
+    policy_doc = aws_manager.iam_service.iam.get_policy_version(
         PolicyArn=policy_arn,
         VersionId=default_version['VersionId'],
     )['PolicyVersion']['Document']
@@ -1409,14 +1496,14 @@ def test_delete_user_with_policy_versions(
     # Create a new version with modified document
     modified_doc = policy_doc.copy()
     # Create new version (this will make the old one non-default)
-    aws_manager.iam.create_policy_version(
+    aws_manager.iam_service.iam.create_policy_version(
         PolicyArn=policy_arn,
         PolicyDocument=json.dumps(modified_doc),
         SetAsDefault=True,
     )
 
     # Verify we have multiple versions
-    policy_versions = aws_manager.iam.list_policy_versions(
+    policy_versions = aws_manager.iam_service.iam.list_policy_versions(
         PolicyArn=policy_arn,
     )
     non_default_versions = [
@@ -1433,8 +1520,10 @@ def test_delete_user_with_policy_versions(
     assert delete_result['policy_deleted'] == 'True'
 
     # Verify user is deleted
-    with pytest.raises(aws_manager.iam.exceptions.NoSuchEntityException):
-        aws_manager.iam.get_user(UserName=random_subject)
+    with pytest.raises(
+        aws_manager.iam_service.iam.exceptions.NoSuchEntityException,
+    ):
+        aws_manager.iam_service.iam.get_user(UserName=random_subject)
 
 
 def test_create_key_idempotent(
@@ -1476,7 +1565,9 @@ def test_create_key_idempotent(
     assert 'create_date' in result2
 
     # Verify only one key exists
-    keys = aws_manager.iam.list_access_keys(UserName=random_subject)
+    keys = aws_manager.iam_service.iam.list_access_keys(
+        UserName=random_subject,
+    )
     assert len(keys['AccessKeyMetadata']) == 1
     assert keys['AccessKeyMetadata'][0]['AccessKeyId'] == second_access_key
 
@@ -1500,13 +1591,15 @@ def test_get_key_without_create_date(
     aws_manager.create_user(random_subject)
 
     # Create access key in IAM
-    key_response = aws_manager.iam.create_access_key(UserName=random_subject)
+    key_response = aws_manager.iam_service.iam.create_access_key(
+        UserName=random_subject,
+    )
     old_access_key = key_response['AccessKey']['AccessKeyId']
     old_secret_key = key_response['AccessKey']['SecretAccessKey']
 
     # Manually store key in DynamoDB without create_date (simulating old entry)
-    aws_manager.dynamodb.put_item(
-        TableName=aws_manager.keys_table_name,
+    aws_manager.dynamodb_service.dynamodb.put_item(
+        TableName=aws_manager.dynamodb_service.keys_table_name,
         Item={
             'subject': {'S': random_subject},
             'access_key': {'S': old_access_key},
@@ -1547,7 +1640,7 @@ def test_get_key_stale_dynamodb_entry(
     old_access_key = create_result['access_key']
 
     # Delete key from IAM but leave it in DynamoDB (stale entry)
-    aws_manager.iam.delete_access_key(
+    aws_manager.iam_service.iam.delete_access_key(
         UserName=random_subject,
         AccessKeyId=old_access_key,
     )
@@ -1563,7 +1656,7 @@ def test_get_key_stale_dynamodb_entry(
     assert get_result.get('retrieved_from_dynamodb') is False
 
     # Verify new key is in DynamoDB
-    stored_key = aws_manager._get_key_from_dynamodb(random_subject)
+    stored_key = aws_manager.dynamodb_service.get_key(random_subject)
     assert stored_key is not None
     assert stored_key['access_key'] == get_result['access_key']
 
@@ -1587,7 +1680,9 @@ def test_delete_key_no_keys_exception(
     aws_manager.create_user(random_subject)
 
     # Verify no keys exist
-    keys = aws_manager.iam.list_access_keys(UserName=random_subject)
+    keys = aws_manager.iam_service.iam.list_access_keys(
+        UserName=random_subject,
+    )
     assert len(keys['AccessKeyMetadata']) == 0
 
     # Delete key should handle NoSuchEntityException gracefully
@@ -1620,12 +1715,14 @@ def test_delete_key_with_existing_keys(
     print(f'  Created key: {create_result.get("access_key", "N/A")[:20]}...')
 
     # Verify key exists in IAM
-    keys = aws_manager.iam.list_access_keys(UserName=random_subject)
+    keys = aws_manager.iam_service.iam.list_access_keys(
+        UserName=random_subject,
+    )
     assert len(keys['AccessKeyMetadata']) == 1
     access_key_id = keys['AccessKeyMetadata'][0]['AccessKeyId']
 
     # Verify key exists in DynamoDB
-    stored_key = aws_manager._get_key_from_dynamodb(random_subject)
+    stored_key = aws_manager.dynamodb_service.get_key(random_subject)
     assert stored_key is not None
     assert stored_key['access_key'] == access_key_id
 
@@ -1639,11 +1736,13 @@ def test_delete_key_with_existing_keys(
     assert delete_result['keys_deleted'] == 'True'
 
     # Verify key is deleted from IAM
-    keys_after = aws_manager.iam.list_access_keys(UserName=random_subject)
+    keys_after = aws_manager.iam_service.iam.list_access_keys(
+        UserName=random_subject,
+    )
     assert len(keys_after['AccessKeyMetadata']) == 0
 
     # Verify key is deleted from DynamoDB
-    stored_key_after = aws_manager._get_key_from_dynamodb(random_subject)
+    stored_key_after = aws_manager.dynamodb_service.get_key(random_subject)
     assert stored_key_after is None
 
     # Cleanup
@@ -1656,24 +1755,26 @@ def test_get_key_from_dynamodb_table_not_exists(
     aws_manager: AWSManagerV3,
     random_subject: str,
 ) -> None:
-    """Test _get_key_from_dynamodb handles ResourceNotFoundException."""
+    """Test dynamodb_service.get_key handles ResourceNotFoundException."""
     print(
         f'\n[test_get_key_from_dynamodb_table_not_exists] '
         f'Testing with user: {random_subject}',
     )
     # Delete test table if it exists
     try:
-        aws_manager.dynamodb.delete_table(
-            TableName=aws_manager.keys_table_name,
+        aws_manager.dynamodb_service.dynamodb.delete_table(
+            TableName=aws_manager.dynamodb_service.keys_table_name,
         )
-        aws_manager.dynamodb.get_waiter('table_not_exists').wait(
-            TableName=aws_manager.keys_table_name,
+        aws_manager.dynamodb_service.dynamodb.get_waiter(
+            'table_not_exists',
+        ).wait(
+            TableName=aws_manager.dynamodb_service.keys_table_name,
         )
     except Exception:
         pass  # Table doesn't exist, which is fine
 
     # Try to get key from non-existent table
-    result = aws_manager._get_key_from_dynamodb(random_subject)
+    result = aws_manager.dynamodb_service.get_key(random_subject)
     assert result is None
 
     # Cleanup - recreate table if needed
@@ -1695,12 +1796,14 @@ def test_create_keys_table_auto_creation(
     )
     # Delete test table if it exists (to test auto-creation)
     try:
-        aws_manager.dynamodb.delete_table(
-            TableName=aws_manager.keys_table_name,
+        aws_manager.dynamodb_service.dynamodb.delete_table(
+            TableName=aws_manager.dynamodb_service.keys_table_name,
         )
         # Wait for table to be deleted
-        aws_manager.dynamodb.get_waiter('table_not_exists').wait(
-            TableName=aws_manager.keys_table_name,
+        aws_manager.dynamodb_service.dynamodb.get_waiter(
+            'table_not_exists',
+        ).wait(
+            TableName=aws_manager.dynamodb_service.keys_table_name,
         )
     except Exception:
         pass  # Table doesn't exist, which is fine
@@ -1714,7 +1817,7 @@ def test_create_keys_table_auto_creation(
     assert result['status'] == 'success'
 
     # Verify table exists by trying to get item
-    stored_key = aws_manager._get_key_from_dynamodb(random_subject)
+    stored_key = aws_manager.dynamodb_service.get_key(random_subject)
     assert stored_key is not None
 
     # Cleanup
@@ -1750,12 +1853,12 @@ def test_create_namespace(
     assert namespace in result['namespaces']
 
     # Verify namespace is in user record
-    user_record = aws_manager._get_user_record(random_subject)
+    user_record = aws_manager.dynamodb_service.get_user_record(random_subject)
     assert user_record is not None
     assert namespace in user_record['namespaces']
 
     # Verify namespace is in global registry
-    global_namespaces = aws_manager._get_global_namespaces()
+    global_namespaces = aws_manager.dynamodb_service.get_global_namespaces()
     assert namespace in global_namespaces
 
     # Cleanup
@@ -1886,7 +1989,7 @@ def test_delete_namespace(
     aws_manager.create_namespace(random_subject, namespace)
 
     # Verify namespace exists
-    user_record = aws_manager._get_user_record(random_subject)
+    user_record = aws_manager.dynamodb_service.get_user_record(random_subject)
     assert user_record is not None
     assert namespace in user_record['namespaces']
 
@@ -1901,7 +2004,9 @@ def test_delete_namespace(
     assert namespace not in result['namespaces']
 
     # Verify namespace removed from user record
-    user_record_after = aws_manager._get_user_record(random_subject)
+    user_record_after = aws_manager.dynamodb_service.get_user_record(
+        random_subject,
+    )
     if user_record_after:
         assert namespace not in user_record_after.get('namespaces', [])
     else:
@@ -1909,7 +2014,7 @@ def test_delete_namespace(
         assert result['namespaces'] == []
 
     # Verify namespace removed from global registry
-    global_namespaces = aws_manager._get_global_namespaces()
+    global_namespaces = aws_manager.dynamodb_service.get_global_namespaces()
     assert namespace not in global_namespaces
 
     # Cleanup
@@ -1942,7 +2047,7 @@ def test_delete_namespace_not_found(
     assert 'not found' in result['message']
 
     # Verify existing namespace is still there
-    user_record = aws_manager._get_user_record(random_subject)
+    user_record = aws_manager.dynamodb_service.get_user_record(random_subject)
     assert user_record is not None
     assert existing_namespace in user_record['namespaces']
 
@@ -1976,7 +2081,10 @@ def test_delete_namespace_user_no_namespaces(
     # Should succeed (idempotent behavior)
     assert isinstance(result, dict)
     assert result['status'] == 'success'
-    assert 'No namespaces found' in result['message'] or 'not found' in result['message']
+    assert (
+        'No namespaces found' in result['message']
+        or 'not found' in result['message']
+    )
     assert result['namespaces'] == []
 
     # Cleanup
@@ -2010,7 +2118,7 @@ def test_delete_namespace_owned_by_another_user(
     assert namespace in result1['namespaces']
 
     # Verify namespace is in first user's record
-    user_record1 = aws_manager._get_user_record(subject1)
+    user_record1 = aws_manager.dynamodb_service.get_user_record(subject1)
     assert user_record1 is not None
     assert namespace in user_record1['namespaces']
 
@@ -2031,17 +2139,17 @@ def test_delete_namespace_owned_by_another_user(
     assert 'not found' in result['message']
 
     # Verify namespace is still owned by first user
-    user_record1_after = aws_manager._get_user_record(subject1)
+    user_record1_after = aws_manager.dynamodb_service.get_user_record(subject1)
     assert user_record1_after is not None
     assert namespace in user_record1_after['namespaces']
 
     # Verify namespace still exists for first user
-    user_record1_after = aws_manager._get_user_record(subject1)
+    user_record1_after = aws_manager.dynamodb_service.get_user_record(subject1)
     assert user_record1_after is not None
     assert namespace in user_record1_after['namespaces']
 
     # Verify namespace still in global registry
-    global_namespaces = aws_manager._get_global_namespaces()
+    global_namespaces = aws_manager.dynamodb_service.get_global_namespaces()
     assert namespace in global_namespaces
 
     # Cleanup
@@ -2098,41 +2206,67 @@ def test_create_and_delete_namespace_cycle(
         aws_manager.delete_user(random_subject)
 
 
+@pytest.mark.parametrize(
+    ('namespace', 'should_fail'),
+    (
+        ('ab', True),  # Too short
+        ('a' * 33, True),  # Too long
+        ('valid-ns-123', False),  # Valid
+        ('Valid_NS_123', False),  # Valid with underscores
+        ('-invalid', True),  # Starts with dash
+        ('invalid-', True),  # Ends with dash
+        ('_invalid', True),  # Starts with underscore
+        ('invalid_', True),  # Ends with underscore
+        ('valid-ns', False),  # Valid minimum length
+        ('a' * MAX_NAMESPACE_LENGTH, False),  # Valid maximum length
+    ),
+)
 @pytest.mark.integration
 def test_namespace_validation_rules(
     aws_manager: AWSManagerV3,
     random_subject: str,
+    namespace: str,
+    should_fail: bool,
 ) -> None:
-    """Test namespace name validation rules."""
+    """Test namespace name validation rules with parametrized test cases."""
     print(
         f'\n[test_namespace_validation_rules] '
-        f'Testing with user: {random_subject}',
+        f'Testing namespace: {namespace}, should_fail: {should_fail}',
     )
     # Create user first
     aws_manager.create_user(random_subject)
 
-    # Valid names (make them unique to avoid conflicts)
-    suffix = random_subject[-6:]  # Use 6 chars to leave room for prefix
-    valid_names = [
-        f'abc-{suffix}',  # Minimum length (3 + 1 + 6 = 10 chars)
-        f'{"a" * 26}{suffix}',  # Maximum length (26 + 6 = 32 chars)
-        f'test-ns-{suffix}',  # With dash
-        f'test_ns_{suffix}',  # With underscore
-        f'TestNs{suffix}',  # Mixed case
-        f'123test{suffix}',  # Starts with number
-    ]
-    # Ensure max length name is exactly 32 chars
-    max_len_name = f'{"a" * 26}{suffix}'
-    assert len(max_len_name) == 32  # noqa: PLR2004
+    # For invalid namespaces, test them as-is (validation should fail)
+    # For valid namespaces, make them unique to avoid conflicts
+    if should_fail:
+        test_namespace = namespace
+    else:
+        # Make namespace unique to avoid conflicts
+        suffix = random_subject[-6:]
+        test_namespace = f'{namespace}-{suffix}'
+        # Adjust length if needed for uniqueness
+        if len(test_namespace) > MAX_NAMESPACE_LENGTH:
+            # Truncate the base namespace to fit
+            max_base_len = (
+                MAX_NAMESPACE_LENGTH - len(suffix) - 1
+            )  # -1 for the dash
+            test_namespace = f'{namespace[:max_base_len]}-{suffix}'
 
-    for valid_name in valid_names:
-        try:
-            result = aws_manager.create_namespace(random_subject, valid_name)
-            assert result['status'] == 'success'
-            # Clean up
-            aws_manager.delete_namespace(random_subject, valid_name)
-        except Exception as e:
-            pytest.fail(f'Valid name {valid_name} failed: {e}')
+    result = aws_manager.create_namespace(random_subject, test_namespace)
+
+    if should_fail:
+        assert result['status'] == 'failure', (
+            f'Invalid namespace {test_namespace} was accepted'
+        )
+        assert 'message' in result
+    else:
+        assert result['status'] == 'success', (
+            f'Valid namespace {test_namespace} was rejected: '
+            f'{result.get("message", "Unknown error")}'
+        )
+        # Clean up if successful
+        with contextlib.suppress(Exception):
+            aws_manager.delete_namespace(random_subject, test_namespace)
 
     # Cleanup
     with contextlib.suppress(Exception):
@@ -2170,7 +2304,7 @@ def test_create_topic(
     assert result['topic'] == topic
 
     # Verify topic is in namespace record
-    topics = aws_manager._get_namespace_topics(namespace)
+    topics = aws_manager.dynamodb_service.get_namespace_topics(namespace)
     assert topic in topics
 
     # Note: IAM policy is no longer updated for topics
@@ -2212,7 +2346,7 @@ def test_create_topic_idempotent(
     assert result2['topic'] == topic
 
     # Verify topic still exists
-    topics = aws_manager._get_namespace_topics(namespace)
+    topics = aws_manager.dynamodb_service.get_namespace_topics(namespace)
     assert topic in topics
     assert topics.count(topic) == 1  # Should only appear once
 
@@ -2334,7 +2468,10 @@ def test_create_topic_user_no_namespaces(
 
     result = aws_manager.create_topic(random_subject, namespace, topic)
     assert result['status'] == 'failure'
-    assert 'No namespaces found' in result['message'] or 'not found' in result['message']
+    assert (
+        'No namespaces found' in result['message']
+        or 'not found' in result['message']
+    )
     assert result['namespace'] == namespace
     assert result['topic'] == topic
 
@@ -2358,7 +2495,7 @@ def test_delete_topic(
     aws_manager.create_topic(random_subject, namespace, topic)
 
     # Verify topic exists
-    topics = aws_manager._get_namespace_topics(namespace)
+    topics = aws_manager.dynamodb_service.get_namespace_topics(namespace)
     assert topic in topics
 
     # Delete topic
@@ -2374,7 +2511,7 @@ def test_delete_topic(
     assert result['topic'] == topic
 
     # Verify topic removed from namespace record
-    topics_after = aws_manager._get_namespace_topics(namespace)
+    topics_after = aws_manager.dynamodb_service.get_namespace_topics(namespace)
     assert topic not in topics_after
 
     # Note: IAM policy is no longer updated for topics
@@ -2412,7 +2549,7 @@ def test_delete_topic_not_found(
     assert 'not found' in result['message']
 
     # Verify existing topic is still there
-    topics = aws_manager._get_namespace_topics(namespace)
+    topics = aws_manager.dynamodb_service.get_namespace_topics(namespace)
     assert existing_topic in topics
 
     # Cleanup
@@ -2460,11 +2597,11 @@ def test_delete_topic_namespace_not_owned(
     assert 'not found' in result['message']
 
     # Verify topic is still in first user's namespace
-    topics_after = aws_manager._get_namespace_topics(namespace)
+    topics_after = aws_manager.dynamodb_service.get_namespace_topics(namespace)
     assert topic in topics_after
 
     # Verify topic still exists for first user
-    topics = aws_manager._get_namespace_topics(namespace)
+    topics = aws_manager.dynamodb_service.get_namespace_topics(namespace)
     assert topic in topics
 
     # Cleanup
@@ -2503,7 +2640,7 @@ def test_create_and_delete_topic_cycle(
     assert result2['status'] == 'success'
 
     # Verify both topics exist
-    topics = aws_manager._get_namespace_topics(namespace)
+    topics = aws_manager.dynamodb_service.get_namespace_topics(namespace)
     assert topic1 in topics
     assert topic2 in topics
 
@@ -2512,7 +2649,7 @@ def test_create_and_delete_topic_cycle(
     assert result3['status'] == 'success'
 
     # Verify first topic removed, second still exists
-    topics_after = aws_manager._get_namespace_topics(namespace)
+    topics_after = aws_manager.dynamodb_service.get_namespace_topics(namespace)
     assert topic1 not in topics_after
     assert topic2 in topics_after
 
@@ -2521,7 +2658,7 @@ def test_create_and_delete_topic_cycle(
     assert result4['status'] == 'success'
 
     # Verify both topics exist again
-    topics_final = aws_manager._get_namespace_topics(namespace)
+    topics_final = aws_manager.dynamodb_service.get_namespace_topics(namespace)
     assert topic1 in topics_final
     assert topic2 in topics_final
 
@@ -2603,7 +2740,7 @@ def test_topic_uniqueness_under_namespace(
     assert 'already exists' in result2['message']
 
     # Verify topic appears only once in namespace
-    topics = aws_manager._get_namespace_topics(namespace)
+    topics = aws_manager.dynamodb_service.get_namespace_topics(namespace)
     assert topics.count(topic) == 1
 
     # Cleanup
@@ -2662,7 +2799,7 @@ def test_create_topic_kafka_failure_after_retries(
         # Note: Topic IS added to namespace record before Kafka check
         # (this is the current implementation behavior)
         # Verify topic is in namespace record
-        topics = aws_manager._get_namespace_topics(namespace)
+        topics = aws_manager.dynamodb_service.get_namespace_topics(namespace)
         assert topic in topics
 
     # Cleanup
@@ -2711,7 +2848,7 @@ def test_create_topic_kafka_success(
         assert result['topic'] == topic
 
         # Verify topic is in namespace record
-        topics = aws_manager._get_namespace_topics(namespace)
+        topics = aws_manager.dynamodb_service.get_namespace_topics(namespace)
         assert topic in topics
 
     # Cleanup
@@ -2753,7 +2890,7 @@ def test_create_topic_kafka_no_endpoint(
     assert result['topic'] == topic
 
     # Verify topic was added to namespace record
-    topics = aws_manager._get_namespace_topics(namespace)
+    topics = aws_manager.dynamodb_service.get_namespace_topics(namespace)
     assert topic in topics
 
     # Restore original iam_public
@@ -2788,7 +2925,7 @@ def test_recreate_topic(
     aws_manager.create_topic(random_subject, namespace, topic)
 
     # Verify topic exists
-    topics = aws_manager._get_namespace_topics(namespace)
+    topics = aws_manager.dynamodb_service.get_namespace_topics(namespace)
     assert topic in topics
 
     # Recreate topic
@@ -2803,7 +2940,7 @@ def test_recreate_topic(
     assert result['topic'] == topic
 
     # Verify topic still exists in namespace
-    topics_after = aws_manager._get_namespace_topics(namespace)
+    topics_after = aws_manager.dynamodb_service.get_namespace_topics(namespace)
     assert topic in topics_after
 
     # Cleanup
@@ -2836,7 +2973,10 @@ def test_recreate_topic_no_namespaces(
     # Try to recreate topic (should fail)
     result = aws_manager.recreate_topic(random_subject, namespace, topic)
     assert result['status'] == 'failure'
-    assert 'No namespaces found' in result['message'] or 'not found' in result['message']
+    assert (
+        'No namespaces found' in result['message']
+        or 'not found' in result['message']
+    )
     assert result['namespace'] == namespace
     assert result['topic'] == topic
 

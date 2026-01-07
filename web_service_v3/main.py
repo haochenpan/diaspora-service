@@ -83,6 +83,13 @@ class DiasporaService:
 
     def add_routes(self) -> None:
         """Add routes to the FastAPI app."""
+        # User management routes
+        self.app.post('/api/v3/user', tags=['User'])(
+            self.create_user,
+        )
+        self.app.delete('/api/v3/user', tags=['User'])(
+            self.delete_user,
+        )
         # Key management routes
         self.app.post('/api/v3/key', tags=['Authentication'])(
             self.create_key,
