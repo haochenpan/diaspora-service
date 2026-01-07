@@ -9,14 +9,15 @@ import secrets
 import string
 from typing import Any
 
+from aws_msk_iam_sasl_signer import MSKAuthTokenProvider
 from kafka.admin import KafkaAdminClient
 from kafka.admin import NewTopic
 from kafka.errors import TopicAlreadyExistsError
 from kafka.errors import UnknownTopicOrPartitionError
+from kafka.sasl.oauth import AbstractTokenProvider
 
 from web_service_v3.responses import create_failure_result
 from web_service_v3.responses import create_success_result
-from web_service_v3.utils import MSKTokenProvider
 
 # Namespace validation constants
 MIN_NAMESPACE_LENGTH = 3
@@ -24,6 +25,19 @@ MAX_NAMESPACE_LENGTH = 32
 
 # Global namespaces tracking key
 GLOBAL_NAMESPACES_KEY = '__global_namespaces__'
+
+
+class MSKTokenProvider(AbstractTokenProvider):
+    """Provide tokens for MSK authentication."""
+
+    def __init__(self, region: str) -> None:
+        """Initialize with AWS region."""
+        self.region = region
+
+    def token(self) -> str:
+        """Generate and return an MSK auth token."""
+        token, _ = MSKAuthTokenProvider.generate_auth_token(self.region)
+        return token
 
 
 class IAMService:
