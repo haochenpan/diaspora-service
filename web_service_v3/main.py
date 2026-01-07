@@ -90,7 +90,6 @@ class DiasporaService:
         self.app.delete('/api/v3/user', tags=['User'])(
             self.delete_user,
         )
-
         # Key management routes
         self.app.post('/api/v3/key', tags=['Authentication'])(
             self.create_key,
@@ -101,19 +100,10 @@ class DiasporaService:
         self.app.delete('/api/v3/key', tags=['Authentication'])(
             self.delete_key,
         )
-
-        # Namespace management routes
-        self.app.post('/api/v3/namespace', tags=['Namespace'])(
-            self.create_namespace,
-        )
+        # Topic management routes
         self.app.get('/api/v3/namespace', tags=['Namespace'])(
             self.list_namespaces,
         )
-        self.app.delete('/api/v3/namespace', tags=['Namespace'])(
-            self.delete_namespace,
-        )
-
-        # Topic management routes
         self.app.post('/api/v3/{namespace}/{topic}', tags=['Topic'])(
             self.create_topic,
         )
@@ -174,39 +164,6 @@ class DiasporaService:
             return err
         return self.aws.delete_key(subject)
 
-    async def create_namespace(
-        self,
-        subject: str = Depends(extract_val('subject')),
-        token: str = Depends(extract_val('authorization')),
-        namespace: str = Depends(extract_val('namespace')),
-    ) -> dict[str, Any]:
-        """Create a namespace for a user."""
-        if err := self.auth.validate_access_token(subject, token):
-            return err
-
-        # Validate namespace name format
-        validation_error = self.aws._validate_namespace_name(namespace)
-        if validation_error:
-            validation_error['namespace'] = namespace
-            return validation_error
-
-        # Validate namespace matches expected pattern
-        expected_namespace = f'ns-{subject.replace("-", "")[-12:]}'
-        if namespace != expected_namespace:
-            return {
-                'status': 'failure',
-                'message': (
-                    f'Namespace must be exactly "{expected_namespace}" '
-                    f'for subject {subject}'
-                ),
-                'namespace': namespace,
-            }
-
-        try:
-            return self.aws.create_namespace(subject, namespace)
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e)) from e
-
     async def list_namespaces(
         self,
         subject: str = Depends(extract_val('subject')),
@@ -216,39 +173,6 @@ class DiasporaService:
         if err := self.auth.validate_access_token(subject, token):
             return err
         return self.aws.list_namespaces(subject)
-
-    async def delete_namespace(
-        self,
-        subject: str = Depends(extract_val('subject')),
-        token: str = Depends(extract_val('authorization')),
-        namespace: str = Depends(extract_val('namespace')),
-    ) -> dict[str, Any]:
-        """Delete a namespace for a user."""
-        if err := self.auth.validate_access_token(subject, token):
-            return err
-
-        # Validate namespace name format
-        validation_error = self.aws._validate_namespace_name(namespace)
-        if validation_error:
-            validation_error['namespace'] = namespace
-            return validation_error
-
-        # Validate namespace matches expected pattern
-        expected_namespace = f'ns-{subject.replace("-", "")[-12:]}'
-        if namespace != expected_namespace:
-            return {
-                'status': 'failure',
-                'message': (
-                    f'Namespace must be exactly "{expected_namespace}" '
-                    f'for subject {subject}'
-                ),
-                'namespace': namespace,
-            }
-
-        try:
-            return self.aws.delete_namespace(subject, namespace)
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e)) from e
 
     async def create_topic(
         self,
@@ -260,10 +184,7 @@ class DiasporaService:
         """Create a topic under a namespace."""
         if err := self.auth.validate_access_token(subject, token):
             return err
-        try:
-            return self.aws.create_topic(subject, namespace, topic)
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e)) from e
+        return self.aws.create_topic(subject, namespace, topic)
 
     async def delete_topic(
         self,
@@ -275,10 +196,7 @@ class DiasporaService:
         """Delete a topic from a namespace."""
         if err := self.auth.validate_access_token(subject, token):
             return err
-        try:
-            return self.aws.delete_topic(subject, namespace, topic)
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e)) from e
+        return self.aws.delete_topic(subject, namespace, topic)
 
     async def recreate_topic(
         self,

@@ -292,6 +292,43 @@ class AWSManager:
                 ],
             }
 
+        def iam_user_policy_v3(self, subject: str):
+            """Generate an IAM user policy for Kafka access (v3).
+
+            Namespace routes are disabled - uses ns-<last 12 digits>.* pattern.
+            """
+            # Extract last 12 characters from subject (removing dashes)
+            subject_suffix = subject.replace('-', '')[-12:]
+            topic_arn = (
+                f'arn:aws:kafka:us-east-1:{self.account_id}:'
+                f'topic/{self.cluster_name}/*/ns-{subject_suffix}.*'
+            )
+            return {
+                'Version': '2012-10-17',
+                'Statement': [
+                    {
+                        'Effect': 'Allow',
+                        'Action': [
+                            'kafka-cluster:Connect',
+                            'kafka-cluster:DescribeTopic',
+                            'kafka-cluster:ReadData',
+                            'kafka-cluster:WriteData',
+                            'kafka-cluster:DescribeGroup',
+                            'kafka-cluster:AlterGroup',
+                            'kafka-cluster:WriteDataIdempotently',  # new
+                            'kafka-cluster:DescribeTransactionalId',  # new
+                            'kafka-cluster:AlterTransactionalId',  # new
+                        ],
+                        'Resource': [
+                            f'arn:aws:kafka:us-east-1:{self.account_id}:group/{self.cluster_name}/*',
+                            f'arn:aws:kafka:us-east-1:{self.account_id}:cluster/{self.cluster_name}/*',
+                            f'arn:aws:kafka:us-east-1:{self.account_id}:transactional-id/{self.cluster_name}/*',
+                            topic_arn,
+                        ],
+                    },
+                ],
+            }
+
         def lambda_role_trust_policy(self):
             """Generate a trust policy for a Lambda role."""
             return {
