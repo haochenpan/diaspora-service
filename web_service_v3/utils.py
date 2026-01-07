@@ -5,6 +5,8 @@ from __future__ import annotations
 import contextlib
 import json
 import re
+import secrets
+import string
 import threading
 from typing import Any
 
@@ -89,11 +91,6 @@ class AWSManagerV3:
             f'arn:aws:iam::{account_id}:policy/msk-policy/'
         )
 
-        # Topic ARN prefix for MSK topics
-        self.topic_arn_prefix = (
-            f'arn:aws:kafka:{region}:{account_id}:topic/{cluster_name}/*/'
-        )
-
         # DynamoDB table name for storing keys
         self.keys_table_name = keys_table_name or 'diaspora-keys'
 
@@ -130,7 +127,7 @@ class AWSManagerV3:
                 PolicyName=subject,
                 Path='/msk-policy/',
                 PolicyDocument=json.dumps(
-                    self.naming.iam_user_policy(),
+                    self.naming.iam_user_policy_v3(subject),
                 ),
             )
             policy_created = True
@@ -145,23 +142,117 @@ class AWSManagerV3:
             )
             policy_attached = True
 
+        # 4. Update IAM policy to refresh with latest policy document
+        # This ensures the policy is always up-to-date and cleans up old
+        # versions
+        with contextlib.suppress(
+            self.iam.exceptions.NoSuchEntityException,
+        ):
+            self._update_iam_policy(subject)
+
         return {
             'user_created': user_created,
             'policy_created': policy_created,
             'policy_attached': policy_attached,
         }
 
+    def _ensure_namespace_exists(self, subject: str) -> dict[str, Any]:
+        """Ensure namespace exists for the user (idempotent).
+
+        This method does NOT use a lock - caller must hold lock.
+        Tries to create namespace with subject-based name first.
+        If that fails (namespace already taken), retries with random
+        namespaces.
+
+        Returns:
+            dict with 'status': 'success' and 'namespace' if successful,
+            or 'status': 'failure' and 'message' if all retries failed.
+        """
+        # Try to create namespace with subject-based name first
+        namespace = f'ns-{subject.replace("-", "")[-12:]}'
+        namespace_result = self._create_namespace_internal(subject, namespace)
+
+        # If namespace creation failed, retry with random namespaces
+        # Only retry if the error is "namespace already taken"
+        max_retries = 10
+        retry_count = 0
+        while (
+            namespace_result.get('status') != 'success'
+            and retry_count < max_retries
+        ):
+            error_message = namespace_result.get('message', '').lower()
+            # Only retry if namespace is already taken
+            if 'already taken' not in error_message:
+                break
+
+            # Generate random 12-character alphanumeric string
+            # Using lowercase and numbers to ensure valid namespace
+            random_suffix = ''.join(
+                secrets.choice(string.ascii_lowercase + string.digits)
+                for _ in range(12)
+            )
+            namespace = f'ns-{random_suffix}'
+            namespace_result = self._create_namespace_internal(
+                subject,
+                namespace,
+            )
+            retry_count += 1
+
+        # If still failed after all retries, return failure
+        if namespace_result.get('status') != 'success':
+            return {
+                'status': 'failure',
+                'message': namespace_result.get(
+                    'message',
+                    'Unknown error',
+                ),
+            }
+
+        # Namespace creation succeeded
+        return {
+            'status': 'success',
+            'namespace': namespace,
+        }
+
     def create_user(self, subject: str) -> dict[str, str]:
-        """Create an IAM user with policy for the given subject."""
+        """Create an IAM user with policy for the given subject.
+
+        Also creates and registers the namespace for the user.
+        If the default namespace (based on subject UUID) fails, retries with
+        randomly generated namespaces until one succeeds.
+        """
         with self.lock:
             result = self._ensure_user_exists(subject)
-            return {
+            namespace_result = self._ensure_namespace_exists(subject)
+
+            # If namespace creation failed, still return user creation info
+            if namespace_result.get('status') != 'success':
+                response = {
+                    'status': 'success',
+                    'message': f'IAM user created for {subject}',
+                    'user_created': str(result['user_created']),
+                    'policy_created': str(result['policy_created']),
+                    'policy_attached': str(result['policy_attached']),
+                    'namespace_created': 'false',
+                    'namespace_error': namespace_result.get(
+                        'message',
+                        'Unknown error',
+                    ),
+                }
+                return response
+
+            # Namespace creation succeeded
+            response = {
                 'status': 'success',
                 'message': f'IAM user created for {subject}',
                 'user_created': str(result['user_created']),
                 'policy_created': str(result['policy_created']),
                 'policy_attached': str(result['policy_attached']),
+                'namespace_created': 'true',
+                'namespace': namespace_result['namespace'],
             }
+
+            return response
 
     def delete_user(self, subject: str) -> dict[str, str]:
         """Delete the IAM user and all associated resources."""
@@ -170,8 +261,19 @@ class AWSManagerV3:
             policy_detached = False
             policy_deleted = False
             user_deleted = False
+            namespaces_deleted = False
 
-            # 1. Delete existing access keys if any
+            # 1. Delete all namespaces for the user
+            user_record = self._get_user_record(subject)
+            if user_record and 'namespaces' in user_record:
+                namespaces = user_record['namespaces'].copy()
+                for namespace in namespaces:
+                    # Use internal method since we already hold the lock
+                    self._delete_namespace_internal(subject, namespace)
+                if namespaces:
+                    namespaces_deleted = True
+
+            # 2. Delete existing access keys if any
             try:
                 existing_keys = self.iam.list_access_keys(UserName=subject)
                 for key in existing_keys['AccessKeyMetadata']:
@@ -183,7 +285,7 @@ class AWSManagerV3:
             except self.iam.exceptions.NoSuchEntityException:
                 pass  # user doesn't exist or has no keys
 
-            # 2. Detach IAM policy
+            # 3. Detach IAM policy
             try:
                 policy_arn = self.iam_policy_arn_prefix + subject
                 self.iam.detach_user_policy(
@@ -194,7 +296,7 @@ class AWSManagerV3:
             except self.iam.exceptions.NoSuchEntityException:
                 pass  # policy not attached
 
-            # 3. Delete IAM policy (including all versions)
+            # 4. Delete IAM policy (including all versions)
             try:
                 policy_arn = self.iam_policy_arn_prefix + subject
                 # Delete non-default policy versions first
@@ -205,7 +307,7 @@ class AWSManagerV3:
             except self.iam.exceptions.NoSuchEntityException:
                 pass  # policy doesn't exist
 
-            # 4. Delete IAM user
+            # 5. Delete IAM user
             try:
                 self.iam.delete_user(UserName=subject)
                 user_deleted = True
@@ -215,6 +317,7 @@ class AWSManagerV3:
             return {
                 'status': 'success',
                 'message': f'IAM user deleted for {subject}',
+                'namespaces_deleted': str(namespaces_deleted),
                 'keys_deleted': str(keys_deleted),
                 'policy_detached': str(policy_detached),
                 'policy_deleted': str(policy_deleted),
@@ -323,6 +426,8 @@ class AWSManagerV3:
         with self.lock:
             # Ensure user exists first (idempotent)
             self._ensure_user_exists(subject)
+            # Ensure namespace exists (idempotent)
+            self._ensure_namespace_exists(subject)
 
             # Delete existing keys from IAM if there are any
             with contextlib.suppress(
@@ -367,6 +472,8 @@ class AWSManagerV3:
         with self.lock:
             # Ensure user exists first (idempotent)
             self._ensure_user_exists(subject)
+            # Ensure namespace exists (idempotent)
+            self._ensure_namespace_exists(subject)
 
             # Try to retrieve key from DynamoDB first
             stored_key = self._get_key_from_dynamodb(subject)
@@ -483,6 +590,35 @@ class AWSManagerV3:
                         PolicyArn=policy_arn,
                         VersionId=ver['VersionId'],
                     )
+
+    def _update_iam_policy(self, subject: str) -> None:
+        """Update IAM policy by creating a new version and deleting old ones.
+
+        This method refreshes the policy with the latest policy document from
+        iam_user_policy_v3, creates a new version, and deletes old non-default
+        versions to avoid hitting the version quota.
+
+        This method does NOT use a lock - caller must hold lock.
+
+        Args:
+            subject: User subject ID
+        """
+        policy_arn = self.iam_policy_arn_prefix + subject
+        with contextlib.suppress(
+            self.iam.exceptions.NoSuchEntityException,
+        ):
+            # Get the latest policy document
+            latest_policy = self.naming.iam_user_policy_v3(subject)
+
+            # Create a new policy version with the latest policy
+            self.iam.create_policy_version(
+                PolicyArn=policy_arn,
+                PolicyDocument=json.dumps(latest_policy),
+                SetAsDefault=True,
+            )
+
+            # Delete old non-default versions
+            self._delete_policy_versions(policy_arn)
 
     def _validate_namespace_name(
         self,
@@ -663,6 +799,70 @@ class AWSManagerV3:
                 Key={'subject': {'S': subject}},
             )
 
+    def _create_namespace_internal(
+        self,
+        subject: str,
+        namespace: str,
+    ) -> dict[str, Any]:
+        """Create a namespace for a user (internal, no lock).
+
+        This method does NOT use a lock - caller must hold lock.
+        Namespace names must be globally unique.
+
+        Args:
+            subject: User subject ID
+            namespace: Namespace name to create
+
+        Returns:
+            dict with status, message, and namespaces list (on success)
+            or status 'failure' with message (if namespace already taken)
+        """
+        # Validate namespace name
+        validation_error = self._validate_namespace_name(namespace)
+        if validation_error:
+            validation_error['namespace'] = namespace
+            return validation_error
+
+        # Get global namespaces registry
+        global_namespaces = self._get_global_namespaces()
+
+        # Get existing namespaces for this user
+        user_record = self._get_user_record(subject)
+        existing_namespaces = (
+            user_record['namespaces'] if user_record else []
+        )
+
+        # Check if namespace is already taken by another user
+        if namespace in global_namespaces:
+            if namespace not in existing_namespaces:
+                return {
+                    'status': 'failure',
+                    'message': f'Namespace already taken: {namespace}',
+                    'namespace': namespace,
+                }
+            # Namespace already owned by this user, return existing list
+            return {
+                'status': 'success',
+                'message': f'Namespace already exists for {subject}',
+                'namespaces': existing_namespaces,
+            }
+
+        # Add namespace to user's list
+        all_namespaces = sorted({*existing_namespaces, namespace})
+
+        # Update global registry
+        updated_global = global_namespaces | {namespace}
+        self._update_global_namespaces(updated_global)
+
+        # Update user record
+        self._update_user_namespaces(subject, all_namespaces)
+
+        return {
+            'status': 'success',
+            'message': f'Namespace created for {subject}',
+            'namespaces': all_namespaces,
+        }
+
     def create_namespace(
         self,
         subject: str,
@@ -681,51 +881,73 @@ class AWSManagerV3:
             or status 'failure' with message (if namespace already taken)
         """
         with self.lock:
-            # Validate namespace name
-            validation_error = self._validate_namespace_name(namespace)
-            if validation_error:
-                validation_error['namespace'] = namespace
-                return validation_error
+            return self._create_namespace_internal(subject, namespace)
 
-            # Get global namespaces registry
-            global_namespaces = self._get_global_namespaces()
+    def _delete_namespace_internal(
+        self,
+        subject: str,
+        namespace: str,
+    ) -> dict[str, Any]:
+        """Delete a namespace for a user (internal, no lock).
 
-            # Get existing namespaces for this user
-            user_record = self._get_user_record(subject)
-            existing_namespaces = (
-                user_record['namespaces'] if user_record else []
-            )
+        This method does NOT use a lock - caller must hold lock.
 
-            # Check if namespace is already taken by another user
-            if namespace in global_namespaces:
-                if namespace not in existing_namespaces:
-                    return {
-                        'status': 'failure',
-                        'message': f'Namespace already taken: {namespace}',
-                        'namespace': namespace,
-                    }
-                # Namespace already owned by this user, return existing list
-                return {
-                    'status': 'success',
-                    'message': f'Namespace already exists for {subject}',
-                    'namespaces': existing_namespaces,
-                }
+        Args:
+            subject: User subject ID
+            namespace: Namespace name to delete
 
-            # Add namespace to user's list
-            all_namespaces = sorted({*existing_namespaces, namespace})
-
-            # Update global registry
-            updated_global = global_namespaces | {namespace}
-            self._update_global_namespaces(updated_global)
-
-            # Update user record
-            self._update_user_namespaces(subject, all_namespaces)
-
+        Returns:
+            dict with status, message, and remaining namespaces list.
+            Returns success message even if namespace doesn't exist.
+        """
+        # Get existing namespaces
+        user_record = self._get_user_record(subject)
+        if not user_record or 'namespaces' not in user_record:
+            # No namespaces found, already deleted (idempotent)
             return {
                 'status': 'success',
-                'message': f'Namespace created for {subject}',
-                'namespaces': all_namespaces,
+                'message': f'No namespaces found for {subject}',
+                'namespaces': [],
             }
+
+        existing_namespaces = user_record['namespaces']
+
+        if namespace not in existing_namespaces:
+            # Namespace doesn't exist, already deleted (idempotent)
+            return {
+                'status': 'success',
+                'message': (
+                    f'Namespace {namespace} not found for {subject}'
+                ),
+                'namespaces': existing_namespaces,
+            }
+
+        # Remove namespace from user's list
+        remaining_namespaces = [
+            ns for ns in existing_namespaces if ns != namespace
+        ]
+
+        if remaining_namespaces:
+            # Update with remaining namespaces
+            self._update_user_namespaces(subject, remaining_namespaces)
+        else:
+            # Delete record if no namespaces left
+            self._delete_user_record(subject)
+
+        # Update global registry
+        global_namespaces = self._get_global_namespaces()
+        updated_global = global_namespaces - {namespace}
+        if updated_global:
+            self._update_global_namespaces(updated_global)
+        else:
+            # Delete global record if empty
+            self._delete_user_record(GLOBAL_NAMESPACES_KEY)
+
+        return {
+            'status': 'success',
+            'message': f'Namespace deleted for {subject}',
+            'namespaces': remaining_namespaces,
+        }
 
     def delete_namespace(
         self,
@@ -743,168 +965,7 @@ class AWSManagerV3:
             Returns success message even if namespace doesn't exist.
         """
         with self.lock:
-            # Get existing namespaces
-            user_record = self._get_user_record(subject)
-            if not user_record or 'namespaces' not in user_record:
-                # No namespaces found, already deleted (idempotent)
-                return {
-                    'status': 'success',
-                    'message': f'No namespaces found for {subject}',
-                    'namespaces': [],
-                }
-
-            existing_namespaces = user_record['namespaces']
-
-            if namespace not in existing_namespaces:
-                # Namespace doesn't exist, already deleted (idempotent)
-                return {
-                    'status': 'success',
-                    'message': (
-                        f'Namespace {namespace} not found for {subject}'
-                    ),
-                    'namespaces': existing_namespaces,
-                }
-
-            # Remove namespace from user's list
-            remaining_namespaces = [
-                ns for ns in existing_namespaces if ns != namespace
-            ]
-
-            if remaining_namespaces:
-                # Update with remaining namespaces
-                self._update_user_namespaces(subject, remaining_namespaces)
-            else:
-                # Delete record if no namespaces left
-                self._delete_user_record(subject)
-
-            # Update global registry
-            global_namespaces = self._get_global_namespaces()
-            updated_global = global_namespaces - {namespace}
-            if updated_global:
-                self._update_global_namespaces(updated_global)
-            else:
-                # Delete global record if empty
-                self._delete_user_record(GLOBAL_NAMESPACES_KEY)
-
-            return {
-                'status': 'success',
-                'message': f'Namespace deleted for {subject}',
-                'namespaces': remaining_namespaces,
-            }
-
-    def _get_iam_policy(
-        self,
-        policy_arn: str,
-    ) -> dict[str, Any] | None:
-        """Get IAM policy document, deleting non-default versions.
-
-        This method does NOT use a lock - caller must hold lock.
-
-        Args:
-            policy_arn: IAM policy ARN
-
-        Returns:
-            Policy document dictionary, or None if policy not found
-        """
-        with contextlib.suppress(
-            self.iam.exceptions.NoSuchEntityException,
-        ):
-            existing_policies = self.iam.list_policy_versions(
-                PolicyArn=policy_arn,
-            )
-            policy = {}
-            for ver in existing_policies['Versions']:
-                # Delete non-default policies to avoid reaching the quota
-                if not ver['IsDefaultVersion']:
-                    with contextlib.suppress(
-                        self.iam.exceptions.NoSuchEntityException,
-                    ):
-                        self.iam.delete_policy_version(
-                            PolicyArn=policy_arn,
-                            VersionId=ver['VersionId'],
-                        )
-                else:
-                    # Get the default (newest) policy
-                    policy = self.iam.get_policy_version(
-                        PolicyArn=policy_arn,
-                        VersionId=ver['VersionId'],
-                    )['PolicyVersion']['Document']
-            return policy
-        return None
-
-    def _add_topic_to_policy(
-        self,
-        subject: str,
-        namespace: str,
-        topic: str,
-    ) -> bool:
-        """Add topic ARN to user's IAM policy.
-
-        This method does NOT use a lock - caller must hold lock.
-
-        Args:
-            subject: User subject ID
-            namespace: Namespace name
-            topic: Topic name
-
-        Returns:
-            True if policy was updated, False if topic already exists
-        """
-        policy_arn = self.iam_policy_arn_prefix + subject
-        policy = self._get_iam_policy(policy_arn)
-        if policy is None:
-            # Policy doesn't exist - this shouldn't happen in normal flow
-            # but handle gracefully
-            return False
-        resources = policy['Statement'][0]['Resource']
-        topic_arn = f'{self.topic_arn_prefix}{namespace}.{topic}'
-        if topic_arn in resources:
-            return False  # not updated
-
-        resources.append(topic_arn)
-        self.iam.create_policy_version(
-            PolicyArn=policy_arn,
-            PolicyDocument=json.dumps(policy, default=str),
-            SetAsDefault=True,
-        )
-        return True  # updated
-
-    def _remove_topic_from_policy(
-        self,
-        subject: str,
-        namespace: str,
-        topic: str,
-    ) -> bool:
-        """Remove topic ARN from user's IAM policy.
-
-        This method does NOT use a lock - caller must hold lock.
-
-        Args:
-            subject: User subject ID
-            namespace: Namespace name
-            topic: Topic name
-
-        Returns:
-            True if policy was updated, False if topic not found
-        """
-        policy_arn = self.iam_policy_arn_prefix + subject
-        policy = self._get_iam_policy(policy_arn)
-        if policy is None:
-            # Policy doesn't exist - this shouldn't happen in normal flow
-            # but handle gracefully
-            return False
-        resources = policy['Statement'][0]['Resource']
-        topic_arn = f'{self.topic_arn_prefix}{namespace}.{topic}'
-        if topic_arn not in resources:
-            return False  # not updated
-
-        resources.remove(topic_arn)
-        self.iam.create_policy_version(
-            PolicyArn=policy_arn,
-            PolicyDocument=json.dumps(policy, default=str),
-            SetAsDefault=True,
-        )
-        return True  # updated
+            return self._delete_namespace_internal(subject, namespace)
 
     def _create_namespace_table(self) -> None:
         """Create DynamoDB table for namespace/topic records.
@@ -1176,10 +1237,9 @@ class AWSManagerV3:
 
             # Check if topic already exists (must be unique under namespace)
             if topic in existing_topics:
-                # Topic already exists, ensure it's in policy and Kafka
-                # (idempotent)
+                # Topic already exists, ensure user exists and create Kafka
+                # topic (idempotent)
                 self._ensure_user_exists(subject)
-                self._add_topic_to_policy(subject, namespace, topic)
                 kafka_result = self._create_kafka_topic(namespace, topic)
                 if kafka_result and kafka_result.get('status') == 'failure':
                     return {
@@ -1205,11 +1265,8 @@ class AWSManagerV3:
             all_topics = sorted({*existing_topics, topic})
             self._update_namespace_topics(namespace, all_topics)
 
-            # Ensure user exists with policy
+            # Ensure user exists
             self._ensure_user_exists(subject)
-
-            # Add topic to IAM policy
-            self._add_topic_to_policy(subject, namespace, topic)
 
             # Create Kafka topic (idempotent)
             kafka_result = self._create_kafka_topic(namespace, topic)
@@ -1253,8 +1310,7 @@ class AWSManagerV3:
             user_record = self._get_user_record(subject)
             if not user_record or 'namespaces' not in user_record:
                 # No namespaces found, already deleted (idempotent)
-                # Still try to remove from policy and Kafka
-                self._remove_topic_from_policy(subject, namespace, topic)
+                # Still try to delete from Kafka
                 self._delete_kafka_topic(namespace, topic)
                 return {
                     'status': 'success',
@@ -1264,8 +1320,7 @@ class AWSManagerV3:
                 }
             if namespace not in user_record['namespaces']:
                 # Namespace doesn't exist, already deleted (idempotent)
-                # Still try to remove from policy and Kafka
-                self._remove_topic_from_policy(subject, namespace, topic)
+                # Still try to delete from Kafka
                 self._delete_kafka_topic(namespace, topic)
                 return {
                     'status': 'success',
@@ -1281,9 +1336,7 @@ class AWSManagerV3:
 
             # Check if topic exists
             if topic not in existing_topics:
-                # Topic doesn't exist, remove from policy and Kafka anyway
-                # (idempotent)
-                self._remove_topic_from_policy(subject, namespace, topic)
+                # Topic doesn't exist, delete from Kafka anyway (idempotent)
                 self._delete_kafka_topic(namespace, topic)
                 return {
                     'status': 'success',
@@ -1300,9 +1353,6 @@ class AWSManagerV3:
                 self._update_namespace_topics(namespace, remaining_topics)
             else:
                 self._delete_namespace_topics(namespace)
-
-            # Remove topic from IAM policy
-            self._remove_topic_from_policy(subject, namespace, topic)
 
             # Delete Kafka topic (idempotent)
             kafka_result = self._delete_kafka_topic(namespace, topic)
