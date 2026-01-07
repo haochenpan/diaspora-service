@@ -4,14 +4,19 @@ from __future__ import annotations
 
 import contextlib
 import json
+import re
 import secrets
 import string
 from typing import Any
 
-from web_service_v3.responses import (
-    create_failure_result,
-    create_success_result,
-)
+from kafka.admin import KafkaAdminClient
+from kafka.admin import NewTopic
+from kafka.errors import TopicAlreadyExistsError
+from kafka.errors import UnknownTopicOrPartitionError
+
+from web_service_v3.responses import create_failure_result
+from web_service_v3.responses import create_success_result
+from web_service_v3.utils import MSKTokenProvider
 
 # Namespace validation constants
 MIN_NAMESPACE_LENGTH = 3
@@ -740,18 +745,14 @@ class KafkaService:
             topic: Topic name
 
         Returns:
-            dict with status and message on success/failure, or None if Kafka endpoint
-            is not configured.
+            dict with status and message on success/failure, or None if
+            Kafka endpoint is not configured.
 
         The actual Kafka topic name will be '{namespace}.{topic}'.
         """
         if not self.bootstrap_servers:
             # No Kafka endpoint configured, skip topic creation
             return None
-
-        from kafka.admin import KafkaAdminClient, NewTopic
-        from kafka.errors import TopicAlreadyExistsError
-        from web_service_v3.utils import MSKTokenProvider
 
         kafka_topic_name = f'{namespace}.{topic}'
         max_retries = 3
@@ -806,18 +807,14 @@ class KafkaService:
             topic: Topic name
 
         Returns:
-            dict with status and message on success/failure, or None if Kafka endpoint
-            is not configured.
+            dict with status and message on success/failure, or None if
+            Kafka endpoint is not configured.
 
         The actual Kafka topic name will be '{namespace}.{topic}'.
         """
         if not self.bootstrap_servers:
             # No Kafka endpoint configured, skip topic deletion
             return None
-
-        from kafka.admin import KafkaAdminClient
-        from kafka.errors import UnknownTopicOrPartitionError
-        from web_service_v3.utils import MSKTokenProvider
 
         kafka_topic_name = f'{namespace}.{topic}'
         max_retries = 3
@@ -879,8 +876,6 @@ class NamespaceService:
         Returns:
             None if valid, or dict with failure status if invalid
         """
-        import re
-
         if not (
             MIN_NAMESPACE_LENGTH <= len(namespace) <= MAX_NAMESPACE_LENGTH
         ):
@@ -895,8 +890,7 @@ class NamespaceService:
             )
         if namespace[0] in ('-', '_') or namespace[-1] in ('-', '_'):
             return create_failure_result(
-                'Namespace name cannot start or end with hyphen or '
-                'underscore',
+                'Namespace name cannot start or end with hyphen or underscore',
             )
         return None
 
@@ -1009,9 +1003,7 @@ class NamespaceService:
 
         # Get existing namespaces for this user
         user_record = self.dynamodb.get_user_record(subject)
-        existing_namespaces = (
-            user_record['namespaces'] if user_record else []
-        )
+        existing_namespaces = user_record['namespaces'] if user_record else []
 
         # Check if namespace is already taken by another user
         if namespace in global_namespaces:
@@ -1077,9 +1069,7 @@ class NamespaceService:
             # Namespace doesn't exist, already deleted (idempotent)
             return {
                 'status': 'success',
-                'message': (
-                    f'Namespace {namespace} not found for {subject}'
-                ),
+                'message': (f'Namespace {namespace} not found for {subject}'),
                 'namespaces': existing_namespaces,
             }
 
@@ -1109,4 +1099,3 @@ class NamespaceService:
             'message': f'Namespace deleted for {subject}',
             'namespaces': remaining_namespaces,
         }
-
