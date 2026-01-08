@@ -120,7 +120,7 @@ class AuthManager:
         if introspection_response.get('sub') != user_id:
             return self.error_response('Token does not belong to the user.')
 
-        print(introspection_response)
+        # print(introspection_response)
 
         # if introspection_response.get('client_id') != self.client_id:
         #     return self.error_response(

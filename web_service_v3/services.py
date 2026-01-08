@@ -62,7 +62,7 @@ class IAMService:
             f'{base}:group{cluster}',
             f'{base}:cluster{cluster}',
             f'{base}:transactional-id{cluster}',
-            f'{base}:topic{cluster[:-1]}/ns-{subject_suffix}.*',
+            f'{base}:topic{cluster}/ns-{subject_suffix}.*',
         ]
         return {
             'Version': '2012-10-17',
@@ -1133,6 +1133,7 @@ class WebService:
         self.iam_service = iam_service
         self.kafka_service = kafka_service
         self.namespace_service = namespace_service
+        self.bootstrap_servers = kafka_service.bootstrap_servers
 
     def create_user(self, subject: str) -> dict[str, Any]:
         """Create a user in IAM and create its default namespace.
@@ -1260,7 +1261,7 @@ class WebService:
 
         Returns:
             Dictionary with status, message, and key information
-            (access_key, secret_key, create_date)
+            (access_key, secret_key, create_date, endpoint)
         """
         # Ensure user and namespace exist (idempotent)
         user_result = self.create_user(subject)
@@ -1300,6 +1301,7 @@ class WebService:
             'access_key': iam_key_result['access_key'],
             'secret_key': iam_key_result['secret_key'],
             'create_date': iam_key_result['create_date'],
+            'endpoint': self.bootstrap_servers or '',
         }
 
     def get_key(self, subject: str) -> dict[str, Any]:
@@ -1313,7 +1315,7 @@ class WebService:
 
         Returns:
             Dictionary with status, message, and key information
-            (access_key, secret_key, create_date)
+            (access_key, secret_key, create_date, endpoint)
         """
         # Try to get key from DynamoDB
         existing_key = self.namespace_service.dynamodb.get_key(subject)
@@ -1324,6 +1326,7 @@ class WebService:
                 'access_key': existing_key['access_key'],
                 'secret_key': existing_key['secret_key'],
                 'create_date': existing_key['create_date'],
+                'endpoint': self.bootstrap_servers or '',
             }
 
         # Key doesn't exist, create it (create_key workflow)

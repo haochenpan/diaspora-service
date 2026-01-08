@@ -30,9 +30,9 @@ EXPECTED_TOPICS_COUNT_2 = 2
 def db_service() -> DynamoDBService:
     """Create a DynamoDBService instance with real AWS services."""
     region = os.getenv('AWS_ACCOUNT_REGION')
-    keys_table_name = 'test-keys-table'
-    users_table_name = 'test-users-table'
-    namespace_table_name = 'test-namespace-table'
+    keys_table_name = 'test-diaspora-keys-table'
+    users_table_name = 'test-diaspora-users-table'
+    namespace_table_name = 'test-diaspora-namespace-table'
 
     if not region:
         raise ValueError(
