@@ -87,10 +87,12 @@ class DiasporaService:
         db_service = DynamoDBService(
             region=region,
             keys_table_name=os.getenv(
-                'KEYS_TABLE_NAME', 'diaspora-keys-table',
+                'KEYS_TABLE_NAME',
+                'diaspora-keys-table',
             ),
             users_table_name=os.getenv(
-                'USERS_TABLE_NAME', 'diaspora-users-table',
+                'USERS_TABLE_NAME',
+                'diaspora-users-table',
             ),
             namespace_table_name=os.getenv(
                 'NAMESPACE_TABLE_NAME',
