@@ -1,4 +1,4 @@
-"""Unit tests for web_service_v4 DynamoDBService."""
+"""Unit tests for web_service_v3 DynamoDBService."""
 
 from __future__ import annotations
 

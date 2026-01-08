@@ -1,4 +1,4 @@
-"""Unit tests for web_service_v4 KafkaService."""
+"""Unit tests for web_service_v3 KafkaService."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Pytest configuration for web_service_v4 tests."""
+"""Pytest configuration for web_service_v3 tests."""
 
 import warnings
 

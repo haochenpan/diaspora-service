@@ -1,4 +1,4 @@
-"""Unit tests for web_service_v4 IAMService."""
+"""Unit tests for web_service_v3 IAMService."""
 
 from __future__ import annotations
 
