@@ -5,10 +5,10 @@ from __future__ import annotations
 import contextlib
 import json
 import re
-import secrets
-import string
+import time
 from typing import Any
 
+import boto3
 from aws_msk_iam_sasl_signer import MSKAuthTokenProvider
 from kafka.admin import KafkaAdminClient
 from kafka.admin import NewTopic
@@ -16,36 +16,12 @@ from kafka.errors import TopicAlreadyExistsError
 from kafka.errors import UnknownTopicOrPartitionError
 from kafka.sasl.oauth import AbstractTokenProvider
 
-from web_service_v3.responses import create_failure_result
-from web_service_v3.responses import create_success_result
-
-# Namespace validation constants
-MIN_NAMESPACE_LENGTH = 3
-MAX_NAMESPACE_LENGTH = 32
-
-# Global namespaces tracking key
-GLOBAL_NAMESPACES_KEY = '__global_namespaces__'
-
-
-class MSKTokenProvider(AbstractTokenProvider):
-    """Provide tokens for MSK authentication."""
-
-    def __init__(self, region: str) -> None:
-        """Initialize with AWS region."""
-        self.region = region
-
-    def token(self) -> str:
-        """Generate and return an MSK auth token."""
-        token, _ = MSKAuthTokenProvider.generate_auth_token(self.region)
-        return token
-
 
 class IAMService:
     """Service for managing IAM users and policies."""
 
     def __init__(
         self,
-        iam_client: Any,
         account_id: str,
         region: str,
         cluster_name: str,
@@ -53,23 +29,25 @@ class IAMService:
         """Initialize IAM service.
 
         Args:
-            iam_client: Boto3 IAM client
             account_id: AWS account ID
             region: AWS region
             cluster_name: MSK cluster name
         """
-        self.iam = iam_client
+        self.iam = boto3.client('iam')
         self.account_id = account_id
         self.region = region
         self.cluster_name = cluster_name
-        self.iam_policy_arn_prefix = (
+        self.policy_arn_prefix = (
             f'arn:aws:iam::{account_id}:policy/msk-policy/'
         )
+        self.kafka_arn_prefix = f'arn:aws:kafka:{region}:{account_id}'
+
+    def _get_policy_arn(self, subject: str) -> str:
+        """Get policy ARN for a subject."""
+        return self.policy_arn_prefix + subject
 
     def generate_user_policy(self, subject: str) -> dict[str, Any]:
-        """Generate an IAM user policy for Kafka access (v3).
-
-        Namespace routes are disabled - uses ns-<last 12 digits>.* pattern.
+        """Generate an IAM user policy for Kafka access.
 
         Args:
             subject: User subject ID
@@ -77,12 +55,15 @@ class IAMService:
         Returns:
             IAM policy document as a dictionary
         """
-        # Extract last 12 characters from subject (removing dashes)
         subject_suffix = subject.replace('-', '')[-12:]
-        topic_arn = (
-            f'arn:aws:kafka:{self.region}:{self.account_id}:'
-            f'topic/{self.cluster_name}/*/ns-{subject_suffix}.*'
-        )
+        base = f'{self.kafka_arn_prefix}'
+        cluster = f'/{self.cluster_name}/*'
+        resources = [
+            f'{base}:group{cluster}',
+            f'{base}:cluster{cluster}',
+            f'{base}:transactional-id{cluster}',
+            f'{base}:topic{cluster}/ns-{subject_suffix}.*',
+        ]
         return {
             'Version': '2012-10-17',
             'Statement': [
@@ -99,255 +80,173 @@ class IAMService:
                         'kafka-cluster:DescribeTransactionalId',
                         'kafka-cluster:AlterTransactionalId',
                     ],
-                    'Resource': [
-                        f'arn:aws:kafka:{self.region}:{self.account_id}:group/{self.cluster_name}/*',
-                        f'arn:aws:kafka:{self.region}:{self.account_id}:cluster/{self.cluster_name}/*',
-                        f'arn:aws:kafka:{self.region}:{self.account_id}:transactional-id/{self.cluster_name}/*',
-                        topic_arn,
-                    ],
+                    'Resource': resources,
                 },
             ],
         }
 
-    def ensure_user_exists(self, subject: str) -> dict[str, bool]:
-        """Ensure IAM user exists with policy attached (idempotent).
-
-        This method does NOT use a lock - caller must hold lock.
-        Returns dict with flags indicating what was created.
+    def create_user_and_policy(self, subject: str) -> dict[str, Any]:
+        """Create IAM user with policy attached (idempotent).
 
         Args:
             subject: User subject ID
 
         Returns:
-            Dictionary with creation flags
+            Dictionary with status (success/failure) and message
         """
-        user_created = False
-        policy_created = False
-        policy_attached = False
+        try:
+            with contextlib.suppress(
+                self.iam.exceptions.EntityAlreadyExistsException,
+            ):
+                self.iam.create_user(
+                    Path='/msk-users/',
+                    UserName=subject,
+                )
 
-        # 1. Create IAM user
-        with contextlib.suppress(
-            self.iam.exceptions.EntityAlreadyExistsException,
-        ):
-            self.iam.create_user(Path='/msk-users/', UserName=subject)
-            user_created = True
+            with contextlib.suppress(
+                self.iam.exceptions.EntityAlreadyExistsException,
+            ):
+                self.iam.create_policy(
+                    PolicyName=subject,
+                    Path='/msk-policy/',
+                    PolicyDocument=json.dumps(
+                        self.generate_user_policy(subject),
+                    ),
+                )
 
-        # 2. Create IAM policy
-        with contextlib.suppress(
-            self.iam.exceptions.EntityAlreadyExistsException,
-        ):
-            self.iam.create_policy(
-                PolicyName=subject,
-                Path='/msk-policy/',
-                PolicyDocument=json.dumps(
-                    self.generate_user_policy(subject),
-                ),
-            )
-            policy_created = True
+            with contextlib.suppress(
+                self.iam.exceptions.EntityAlreadyExistsException,
+            ):
+                self.iam.attach_user_policy(
+                    UserName=subject,
+                    PolicyArn=self._get_policy_arn(subject),
+                )
 
-        # 3. Attach the created policy to user
-        with contextlib.suppress(
-            self.iam.exceptions.EntityAlreadyExistsException,
-        ):
-            self.iam.attach_user_policy(
-                UserName=subject,
-                PolicyArn=self.iam_policy_arn_prefix + subject,
-            )
-            policy_attached = True
+            return {
+                'status': 'success',
+                'message': f'User and policy created for {subject}',
+            }
+        except Exception as e:
+            return {
+                'status': 'failure',
+                'message': f'Failed to create user and policy: {e!s}',
+            }
 
-        # 4. Update IAM policy to refresh with latest policy document
-        # This ensures the policy is always up-to-date and cleans up old
-        # versions
-        # Note: update_policy already handles NoSuchEntityException internally
-        self.update_policy(subject)
-
-        return {
-            'user_created': user_created,
-            'policy_created': policy_created,
-            'policy_attached': policy_attached,
-        }
-
-    def update_policy(self, subject: str) -> None:
-        """Update IAM policy by creating a new version and deleting old ones.
-
-        This method refreshes the policy with the latest policy document,
-        creates a new version, and deletes old non-default versions to avoid
-        hitting the version quota.
-
-        This method does NOT use a lock - caller must hold lock.
-
-        Args:
-            subject: User subject ID
-        """
-        policy_arn = self.iam_policy_arn_prefix + subject
-        with contextlib.suppress(
-            self.iam.exceptions.NoSuchEntityException,
-        ):
-            # Get the latest policy document
-            latest_policy = self.generate_user_policy(subject)
-
-            # Create a new policy version with the latest policy
-            self.iam.create_policy_version(
-                PolicyArn=policy_arn,
-                PolicyDocument=json.dumps(latest_policy),
-                SetAsDefault=True,
-            )
-
-            # Delete old non-default versions
-            self.delete_policy_versions(policy_arn)
-
-    def delete_policy_versions(self, policy_arn: str) -> None:
-        """Delete all non-default policy versions.
-
-        Args:
-            policy_arn: Policy ARN
-        """
-        with contextlib.suppress(
-            self.iam.exceptions.NoSuchEntityException,
-        ):
-            existing_policies = self.iam.list_policy_versions(
-                PolicyArn=policy_arn,
-            )
-            for ver in existing_policies['Versions']:
-                if not ver['IsDefaultVersion']:
-                    self.iam.delete_policy_version(
-                        PolicyArn=policy_arn,
-                        VersionId=ver['VersionId'],
-                    )
-
-    def delete_user(self, subject: str) -> dict[str, Any]:
+    def delete_user_and_policy(self, subject: str) -> dict[str, Any]:
         """Delete IAM user and all associated resources.
 
         Args:
             subject: User subject ID
 
         Returns:
-            dict with deletion status
+            dict with status (success/failure) and message
         """
-        namespaces_deleted = False  # Will be set by caller
-        keys_deleted = False
-        policy_detached = False
-        policy_deleted = False
-        user_deleted = False
-
-        # 1. Delete existing access keys if any
         try:
-            existing_keys = self.iam.list_access_keys(UserName=subject)
-            for key in existing_keys['AccessKeyMetadata']:
-                self.iam.delete_access_key(
+            # Delete access keys
+            self.delete_access_keys(subject)
+
+            # Detach and delete policy
+            policy_arn = self._get_policy_arn(subject)
+            with contextlib.suppress(
+                self.iam.exceptions.NoSuchEntityException,
+            ):
+                self.iam.detach_user_policy(
                     UserName=subject,
-                    AccessKeyId=key['AccessKeyId'],
+                    PolicyArn=policy_arn,
                 )
-                keys_deleted = True
-        except self.iam.exceptions.NoSuchEntityException:
-            pass  # user doesn't exist or has no keys
 
-        # 2. Detach IAM policy
-        try:
-            policy_arn = self.iam_policy_arn_prefix + subject
-            self.iam.detach_user_policy(
-                UserName=subject,
-                PolicyArn=policy_arn,
-            )
-            policy_detached = True
-        except self.iam.exceptions.NoSuchEntityException:
-            pass  # policy not attached
+            with contextlib.suppress(
+                self.iam.exceptions.NoSuchEntityException,
+            ):
+                # Delete non-default policy versions first
+                versions = self.iam.list_policy_versions(
+                    PolicyArn=policy_arn,
+                )['Versions']
+                for ver in versions:
+                    if not ver['IsDefaultVersion']:
+                        self.iam.delete_policy_version(
+                            PolicyArn=policy_arn,
+                            VersionId=ver['VersionId'],
+                        )
+                # Delete the policy itself
+                self.iam.delete_policy(PolicyArn=policy_arn)
 
-        # 3. Delete IAM policy (including all versions)
-        try:
-            policy_arn = self.iam_policy_arn_prefix + subject
-            # Delete non-default policy versions first
-            self.delete_policy_versions(policy_arn)
-            # Delete the policy itself
-            self.iam.delete_policy(PolicyArn=policy_arn)
-            policy_deleted = True
-        except self.iam.exceptions.NoSuchEntityException:
-            pass  # policy doesn't exist
+            # Delete user
+            with contextlib.suppress(
+                self.iam.exceptions.NoSuchEntityException,
+            ):
+                self.iam.delete_user(UserName=subject)
 
-        # 4. Delete IAM user
-        try:
-            self.iam.delete_user(UserName=subject)
-            user_deleted = True
-        except self.iam.exceptions.NoSuchEntityException:
-            pass  # user doesn't exist
+            return {
+                'status': 'success',
+                'message': f'IAM user deleted for {subject}',
+            }
+        except Exception as e:
+            return {
+                'status': 'failure',
+                'message': f'Failed to delete user and policy: {e!s}',
+            }
 
-        return {
-            'status': 'success',
-            'message': f'IAM user deleted for {subject}',
-            'namespaces_deleted': namespaces_deleted,
-            'keys_deleted': keys_deleted,
-            'policy_detached': policy_detached,
-            'policy_deleted': policy_deleted,
-            'user_deleted': user_deleted,
-        }
-
-    def create_access_key(self, subject: str) -> dict[str, str]:
+    def create_access_key(self, subject: str) -> dict[str, Any]:
         """Create an access key for a user.
 
         Args:
             subject: User subject ID
 
         Returns:
-            Dictionary with access_key, secret_key, and create_date
+            Dictionary with status (success/failure), message,
+            access_key, secret_key, and create_date
         """
-        new_key = self.iam.create_access_key(UserName=subject)
-        return {
-            'access_key': new_key['AccessKey']['AccessKeyId'],
-            'secret_key': new_key['AccessKey']['SecretAccessKey'],
-            'create_date': new_key['AccessKey']['CreateDate'].isoformat(),
-        }
+        try:
+            response = self.iam.create_access_key(UserName=subject)
+            key = response['AccessKey']
+            return {
+                'status': 'success',
+                'message': f'Access key created for {subject}',
+                'access_key': key['AccessKeyId'],
+                'secret_key': key['SecretAccessKey'],
+                'create_date': key['CreateDate'].isoformat(),
+            }
+        except Exception as e:
+            return {
+                'status': 'failure',
+                'message': f'Failed to create access key: {e!s}',
+            }
 
-    def delete_access_keys(self, subject: str) -> bool:
+    def delete_access_keys(self, subject: str) -> dict[str, Any]:
         """Delete all access keys for a user.
 
         Args:
             subject: User subject ID
 
         Returns:
-            True if any keys were deleted, False otherwise
+            Dictionary with status (success/failure) and message
         """
-        keys_deleted = False
         try:
-            existing_keys = self.iam.list_access_keys(UserName=subject)
-            for key in existing_keys['AccessKeyMetadata']:
-                self.iam.delete_access_key(
+            with contextlib.suppress(
+                self.iam.exceptions.NoSuchEntityException,
+            ):
+                keys = self.iam.list_access_keys(
                     UserName=subject,
-                    AccessKeyId=key['AccessKeyId'],
-                )
-                keys_deleted = True
-        except self.iam.exceptions.NoSuchEntityException:
-            pass  # No keys exist
-        return keys_deleted
+                )['AccessKeyMetadata']
+                for key in keys:
+                    self.iam.delete_access_key(
+                        UserName=subject,
+                        AccessKeyId=key['AccessKeyId'],
+                    )
+            return {
+                'status': 'success',
+                'message': f'Access keys deleted for {subject}',
+            }
+        except Exception as e:
+            return {
+                'status': 'failure',
+                'message': f'Failed to delete access keys: {e!s}',
+            }
 
-    def list_access_keys(self, subject: str) -> list[str]:
-        """List access key IDs for a user.
 
-        Args:
-            subject: User subject ID
-
-        Returns:
-            List of access key IDs
-        """
-        try:
-            keys = self.iam.list_access_keys(UserName=subject)
-            return [k['AccessKeyId'] for k in keys['AccessKeyMetadata']]
-        except self.iam.exceptions.NoSuchEntityException:
-            return []
-
-    def user_exists(self, subject: str) -> bool:
-        """Check if user exists.
-
-        Args:
-            subject: User subject ID
-
-        Returns:
-            True if user exists, False otherwise
-        """
-        try:
-            self.iam.get_user(UserName=subject)
-            return True
-        except self.iam.exceptions.NoSuchEntityException:
-            return False
+# Global namespaces tracking key
+GLOBAL_NAMESPACES_KEY = '__global_namespaces__'
 
 
 class DynamoDBService:
@@ -355,7 +254,7 @@ class DynamoDBService:
 
     def __init__(
         self,
-        dynamodb_client: Any,
+        region: str,
         keys_table_name: str,
         users_table_name: str,
         namespace_table_name: str,
@@ -363,15 +262,19 @@ class DynamoDBService:
         """Initialize DynamoDB service.
 
         Args:
-            dynamodb_client: Boto3 DynamoDB client
+            region: AWS region
             keys_table_name: Table name for keys
             users_table_name: Table name for user records
             namespace_table_name: Table name for namespace/topic records
         """
-        self.dynamodb = dynamodb_client
+        self.dynamodb = boto3.client('dynamodb', region_name=region)
         self.keys_table_name = keys_table_name
         self.users_table_name = users_table_name
         self.namespace_table_name = namespace_table_name
+
+    # ========================================================================
+    # Key Management
+    # ========================================================================
 
     def store_key(
         self,
@@ -382,77 +285,51 @@ class DynamoDBService:
     ) -> None:
         """Store access key in DynamoDB.
 
-        This method does NOT use a lock - caller must hold lock.
-        create_date should be ISO format string.
-
         Args:
             subject: User subject ID
             access_key: Access key ID
             secret_key: Secret access key
             create_date: Creation date in ISO format
         """
-        try:
-            self.dynamodb.put_item(
-                TableName=self.keys_table_name,
-                Item={
-                    'subject': {'S': subject},
-                    'access_key': {'S': access_key},
-                    'secret_key': {'S': secret_key},
-                    'create_date': {'S': create_date},
-                },
-            )
-        except self.dynamodb.exceptions.ResourceNotFoundException:
-            # Table doesn't exist, create it
-            self._create_keys_table()
-            # Retry storing the key
-            self.dynamodb.put_item(
-                TableName=self.keys_table_name,
-                Item={
-                    'subject': {'S': subject},
-                    'access_key': {'S': access_key},
-                    'secret_key': {'S': secret_key},
-                    'create_date': {'S': create_date},
-                },
-            )
+        item = {
+            'subject': {'S': subject},
+            'access_key': {'S': access_key},
+            'secret_key': {'S': secret_key},
+            'create_date': {'S': create_date},
+        }
+        self._put_item_with_table_creation(
+            table_name=self.keys_table_name,
+            item=item,
+            create_table_func=self._create_keys_table,
+        )
 
     def get_key(self, subject: str) -> dict[str, str] | None:
         """Get access key from DynamoDB.
-
-        This method does NOT use a lock - caller must hold lock.
-        Returns dict with access_key, secret_key, and create_date if found,
-        None otherwise.
 
         Args:
             subject: User subject ID
 
         Returns:
-            Dictionary with key information or None
+            Dictionary with access_key, secret_key, and create_date if found,
+            None otherwise
         """
-        try:
+        with contextlib.suppress(
+            self.dynamodb.exceptions.ResourceNotFoundException,
+        ):
             response = self.dynamodb.get_item(
                 TableName=self.keys_table_name,
                 Key={'subject': {'S': subject}},
             )
             if 'Item' in response:
-                result = {
+                return {
                     'access_key': response['Item']['access_key']['S'],
                     'secret_key': response['Item']['secret_key']['S'],
+                    'create_date': response['Item']['create_date']['S'],
                 }
-                # create_date might not exist for old entries
-                if 'create_date' in response['Item']:
-                    result['create_date'] = response['Item']['create_date'][
-                        'S'
-                    ]
-                return result
-        except self.dynamodb.exceptions.ResourceNotFoundException:
-            # Table doesn't exist yet
-            pass
         return None
 
     def delete_key(self, subject: str) -> None:
         """Delete access key from DynamoDB.
-
-        This method does NOT use a lock - caller must hold lock.
 
         Args:
             subject: User subject ID
@@ -465,203 +342,165 @@ class DynamoDBService:
                 Key={'subject': {'S': subject}},
             )
 
-    def get_user_record(self, subject: str) -> dict[str, Any] | None:
-        """Get user record from DynamoDB.
+    # ========================================================================
+    # User Namespace Management
+    # ========================================================================
 
-        This method does NOT use a lock - caller must hold lock.
-        Returns dict with namespaces list if found, None otherwise.
+    def put_user_namespace(
+        self,
+        subject: str,
+        namespaces: list[str],
+    ) -> None:
+        """Store user namespaces in DynamoDB.
+
+        Args:
+            subject: User subject ID
+            namespaces: List of namespace names
+        """
+        item = {
+            'subject': {'S': subject},
+            'namespaces': {
+                'L': [{'S': ns} for ns in sorted(set(namespaces))],
+            },
+        }
+        self._put_item_with_table_creation(
+            table_name=self.users_table_name,
+            item=item,
+            create_table_func=self._create_users_table,
+        )
+
+    def get_user_namespaces(self, subject: str) -> list[str]:
+        """Get user namespaces from DynamoDB.
 
         Args:
             subject: User subject ID
 
         Returns:
-            Dictionary with user record or None
+            List of namespace names, empty list if not found
         """
-        try:
+        with contextlib.suppress(
+            self.dynamodb.exceptions.ResourceNotFoundException,
+        ):
             response = self.dynamodb.get_item(
                 TableName=self.users_table_name,
                 Key={'subject': {'S': subject}},
             )
-            if 'Item' in response:
-                result: dict[str, Any] = {}
-                if 'namespaces' in response['Item']:
-                    result['namespaces'] = [
-                        ns['S'] for ns in response['Item']['namespaces']['L']
-                    ]
-                return result
-        except self.dynamodb.exceptions.ResourceNotFoundException:
-            # Table doesn't exist yet
-            pass
-        return None
+            if 'Item' in response and 'namespaces' in response['Item']:
+                return [ns['S'] for ns in response['Item']['namespaces']['L']]
+        return []
+
+    def delete_user_namespace(self, subject: str) -> None:
+        """Delete user namespace record from DynamoDB.
+
+        Args:
+            subject: User subject ID
+        """
+        with contextlib.suppress(
+            self.dynamodb.exceptions.ResourceNotFoundException,
+        ):
+            self.dynamodb.delete_item(
+                TableName=self.users_table_name,
+                Key={'subject': {'S': subject}},
+            )
+
+    # ========================================================================
+    # Global Namespace Management
+    # ========================================================================
+
+    def put_global_namespaces(self, namespaces: set[str]) -> None:
+        """Store global namespaces registry in DynamoDB.
+
+        Args:
+            namespaces: Set of namespace names
+        """
+        item = {
+            'subject': {'S': GLOBAL_NAMESPACES_KEY},
+            'namespaces': {
+                'L': [{'S': ns} for ns in sorted(namespaces)],
+            },
+        }
+        self._put_item_with_table_creation(
+            table_name=self.users_table_name,
+            item=item,
+            create_table_func=self._create_users_table,
+        )
 
     def get_global_namespaces(self) -> set[str]:
         """Get all globally registered namespace names.
 
-        This method does NOT use a lock - caller must hold lock.
-        Returns set of namespace names.
-
         Returns:
             Set of namespace names
         """
-        try:
+        with contextlib.suppress(
+            self.dynamodb.exceptions.ResourceNotFoundException,
+        ):
             response = self.dynamodb.get_item(
                 TableName=self.users_table_name,
                 Key={'subject': {'S': GLOBAL_NAMESPACES_KEY}},
             )
             if 'Item' in response and 'namespaces' in response['Item']:
                 return {ns['S'] for ns in response['Item']['namespaces']['L']}
-        except self.dynamodb.exceptions.ResourceNotFoundException:
-            # Table doesn't exist yet
-            pass
         return set()
 
-    def update_global_namespaces(self, namespaces: set[str]) -> None:
-        """Update global namespaces registry in DynamoDB.
-
-        This method does NOT use a lock - caller must hold lock.
-
-        Args:
-            namespaces: Set of namespace names
-        """
-        try:
-            self.dynamodb.put_item(
-                TableName=self.users_table_name,
-                Item={
-                    'subject': {'S': GLOBAL_NAMESPACES_KEY},
-                    'namespaces': {
-                        'L': [{'S': ns} for ns in sorted(namespaces)],
-                    },
-                },
-            )
-        except self.dynamodb.exceptions.ResourceNotFoundException:
-            # Table doesn't exist, create it
-            self._create_users_table()
-            # Retry storing the record
-            self.dynamodb.put_item(
-                TableName=self.users_table_name,
-                Item={
-                    'subject': {'S': GLOBAL_NAMESPACES_KEY},
-                    'namespaces': {
-                        'L': [{'S': ns} for ns in sorted(namespaces)],
-                    },
-                },
-            )
-
-    def update_user_namespaces(
-        self,
-        subject: str,
-        namespaces: list[str],
-    ) -> None:
-        """Update user record with namespaces in DynamoDB.
-
-        This method does NOT use a lock - caller must hold lock.
-
-        Args:
-            subject: User subject ID
-            namespaces: List of namespace names
-        """
-        try:
-            self.dynamodb.put_item(
-                TableName=self.users_table_name,
-                Item={
-                    'subject': {'S': subject},
-                    'namespaces': {
-                        'L': [{'S': ns} for ns in sorted(set(namespaces))],
-                    },
-                },
-            )
-        except self.dynamodb.exceptions.ResourceNotFoundException:
-            # Table doesn't exist, create it
-            self._create_users_table()
-            # Retry storing the record
-            self.dynamodb.put_item(
-                TableName=self.users_table_name,
-                Item={
-                    'subject': {'S': subject},
-                    'namespaces': {
-                        'L': [{'S': ns} for ns in sorted(set(namespaces))],
-                    },
-                },
-            )
-
-    def delete_user_record(self, subject: str) -> None:
-        """Delete user record from DynamoDB.
-
-        This method does NOT use a lock - caller must hold lock.
-
-        Args:
-            subject: User subject ID
-        """
+    def delete_global_namespaces(self) -> None:
+        """Delete global namespaces registry from DynamoDB."""
         with contextlib.suppress(
             self.dynamodb.exceptions.ResourceNotFoundException,
         ):
             self.dynamodb.delete_item(
                 TableName=self.users_table_name,
-                Key={'subject': {'S': subject}},
+                Key={'subject': {'S': GLOBAL_NAMESPACES_KEY}},
             )
+
+    # ========================================================================
+    # Namespace Topics Management
+    # ========================================================================
+
+    def put_namespace_topics(
+        self,
+        namespace: str,
+        topics: list[str],
+    ) -> None:
+        """Store namespace topics in DynamoDB.
+
+        Args:
+            namespace: Namespace name
+            topics: List of topic names
+        """
+        item = {
+            'namespace': {'S': namespace},
+            'topics': {
+                'L': [{'S': t} for t in sorted(set(topics))],
+            },
+        }
+        self._put_item_with_table_creation(
+            table_name=self.namespace_table_name,
+            item=item,
+            create_table_func=self._create_namespace_table,
+        )
 
     def get_namespace_topics(self, namespace: str) -> list[str]:
         """Get list of topics for a namespace from DynamoDB.
-
-        This method does NOT use a lock - caller must hold lock.
-        Returns empty list if namespace not found.
 
         Args:
             namespace: Namespace name
 
         Returns:
-            List of topic names
+            List of topic names, empty list if not found
         """
-        try:
+        with contextlib.suppress(
+            self.dynamodb.exceptions.ResourceNotFoundException,
+        ):
             response = self.dynamodb.get_item(
                 TableName=self.namespace_table_name,
                 Key={'namespace': {'S': namespace}},
             )
             if 'Item' in response and 'topics' in response['Item']:
                 return [t['S'] for t in response['Item']['topics']['L']]
-        except self.dynamodb.exceptions.ResourceNotFoundException:
-            pass
         return []
 
-    def update_namespace_topics(
-        self,
-        namespace: str,
-        topics: list[str],
-    ) -> None:
-        """Update namespace record with topics in DynamoDB.
-
-        This method does NOT use a lock - caller must hold lock.
-
-        Args:
-            namespace: Namespace name
-            topics: List of topic names
-        """
-        try:
-            self.dynamodb.put_item(
-                TableName=self.namespace_table_name,
-                Item={
-                    'namespace': {'S': namespace},
-                    'topics': {
-                        'L': [{'S': t} for t in sorted(set(topics))],
-                    },
-                },
-            )
-        except self.dynamodb.exceptions.ResourceNotFoundException:
-            self._create_namespace_table()
-            self.dynamodb.put_item(
-                TableName=self.namespace_table_name,
-                Item={
-                    'namespace': {'S': namespace},
-                    'topics': {
-                        'L': [{'S': t} for t in sorted(set(topics))],
-                    },
-                },
-            )
-
     def delete_namespace_topics(self, namespace: str) -> None:
-        """Delete namespace record from DynamoDB.
-
-        This method does NOT use a lock - caller must hold lock.
+        """Delete namespace topics record from DynamoDB.
 
         Args:
             namespace: Namespace name
@@ -674,9 +513,40 @@ class DynamoDBService:
                 Key={'namespace': {'S': namespace}},
             )
 
+    # ========================================================================
+    # Table Management
+    # ========================================================================
+
+    def _put_item_with_table_creation(
+        self,
+        table_name: str,
+        item: dict[str, Any],
+        create_table_func: Any,
+    ) -> None:
+        """Put item in DynamoDB table, creating table if it doesn't exist.
+
+        Args:
+            table_name: Name of the DynamoDB table
+            item: Item to put in the table
+            create_table_func: Function to call to create the table
+        """
+        try:
+            self.dynamodb.put_item(
+                TableName=table_name,
+                Item=item,
+            )
+        except self.dynamodb.exceptions.ResourceNotFoundException:
+            create_table_func()
+            self.dynamodb.put_item(
+                TableName=table_name,
+                Item=item,
+            )
+
     def _create_keys_table(self) -> None:
         """Create DynamoDB table for storing keys if it doesn't exist."""
-        try:
+        with contextlib.suppress(
+            self.dynamodb.exceptions.ResourceInUseException,
+        ):
             self.dynamodb.create_table(
                 TableName=self.keys_table_name,
                 KeySchema=[
@@ -687,16 +557,15 @@ class DynamoDBService:
                 ],
                 BillingMode='PAY_PER_REQUEST',
             )
-            # Wait for table to be created
             self.dynamodb.get_waiter('table_exists').wait(
                 TableName=self.keys_table_name,
             )
-        except self.dynamodb.exceptions.ResourceInUseException:
-            pass  # Table already exists
 
     def _create_users_table(self) -> None:
         """Create DynamoDB table for user records if it doesn't exist."""
-        try:
+        with contextlib.suppress(
+            self.dynamodb.exceptions.ResourceInUseException,
+        ):
             self.dynamodb.create_table(
                 TableName=self.users_table_name,
                 KeySchema=[
@@ -707,16 +576,15 @@ class DynamoDBService:
                 ],
                 BillingMode='PAY_PER_REQUEST',
             )
-            # Wait for table to be created
             self.dynamodb.get_waiter('table_exists').wait(
                 TableName=self.users_table_name,
             )
-        except self.dynamodb.exceptions.ResourceInUseException:
-            pass  # Table already exists
 
     def _create_namespace_table(self) -> None:
         """Create DynamoDB table for namespace/topic records."""
-        try:
+        with contextlib.suppress(
+            self.dynamodb.exceptions.ResourceInUseException,
+        ):
             self.dynamodb.create_table(
                 TableName=self.namespace_table_name,
                 KeySchema=[
@@ -730,14 +598,37 @@ class DynamoDBService:
             self.dynamodb.get_waiter('table_exists').wait(
                 TableName=self.namespace_table_name,
             )
-        except self.dynamodb.exceptions.ResourceInUseException:
-            pass
+
+
+class MSKTokenProvider(AbstractTokenProvider):
+    """Provide tokens for MSK authentication."""
+
+    def __init__(self, region: str) -> None:
+        """Initialize with AWS region.
+
+        Args:
+            region: AWS region
+        """
+        self.region = region
+
+    def token(self) -> str:
+        """Generate and return an MSK auth token.
+
+        Returns:
+            MSK authentication token
+        """
+        token, _ = MSKAuthTokenProvider.generate_auth_token(self.region)
+        return token
 
 
 class KafkaService:
     """Service for managing Kafka/MSK operations."""
 
-    def __init__(self, bootstrap_servers: str | None, region: str) -> None:
+    def __init__(
+        self,
+        bootstrap_servers: str | None,
+        region: str,
+    ) -> None:
         """Initialize Kafka service.
 
         Args:
@@ -759,13 +650,12 @@ class KafkaService:
             topic: Topic name
 
         Returns:
-            dict with status and message on success/failure, or None if
-            Kafka endpoint is not configured.
+            Dictionary with status (success/failure) and message,
+            or None if Kafka endpoint is not configured.
 
         The actual Kafka topic name will be '{namespace}.{topic}'.
         """
         if not self.bootstrap_servers:
-            # No Kafka endpoint configured, skip topic creation
             return None
 
         kafka_topic_name = f'{namespace}.{topic}'
@@ -788,26 +678,35 @@ class KafkaService:
                     ),
                 ]
                 admin.create_topics(new_topics=topic_list)
-                return create_success_result('Topic created')
+                return {
+                    'status': 'success',
+                    'message': 'Topic created',
+                }
             except TopicAlreadyExistsError:
-                # Topic already exists, this is idempotent
-                return create_success_result('Topic already exists')
+                return {
+                    'status': 'success',
+                    'message': 'Topic already exists',
+                }
             except Exception as e:
                 last_exception = e
                 if attempt == max_retries - 1:
-                    # Last attempt failed, return failure status
-                    return create_failure_result(
-                        f'Failed to create Kafka topic {kafka_topic_name} '
-                        f'after {max_retries} attempts: {e!s}',
-                    )
-                # Retry on other exceptions
+                    return {
+                        'status': 'failure',
+                        'message': (
+                            f'Failed to create Kafka topic '
+                            f'{kafka_topic_name} after {max_retries} '
+                            f'attempts: {e!s}'
+                        ),
+                    }
                 continue
 
-        # This should never be reached, but for type safety
-        return create_failure_result(
-            f'Failed to create Kafka topic {kafka_topic_name}: '
-            f'{str(last_exception) if last_exception else "Unknown error"}',
-        )
+        return {
+            'status': 'failure',
+            'message': (
+                f'Failed to create Kafka topic {kafka_topic_name}: '
+                f'{str(last_exception) if last_exception else "Unknown error"}'
+            ),
+        }
 
     def delete_topic(
         self,
@@ -821,13 +720,12 @@ class KafkaService:
             topic: Topic name
 
         Returns:
-            dict with status and message on success/failure, or None if
-            Kafka endpoint is not configured.
+            Dictionary with status (success/failure) and message,
+            or None if Kafka endpoint is not configured.
 
         The actual Kafka topic name will be '{namespace}.{topic}'.
         """
         if not self.bootstrap_servers:
-            # No Kafka endpoint configured, skip topic deletion
             return None
 
         kafka_topic_name = f'{namespace}.{topic}'
@@ -843,26 +741,79 @@ class KafkaService:
                     sasl_oauth_token_provider=MSKTokenProvider(self.region),
                 )
                 admin.delete_topics(topics=[kafka_topic_name])
-                return create_success_result('Topic deleted')
+                return {
+                    'status': 'success',
+                    'message': 'Topic deleted',
+                }
             except UnknownTopicOrPartitionError:
-                # Topic doesn't exist, this is idempotent
-                return create_success_result('Topic does not exist')
+                return {
+                    'status': 'success',
+                    'message': 'Topic does not exist',
+                }
             except Exception as e:
                 last_exception = e
                 if attempt == max_retries - 1:
-                    # Last attempt failed, return failure status
-                    return create_failure_result(
-                        f'Failed to delete Kafka topic {kafka_topic_name} '
-                        f'after {max_retries} attempts: {e!s}',
-                    )
-                # Retry on other exceptions
+                    return {
+                        'status': 'failure',
+                        'message': (
+                            f'Failed to delete Kafka topic '
+                            f'{kafka_topic_name} after {max_retries} '
+                            f'attempts: {e!s}'
+                        ),
+                    }
                 continue
 
-        # This should never be reached, but for type safety
-        return create_failure_result(
-            f'Failed to delete Kafka topic {kafka_topic_name}: '
-            f'{str(last_exception) if last_exception else "Unknown error"}',
-        )
+        return {
+            'status': 'failure',
+            'message': (
+                f'Failed to delete Kafka topic {kafka_topic_name}: '
+                f'{str(last_exception) if last_exception else "Unknown error"}'
+            ),
+        }
+
+    def recreate_topic(
+        self,
+        namespace: str,
+        topic: str,
+    ) -> dict[str, Any] | None:
+        """Recreate a Kafka topic by deleting and recreating it.
+
+        This method calls delete_topic (idempotent) and then
+        create_topic (idempotent).
+
+        Args:
+            namespace: Namespace name
+            topic: Topic name
+
+        Returns:
+            Dictionary with status (success/failure) and message,
+            or None if Kafka endpoint is not configured.
+        """
+        if not self.bootstrap_servers:
+            return None
+
+        # Delete topic (idempotent)
+        delete_result = self.delete_topic(namespace, topic)
+        if delete_result and delete_result['status'] == 'failure':
+            return delete_result
+
+        # Wait 5 seconds before recreating
+        time.sleep(5)
+
+        # Create topic (idempotent)
+        create_result = self.create_topic(namespace, topic)
+        if create_result and create_result['status'] == 'failure':
+            return create_result
+
+        return {
+            'status': 'success',
+            'message': 'Topic recreated',
+        }
+
+
+# Namespace validation constants
+MIN_NAMESPACE_LENGTH = 3
+MAX_NAMESPACE_LENGTH = 32
 
 
 class NamespaceService:
@@ -876,8 +827,9 @@ class NamespaceService:
         """
         self.dynamodb = dynamodb_service
 
-    def validate(self, namespace: str) -> dict[str, Any] | None:
-        """Validate namespace name according to rules.
+    @classmethod
+    def validate_name(cls, name: str) -> dict[str, str] | None:
+        """Validate namespace or topic name according to rules.
 
         Rules:
         - 3-32 characters
@@ -885,27 +837,34 @@ class NamespaceService:
         - Cannot start or end with hyphen or underscore
 
         Args:
-            namespace: Namespace name to validate
+            name: Namespace or topic name to validate
 
         Returns:
-            None if valid, or dict with failure status if invalid
+            None if valid, or dict with status 'failure' and message if invalid
         """
-        if not (
-            MIN_NAMESPACE_LENGTH <= len(namespace) <= MAX_NAMESPACE_LENGTH
-        ):
-            return create_failure_result(
-                f'Namespace name must be between {MIN_NAMESPACE_LENGTH} '
-                f'and {MAX_NAMESPACE_LENGTH} characters',
-            )
-        if not re.match(r'^[a-zA-Z0-9_-]+$', namespace):
-            return create_failure_result(
-                'Namespace name can only contain letters, numbers, '
-                'dash, and underscore',
-            )
-        if namespace[0] in ('-', '_') or namespace[-1] in ('-', '_'):
-            return create_failure_result(
-                'Namespace name cannot start or end with hyphen or underscore',
-            )
+        if not (MIN_NAMESPACE_LENGTH <= len(name) <= MAX_NAMESPACE_LENGTH):
+            return {
+                'status': 'failure',
+                'message': (
+                    f'Name must be between {MIN_NAMESPACE_LENGTH} '
+                    f'and {MAX_NAMESPACE_LENGTH} characters'
+                ),
+            }
+        if not re.match(r'^[a-zA-Z0-9_-]+$', name):
+            return {
+                'status': 'failure',
+                'message': (
+                    'Name can only contain letters, numbers, '
+                    'dash, and underscore'
+                ),
+            }
+        if name[0] in ('-', '_') or name[-1] in ('-', '_'):
+            return {
+                'status': 'failure',
+                'message': (
+                    'Name cannot start or end with hyphen or underscore'
+                ),
+            }
         return None
 
     def generate_default(self, subject: str) -> str:
@@ -919,130 +878,51 @@ class NamespaceService:
         """
         return f'ns-{subject.replace("-", "")[-12:]}'
 
-    def generate_random(self) -> str:
-        """Generate random namespace name.
-
-        Returns:
-            Random namespace name
-        """
-        random_suffix = ''.join(
-            secrets.choice(string.ascii_lowercase + string.digits)
-            for _ in range(12)
-        )
-        return f'ns-{random_suffix}'
-
-    def ensure_exists(self, subject: str) -> dict[str, Any]:
-        """Ensure namespace exists for the user (idempotent).
-
-        This method does NOT use a lock - caller must hold lock.
-        Tries to create namespace with subject-based name first.
-        If that fails (namespace already taken), retries with random
-        namespaces.
-
-        Args:
-            subject: User subject ID
-
-        Returns:
-            dict with 'status': 'success' and 'namespace' if successful,
-            or 'status': 'failure' and 'message' if all retries failed.
-        """
-        # Try to create namespace with subject-based name first
-        namespace = self.generate_default(subject)
-        namespace_result = self.create(subject, namespace)
-
-        # If namespace creation failed, retry with random namespaces
-        # Only retry if the error is "namespace already taken"
-        max_retries = 10
-        retry_count = 0
-        while (
-            namespace_result.get('status') != 'success'
-            and retry_count < max_retries
-        ):
-            error_message = namespace_result.get('message', '').lower()
-            # Only retry if namespace is already taken
-            if 'already taken' not in error_message:
-                break
-
-            # Generate random 12-character alphanumeric string
-            namespace = self.generate_random()
-            namespace_result = self.create(subject, namespace)
-            retry_count += 1
-
-        # If still failed after all retries, return failure
-        if namespace_result.get('status') != 'success':
-            return {
-                'status': 'failure',
-                'message': namespace_result.get(
-                    'message',
-                    'Unknown error',
-                ),
-            }
-
-        # Namespace creation succeeded
-        return {
-            'status': 'success',
-            'namespace': namespace,
-        }
-
-    def create(
+    def create_namespace(
         self,
         subject: str,
         namespace: str,
     ) -> dict[str, Any]:
-        """Create a namespace for a user (internal, no lock).
+        """Create a namespace for a user (idempotent).
 
-        This method does NOT use a lock - caller must hold lock.
         Namespace names must be globally unique.
+        Safe to call multiple times with the same parameters.
 
         Args:
             subject: User subject ID
             namespace: Namespace name to create
 
         Returns:
-            dict with status, message, and namespaces list (on success)
+            Dictionary with status, message, and namespaces list (on success)
             or status 'failure' with message (if namespace already taken)
         """
-        # Validate namespace name
-        validation_error = self.validate(namespace)
+        validation_error = self.validate_name(namespace)
         if validation_error:
-            validation_error_dict = {
-                'status': 'failure',
-                'message': validation_error['message'],
-            }
-            validation_error_dict['namespace'] = namespace
-            return validation_error_dict
+            return validation_error
 
-        # Get global namespaces registry
         global_namespaces = self.dynamodb.get_global_namespaces()
+        existing_namespaces = self.dynamodb.get_user_namespaces(subject)
 
-        # Get existing namespaces for this user
-        user_record = self.dynamodb.get_user_record(subject)
-        existing_namespaces = user_record['namespaces'] if user_record else []
-
-        # Check if namespace is already taken by another user
-        if namespace in global_namespaces:
-            if namespace not in existing_namespaces:
-                return {
-                    'status': 'failure',
-                    'message': f'Namespace already taken: {namespace}',
-                    'namespace': namespace,
-                }
-            # Namespace already owned by this user, return existing list
+        # If namespace already exists for this user, return success
+        # (idempotent)
+        if namespace in existing_namespaces:
             return {
                 'status': 'success',
                 'message': f'Namespace already exists for {subject}',
                 'namespaces': existing_namespaces,
             }
 
-        # Add namespace to user's list
+        # If namespace is taken by another user, return failure
+        if namespace in global_namespaces:
+            return {
+                'status': 'failure',
+                'message': f'Namespace already taken: {namespace}',
+            }
+
+        # Create namespace (idempotent - safe to retry)
         all_namespaces = sorted({*existing_namespaces, namespace})
-
-        # Update global registry
-        updated_global = global_namespaces | {namespace}
-        self.dynamodb.update_global_namespaces(updated_global)
-
-        # Update user record
-        self.dynamodb.update_user_namespaces(subject, all_namespaces)
+        self.dynamodb.put_global_namespaces(global_namespaces | {namespace})
+        self.dynamodb.put_user_namespace(subject, all_namespaces)
 
         return {
             'status': 'success',
@@ -1050,66 +930,567 @@ class NamespaceService:
             'namespaces': all_namespaces,
         }
 
-    def delete(
+    def delete_namespace(
         self,
         subject: str,
         namespace: str,
     ) -> dict[str, Any]:
-        """Delete a namespace for a user (internal, no lock).
+        """Delete a namespace for a user (idempotent).
 
-        This method does NOT use a lock - caller must hold lock.
+        Safe to call multiple times with the same parameters.
 
         Args:
             subject: User subject ID
             namespace: Namespace name to delete
 
         Returns:
-            dict with status, message, and remaining namespaces list.
+            Dictionary with status, message, and remaining namespaces list.
             Returns success message even if namespace doesn't exist.
         """
-        # Get existing namespaces
-        user_record = self.dynamodb.get_user_record(subject)
-        if not user_record or 'namespaces' not in user_record:
-            # No namespaces found, already deleted (idempotent)
-            return {
-                'status': 'success',
-                'message': f'No namespaces found for {subject}',
-                'namespaces': [],
-            }
+        existing_namespaces = self.dynamodb.get_user_namespaces(subject)
 
-        existing_namespaces = user_record['namespaces']
-
+        # If namespace doesn't exist, return success (idempotent)
         if namespace not in existing_namespaces:
-            # Namespace doesn't exist, already deleted (idempotent)
             return {
                 'status': 'success',
-                'message': (f'Namespace {namespace} not found for {subject}'),
+                'message': f'Namespace {namespace} not found for {subject}',
                 'namespaces': existing_namespaces,
             }
 
-        # Remove namespace from user's list
+        # Delete namespace (idempotent - safe to retry)
         remaining_namespaces = [
             ns for ns in existing_namespaces if ns != namespace
         ]
 
         if remaining_namespaces:
-            # Update with remaining namespaces
-            self.dynamodb.update_user_namespaces(subject, remaining_namespaces)
+            self.dynamodb.put_user_namespace(subject, remaining_namespaces)
         else:
-            # Delete record if no namespaces left
-            self.dynamodb.delete_user_record(subject)
+            self.dynamodb.delete_user_namespace(subject)
 
-        # Update global registry
         global_namespaces = self.dynamodb.get_global_namespaces()
         updated_global = global_namespaces - {namespace}
         if updated_global:
-            self.dynamodb.update_global_namespaces(updated_global)
+            self.dynamodb.put_global_namespaces(updated_global)
         else:
-            # Delete global record if empty
-            self.dynamodb.delete_user_record(GLOBAL_NAMESPACES_KEY)
+            self.dynamodb.delete_global_namespaces()
 
         return {
             'status': 'success',
             'message': f'Namespace deleted for {subject}',
             'namespaces': remaining_namespaces,
         }
+
+    def create_topic(
+        self,
+        subject: str,
+        namespace: str,
+        topic: str,
+    ) -> dict[str, Any]:
+        """Create a topic in a namespace (idempotent).
+
+        Safe to call multiple times with the same parameters.
+
+        Args:
+            subject: User subject ID
+            namespace: Namespace name
+            topic: Topic name to create
+
+        Returns:
+            Dictionary with status, message, and topics list (on success)
+            or status 'failure' with message
+        """
+        # Validate topic name
+        validation_error = self.validate_name(topic)
+        if validation_error:
+            return validation_error
+
+        # Check that namespace exists for this user
+        user_namespaces = self.dynamodb.get_user_namespaces(subject)
+        if namespace not in user_namespaces:
+            return {
+                'status': 'failure',
+                'message': f'Namespace {namespace} not found for {subject}',
+            }
+
+        # Get existing topics for the namespace
+        existing_topics = self.dynamodb.get_namespace_topics(namespace)
+
+        # If topic already exists, return success (idempotent)
+        if topic in existing_topics:
+            return {
+                'status': 'success',
+                'message': f'Topic {topic} already exists in {namespace}',
+                'topics': existing_topics,
+            }
+
+        # Add topic to the list
+        all_topics = sorted({*existing_topics, topic})
+        self.dynamodb.put_namespace_topics(namespace, all_topics)
+
+        return {
+            'status': 'success',
+            'message': f'Topic {topic} created in {namespace}',
+            'topics': all_topics,
+        }
+
+    def delete_topic(
+        self,
+        subject: str,
+        namespace: str,
+        topic: str,
+    ) -> dict[str, Any]:
+        """Delete a topic from a namespace (idempotent).
+
+        Safe to call multiple times with the same parameters.
+
+        Args:
+            subject: User subject ID
+            namespace: Namespace name
+            topic: Topic name to delete
+
+        Returns:
+            Dictionary with status, message, and remaining topics list.
+            Returns success message even if topic doesn't exist.
+        """
+        # Check that namespace exists for this user
+        user_namespaces = self.dynamodb.get_user_namespaces(subject)
+        if namespace not in user_namespaces:
+            return {
+                'status': 'failure',
+                'message': f'Namespace {namespace} not found for {subject}',
+            }
+
+        # Get existing topics for the namespace
+        existing_topics = self.dynamodb.get_namespace_topics(namespace)
+
+        # If topic doesn't exist, return success (idempotent)
+        if topic not in existing_topics:
+            return {
+                'status': 'success',
+                'message': f'Topic {topic} not found in {namespace}',
+                'topics': existing_topics,
+            }
+
+        # Remove topic from the list
+        remaining_topics = [t for t in existing_topics if t != topic]
+
+        if remaining_topics:
+            self.dynamodb.put_namespace_topics(namespace, remaining_topics)
+        else:
+            self.dynamodb.delete_namespace_topics(namespace)
+
+        return {
+            'status': 'success',
+            'message': f'Topic {topic} deleted from {namespace}',
+            'topics': remaining_topics,
+        }
+
+    def list_namespace_and_topics(
+        self,
+        subject: str,
+    ) -> dict[str, Any]:
+        """List all namespaces and their topics for a user.
+
+        Args:
+            subject: User subject ID
+
+        Returns:
+            Dictionary with status, message, and a dict mapping
+            namespace names to their topic lists
+        """
+        user_namespaces = self.dynamodb.get_user_namespaces(subject)
+
+        namespace_topics: dict[str, list[str]] = {}
+        for namespace in user_namespaces:
+            topics = self.dynamodb.get_namespace_topics(namespace)
+            namespace_topics[namespace] = topics
+
+        return {
+            'status': 'success',
+            'message': (
+                f'Found {len(user_namespaces)} namespaces for {subject}'
+            ),
+            'namespaces': namespace_topics,
+        }
+
+
+class WebService:
+    """Service for managing user lifecycle with IAM, Kafka, and Namespace."""
+
+    def __init__(
+        self,
+        iam_service: IAMService,
+        kafka_service: KafkaService,
+        namespace_service: NamespaceService,
+    ) -> None:
+        """Initialize WebService.
+
+        Args:
+            iam_service: IAM service instance
+            kafka_service: Kafka service instance
+            namespace_service: Namespace service instance
+        """
+        self.iam_service = iam_service
+        self.kafka_service = kafka_service
+        self.namespace_service = namespace_service
+        self.bootstrap_servers = kafka_service.bootstrap_servers
+
+    def create_user(self, subject: str) -> dict[str, Any]:
+        """Create a user in IAM and create its default namespace.
+
+        Args:
+            subject: User subject ID
+
+        Returns:
+            Dictionary with status, message, and user/namespace information
+        """
+        # Create user in IAM
+        iam_result = self.iam_service.create_user_and_policy(subject)
+        if iam_result['status'] != 'success':
+            return {
+                'status': 'failure',
+                'message': (
+                    f'Failed to create IAM user: {iam_result["message"]}'
+                ),
+            }
+
+        # Generate default namespace
+        namespace = self.namespace_service.generate_default(subject)
+
+        # Create namespace
+        namespace_result = self.namespace_service.create_namespace(
+            subject,
+            namespace,
+        )
+        if namespace_result['status'] != 'success':
+            # If namespace creation fails, try to clean up IAM user
+            with contextlib.suppress(Exception):
+                self.iam_service.delete_user_and_policy(subject)
+            return {
+                'status': 'failure',
+                'message': (
+                    f'Failed to create namespace: '
+                    f'{namespace_result["message"]}'
+                ),
+            }
+
+        return {
+            'status': 'success',
+            'message': (f'User {subject} created with namespace {namespace}'),
+            'subject': subject,
+            'namespace': namespace,
+        }
+
+    def delete_user(self, subject: str) -> dict[str, Any]:
+        """Delete a user from IAM and its namespace.
+
+        If the user has namespaces beyond the default one, deletion is not
+        allowed. Otherwise, deletes the default namespace and IAM user.
+
+        Args:
+            subject: User subject ID
+
+        Returns:
+            Dictionary with status and message
+        """
+        # Check if user has any namespaces
+        user_namespaces = self.namespace_service.dynamodb.get_user_namespaces(
+            subject,
+        )
+
+        # Get default namespace
+        default_namespace = self.namespace_service.generate_default(subject)
+
+        # Check if user has namespaces other than the default one
+        other_namespaces = [
+            ns for ns in user_namespaces if ns != default_namespace
+        ]
+
+        if other_namespaces:
+            return {
+                'status': 'failure',
+                'message': (
+                    f'Cannot delete user {subject}: '
+                    f'user has {len(other_namespaces)} additional '
+                    f'namespace(s). Delete namespaces first.'
+                ),
+            }
+
+        # Delete all topics under the default namespace
+        topics = self.namespace_service.dynamodb.get_namespace_topics(
+            default_namespace,
+        )
+        for topic in topics:
+            # Delete Kafka topic (idempotent)
+            with contextlib.suppress(Exception):
+                self.kafka_service.delete_topic(default_namespace, topic)
+            # Delete topic from DynamoDB (idempotent)
+            self.namespace_service.delete_topic(
+                subject,
+                default_namespace,
+                topic,
+            )
+
+        # Delete default namespace (idempotent, safe even if doesn't exist)
+        self.namespace_service.delete_namespace(subject, default_namespace)
+
+        # Delete user in IAM
+        iam_result = self.iam_service.delete_user_and_policy(subject)
+        if iam_result['status'] != 'success':
+            return {
+                'status': 'failure',
+                'message': (
+                    f'Failed to delete IAM user: {iam_result["message"]}'
+                ),
+            }
+
+        return {
+            'status': 'success',
+            'message': f'User {subject} deleted',
+        }
+
+    def create_key(self, subject: str) -> dict[str, Any]:
+        """Create an access key for a user (force refresh).
+
+        Creates user and namespace if they don't exist, then creates
+        a new access key and stores it (always creates new key, even if
+        one exists in DynamoDB).
+
+        Args:
+            subject: User subject ID
+
+        Returns:
+            Dictionary with status, message, and key information
+            (access_key, secret_key, create_date, endpoint)
+        """
+        # Ensure user and namespace exist (idempotent)
+        user_result = self.create_user(subject)
+        if user_result['status'] != 'success':
+            return {
+                'status': 'failure',
+                'message': (
+                    f'Failed to create user: {user_result["message"]}'
+                ),
+            }
+
+        # Delete existing access keys in IAM before creating new one
+        self.iam_service.delete_access_keys(subject)
+
+        # Create new access key in IAM
+        iam_key_result = self.iam_service.create_access_key(subject)
+        if iam_key_result['status'] != 'success':
+            return {
+                'status': 'failure',
+                'message': (
+                    f'Failed to create IAM access key: '
+                    f'{iam_key_result["message"]}'
+                ),
+            }
+
+        # Store key in DynamoDB (overwrites existing)
+        self.namespace_service.dynamodb.store_key(
+            subject=subject,
+            access_key=iam_key_result['access_key'],
+            secret_key=iam_key_result['secret_key'],
+            create_date=iam_key_result['create_date'],
+        )
+
+        return {
+            'status': 'success',
+            'message': f'Access key created for {subject}',
+            'access_key': iam_key_result['access_key'],
+            'secret_key': iam_key_result['secret_key'],
+            'create_date': iam_key_result['create_date'],
+            'endpoint': self.bootstrap_servers or '',
+        }
+
+    def get_key(self, subject: str) -> dict[str, Any]:
+        """Get an access key for a user.
+
+        Retrieves key from DynamoDB if it exists. If key doesn't exist,
+        creates user, namespace, and access key (create_key workflow).
+
+        Args:
+            subject: User subject ID
+
+        Returns:
+            Dictionary with status, message, and key information
+            (access_key, secret_key, create_date, endpoint)
+        """
+        # Try to get key from DynamoDB
+        existing_key = self.namespace_service.dynamodb.get_key(subject)
+        if existing_key:
+            return {
+                'status': 'success',
+                'message': f'Access key retrieved for {subject}',
+                'access_key': existing_key['access_key'],
+                'secret_key': existing_key['secret_key'],
+                'create_date': existing_key['create_date'],
+                'endpoint': self.bootstrap_servers or '',
+            }
+
+        # Key doesn't exist, create it (create_key workflow)
+        return self.create_key(subject)
+
+    def delete_key(self, subject: str) -> dict[str, Any]:
+        """Delete an access key for a user.
+
+        Deletes access key from both IAM and DynamoDB.
+
+        Args:
+            subject: User subject ID
+
+        Returns:
+            Dictionary with status and message
+        """
+        # Delete access keys in IAM (idempotent)
+        self.iam_service.delete_access_keys(subject)
+
+        # Delete key from DynamoDB (idempotent)
+        self.namespace_service.dynamodb.delete_key(subject)
+
+        return {
+            'status': 'success',
+            'message': f'Access key deleted for {subject}',
+        }
+
+    def create_topic(
+        self,
+        subject: str,
+        namespace: str,
+        topic: str,
+    ) -> dict[str, Any]:
+        """Create a topic in a namespace.
+
+        Creates the topic in both NamespaceService (DynamoDB) and
+        KafkaService (Kafka cluster).
+
+        Args:
+            subject: User subject ID
+            namespace: Namespace name
+            topic: Topic name to create
+
+        Returns:
+            Dictionary with status, message, and topics list
+        """
+        # Create topic in NamespaceService (DynamoDB)
+        namespace_result = self.namespace_service.create_topic(
+            subject,
+            namespace,
+            topic,
+        )
+        if namespace_result['status'] != 'success':
+            return namespace_result
+
+        # Create topic in KafkaService (Kafka cluster)
+        kafka_result = self.kafka_service.create_topic(namespace, topic)
+        if kafka_result and kafka_result.get('status') == 'failure':
+            # If Kafka creation fails, try to clean up DynamoDB entry
+            with contextlib.suppress(Exception):
+                self.namespace_service.delete_topic(subject, namespace, topic)
+            return {
+                'status': 'failure',
+                'message': (
+                    f'Failed to create Kafka topic: '
+                    f'{kafka_result.get("message", "Unknown error")}'
+                ),
+            }
+
+        # Return namespace result (includes topics list)
+        return namespace_result
+
+    def delete_topic(
+        self,
+        subject: str,
+        namespace: str,
+        topic: str,
+    ) -> dict[str, Any]:
+        """Delete a topic from a namespace.
+
+        Deletes the topic from both KafkaService (Kafka cluster) and
+        NamespaceService (DynamoDB).
+
+        Args:
+            subject: User subject ID
+            namespace: Namespace name
+            topic: Topic name to delete
+
+        Returns:
+            Dictionary with status, message, and remaining topics list
+        """
+        # Delete topic from KafkaService (Kafka cluster) first
+        kafka_result = self.kafka_service.delete_topic(namespace, topic)
+        # Note: kafka_result can be None if Kafka is not configured,
+        # which is acceptable
+
+        # Delete topic from NamespaceService (DynamoDB)
+        namespace_result = self.namespace_service.delete_topic(
+            subject,
+            namespace,
+            topic,
+        )
+
+        # If Kafka deletion failed and Kafka is configured, return failure
+        if (
+            kafka_result is not None
+            and kafka_result.get('status') == 'failure'
+        ):
+            return {
+                'status': 'failure',
+                'message': (
+                    f'Failed to delete Kafka topic: '
+                    f'{kafka_result.get("message", "Unknown error")}'
+                ),
+            }
+
+        # Return namespace result (includes remaining topics list)
+        return namespace_result
+
+    def recreate_topic(
+        self,
+        subject: str,
+        namespace: str,
+        topic: str,
+    ) -> dict[str, Any]:
+        """Recreate a topic in a namespace.
+
+        Calls KafkaService's recreate_topic to delete and recreate
+        the Kafka topic. The topic must already exist in DynamoDB.
+
+        Args:
+            subject: User subject ID
+            namespace: Namespace name
+            topic: Topic name to recreate
+
+        Returns:
+            Dictionary with status and message from KafkaService
+        """
+        # Verify namespace exists for this user
+        user_namespaces = self.namespace_service.dynamodb.get_user_namespaces(
+            subject,
+        )
+        if namespace not in user_namespaces:
+            return {
+                'status': 'failure',
+                'message': f'Namespace {namespace} not found for {subject}',
+            }
+
+        # Verify topic exists in DynamoDB
+        existing_topics = self.namespace_service.dynamodb.get_namespace_topics(
+            namespace,
+        )
+        if topic not in existing_topics:
+            return {
+                'status': 'failure',
+                'message': f'Topic {topic} not found in {namespace}',
+            }
+
+        # Call KafkaService's recreate_topic
+        kafka_result = self.kafka_service.recreate_topic(namespace, topic)
+        if kafka_result is None:
+            return {
+                'status': 'failure',
+                'message': 'Kafka endpoint is not configured',
+            }
+
+        return kafka_result

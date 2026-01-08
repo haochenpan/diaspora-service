@@ -19,7 +19,11 @@ from web_service.utils import EnvironmentChecker
 from web_service.utils import WEB_SERVICE_DESC
 from web_service.utils import WEB_SERVICE_TAGS_METADATA
 
-from .utils import AWSManagerV3
+from .services import DynamoDBService
+from .services import IAMService
+from .services import KafkaService
+from .services import NamespaceService
+from .services import WebService
 
 
 def extract_val(alias: str) -> Callable[..., Any]:
@@ -64,14 +68,40 @@ class DiasporaService:
             'c5d4fab4-7f0d-422e-b0c8-5c74329b52fe',
         )
 
-        self.aws = AWSManagerV3(
-            os.getenv('AWS_ACCOUNT_ID') or '',
-            os.getenv('AWS_ACCOUNT_REGION') or '',
-            os.getenv('MSK_CLUSTER_NAME') or '',
-            os.getenv(
-                'DEFAULT_SERVERS',
-            ),  # iam_public: for endpoint in API response
+        # Initialize services
+        account_id = os.getenv('AWS_ACCOUNT_ID') or ''
+        region = os.getenv('AWS_ACCOUNT_REGION') or ''
+        cluster_name = os.getenv('MSK_CLUSTER_NAME') or ''
+
+        iam_service = IAMService(
+            account_id=account_id,
+            region=region,
+            cluster_name=cluster_name,
         )
+
+        kafka_service = KafkaService(
+            bootstrap_servers=os.getenv('DEFAULT_SERVERS'),
+            region=region,
+        )
+
+        db_service = DynamoDBService(
+            region=region,
+            keys_table_name=os.getenv('KEYS_TABLE_NAME', 'keys-table'),
+            users_table_name=os.getenv('USERS_TABLE_NAME', 'users-table'),
+            namespace_table_name=os.getenv(
+                'NAMESPACE_TABLE_NAME',
+                'namespace-table',
+            ),
+        )
+
+        namespace_service = NamespaceService(dynamodb_service=db_service)
+
+        self.web_service = WebService(
+            iam_service=iam_service,
+            kafka_service=kafka_service,
+            namespace_service=namespace_service,
+        )
+
         self.app = FastAPI(
             title='Diaspora Web Service V3',
             docs_url='/',
@@ -101,9 +131,6 @@ class DiasporaService:
             self.delete_key,
         )
         # Topic management routes
-        self.app.get('/api/v3/namespace', tags=['Namespace'])(
-            self.list_namespaces,
-        )
         self.app.post('/api/v3/{namespace}/{topic}', tags=['Topic'])(
             self.create_topic,
         )
@@ -112,6 +139,10 @@ class DiasporaService:
         )
         self.app.put('/api/v3/{namespace}/{topic}/recreate', tags=['Topic'])(
             self.recreate_topic,
+        )
+        # List namespaces and topics
+        self.app.get('/api/v3/namespace', tags=['Namespace'])(
+            self.list_namespace_and_topics,
         )
 
     async def create_user(
@@ -122,7 +153,7 @@ class DiasporaService:
         """Create an IAM user for the authenticated subject."""
         if err := self.auth.validate_access_token(subject, token):
             return err
-        return self.aws.create_user(subject)
+        return self.web_service.create_user(subject)
 
     async def delete_user(
         self,
@@ -132,7 +163,7 @@ class DiasporaService:
         """Delete an IAM user for the authenticated subject."""
         if err := self.auth.validate_access_token(subject, token):
             return err
-        return self.aws.delete_user(subject)
+        return self.web_service.delete_user(subject)
 
     async def create_key(
         self,
@@ -142,7 +173,7 @@ class DiasporaService:
         """Create an access key for an existing IAM user."""
         if err := self.auth.validate_access_token(subject, token):
             return err
-        return self.aws.create_key(subject)
+        return self.web_service.create_key(subject)
 
     async def get_key(
         self,
@@ -152,7 +183,7 @@ class DiasporaService:
         """Get access key for a user, creating one if it doesn't exist."""
         if err := self.auth.validate_access_token(subject, token):
             return err
-        return self.aws.get_key(subject)
+        return self.web_service.get_key(subject)
 
     async def delete_key(
         self,
@@ -162,17 +193,7 @@ class DiasporaService:
         """Delete access keys for a user."""
         if err := self.auth.validate_access_token(subject, token):
             return err
-        return self.aws.delete_key(subject)
-
-    async def list_namespaces(
-        self,
-        subject: str = Depends(extract_val('subject')),
-        token: str = Depends(extract_val('authorization')),
-    ) -> dict[str, Any]:
-        """List all namespaces owned by a user and their topics."""
-        if err := self.auth.validate_access_token(subject, token):
-            return err
-        return self.aws.list_namespaces(subject)
+        return self.web_service.delete_key(subject)
 
     async def create_topic(
         self,
@@ -184,7 +205,7 @@ class DiasporaService:
         """Create a topic under a namespace."""
         if err := self.auth.validate_access_token(subject, token):
             return err
-        return self.aws.create_topic(subject, namespace, topic)
+        return self.web_service.create_topic(subject, namespace, topic)
 
     async def delete_topic(
         self,
@@ -196,7 +217,7 @@ class DiasporaService:
         """Delete a topic from a namespace."""
         if err := self.auth.validate_access_token(subject, token):
             return err
-        return self.aws.delete_topic(subject, namespace, topic)
+        return self.web_service.delete_topic(subject, namespace, topic)
 
     async def recreate_topic(
         self,
@@ -205,17 +226,29 @@ class DiasporaService:
         subject: str = Depends(extract_val('subject')),
         token: str = Depends(extract_val('authorization')),
     ) -> dict[str, Any]:
-        """Recreate a topic by deleting and recreating it via KafkaAdminClient.
+        """Recreate a topic by deleting and recreating it.
 
         Authenticates the client with namespace and topic access, then:
         1. Verifies the subject owns the namespace
-        2. Creates a KafkaAdminClient
-        3. Deletes the Kafka topic
-        4. Recreates the Kafka topic
+        2. Deletes the Kafka topic and DynamoDB entry
+        3. Waits 5 seconds
+        4. Recreates the Kafka topic and DynamoDB entry
         """
         if err := self.auth.validate_access_token(subject, token):
             return err
-        return self.aws.recreate_topic(subject, namespace, topic)
+        return self.web_service.recreate_topic(subject, namespace, topic)
+
+    async def list_namespace_and_topics(
+        self,
+        subject: str = Depends(extract_val('subject')),
+        token: str = Depends(extract_val('authorization')),
+    ) -> dict[str, Any]:
+        """List all namespaces owned by a user and their topics."""
+        if err := self.auth.validate_access_token(subject, token):
+            return err
+        return self.web_service.namespace_service.list_namespace_and_topics(
+            subject,
+        )
 
 
 service = DiasporaService()
