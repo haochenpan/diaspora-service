@@ -18,6 +18,16 @@ from web_service_v3.services import IAMService
 # Number of resources in IAM policy (group, cluster, transactional-id, topic)
 POLICY_RESOURCE_COUNT = 4
 
+# Response field counts
+RESPONSE_FIELDS_STATUS_MESSAGE = 2  # status and message only
+RESPONSE_FIELDS_ACCESS_KEY = (
+    5  # status, message, access_key, secret_key, create_date
+)
+
+# AWS key format constants
+AWS_ACCESS_KEY_LENGTH = 20
+AWS_SECRET_KEY_LENGTH = 40
+
 # ============================================================================
 # Test Fixtures
 # ============================================================================
@@ -100,11 +110,32 @@ def test_generate_user_policy(
     assert isinstance(policy, dict)
     assert policy['Version'] == '2012-10-17'
     assert 'Statement' in policy
+    assert isinstance(policy['Statement'], list)
     assert len(policy['Statement']) == 1
-    assert policy['Statement'][0]['Effect'] == 'Allow'
-    assert 'kafka-cluster:Connect' in policy['Statement'][0]['Action']
+
+    statement = policy['Statement'][0]
+    assert isinstance(statement, dict)
+    assert statement['Effect'] == 'Allow'
+    assert 'Action' in statement
+    assert 'Resource' in statement
+
+    # Validate actions
+    actions = statement['Action']
+    assert isinstance(actions, list)
+    assert 'kafka-cluster:Connect' in actions
+    assert 'kafka-cluster:ReadData' in actions
+    assert 'kafka-cluster:WriteData' in actions
+
     # Policy should have 4 resources: group, cluster, transactional-id, topic
-    assert len(policy['Statement'][0]['Resource']) == POLICY_RESOURCE_COUNT
+    resources = statement['Resource']
+    assert isinstance(resources, list)
+    assert len(resources) == POLICY_RESOURCE_COUNT
+
+    # Validate resource ARNs contain expected patterns
+    resource_str = ' '.join(resources)
+    assert '/group/' in resource_str or ':group' in resource_str
+    assert '/cluster/' in resource_str or ':cluster' in resource_str
+    assert '/topic/' in resource_str or ':topic' in resource_str
 
 
 @pytest.mark.integration
@@ -131,7 +162,13 @@ def test_create_user_and_policy(
     assert isinstance(result, dict)
     assert result['status'] == 'success'
     assert 'message' in result
+    assert isinstance(result['message'], str)
     assert random_subject in result['message']
+    assert len(result) == RESPONSE_FIELDS_STATUS_MESSAGE
+
+    # Test idempotency - should succeed on second call
+    result2 = iam_service.create_user_and_policy(random_subject)
+    assert result2['status'] == 'success'
 
 
 @pytest.mark.integration
@@ -162,10 +199,27 @@ def test_create_access_key(
     assert isinstance(result, dict)
     assert result['status'] == 'success'
     assert 'message' in result
+    assert isinstance(result['message'], str)
     assert 'access_key' in result
     assert 'secret_key' in result
     assert 'create_date' in result
     assert random_subject in result['message']
+
+    # Validate access_key format (AWS access key IDs start with AKIA)
+    assert isinstance(result['access_key'], str)
+    assert result['access_key'].startswith('AKIA')
+    assert len(result['access_key']) == AWS_ACCESS_KEY_LENGTH
+
+    # Validate secret_key format (AWS secret keys are 40 characters)
+    assert isinstance(result['secret_key'], str)
+    assert len(result['secret_key']) == AWS_SECRET_KEY_LENGTH
+
+    # Validate create_date format (ISO format)
+    assert isinstance(result['create_date'], str)
+    assert 'T' in result['create_date'] or '-' in result['create_date']
+
+    # Should have exactly 5 fields
+    assert len(result) == RESPONSE_FIELDS_ACCESS_KEY
 
 
 @pytest.mark.integration
@@ -195,7 +249,13 @@ def test_delete_access_keys(
     assert isinstance(result, dict)
     assert result['status'] == 'success'
     assert 'message' in result
+    assert isinstance(result['message'], str)
     assert random_subject in result['message']
+    assert len(result) == RESPONSE_FIELDS_STATUS_MESSAGE
+
+    # Test idempotency - should succeed even if no keys exist
+    result2 = iam_service.delete_access_keys(random_subject)
+    assert result2['status'] == 'success'
 
 
 @pytest.mark.integration
@@ -222,7 +282,13 @@ def test_delete_user_and_policy(
     assert isinstance(result, dict)
     assert result['status'] == 'success'
     assert 'message' in result
+    assert isinstance(result['message'], str)
     assert random_subject in result['message']
+    assert len(result) == RESPONSE_FIELDS_STATUS_MESSAGE
+
+    # Test idempotency - should succeed even if user doesn't exist
+    result2 = iam_service.delete_user_and_policy(random_subject)
+    assert result2['status'] == 'success'
 
 
 @pytest.mark.integration
@@ -236,20 +302,26 @@ def test_full_lifecycle(
     # 1. Create user and policy
     create_result = iam_service.create_user_and_policy(random_subject)
     assert create_result['status'] == 'success'
+    assert 'message' in create_result
+    assert random_subject in create_result['message']
 
     # 2. Create access key
     key_result = iam_service.create_access_key(random_subject)
     assert key_result['status'] == 'success'
     assert 'access_key' in key_result
+    assert 'secret_key' in key_result
+    assert 'create_date' in key_result
+    access_key_id = key_result['access_key']
+    assert access_key_id.startswith('AKIA')
 
     # 3. Delete access key
     delete_keys_result = iam_service.delete_access_keys(random_subject)
     assert delete_keys_result['status'] == 'success'
+    assert 'message' in delete_keys_result
 
     # 4. Delete user and policy
     delete_result = iam_service.delete_user_and_policy(random_subject)
     assert delete_result['status'] == 'success'
+    assert 'message' in delete_result
 
-    print(
-        '  Full lifecycle test completed successfully',
-    )
+    print('  Full lifecycle test completed successfully')

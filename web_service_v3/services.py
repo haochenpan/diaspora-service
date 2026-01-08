@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
 import re
 import time
 from typing import Any
@@ -15,6 +16,8 @@ from kafka.admin import NewTopic
 from kafka.errors import TopicAlreadyExistsError
 from kafka.errors import UnknownTopicOrPartitionError
 from kafka.sasl.oauth import AbstractTokenProvider
+
+from web_service.utils import EnvironmentChecker
 
 
 class IAMService:
@@ -1261,7 +1264,7 @@ class WebService:
 
         Returns:
             Dictionary with status, message, and key information
-            (access_key, secret_key, create_date, endpoint)
+            (access_key, secret_key, create_date, endpoint, fresh=True)
         """
         # Ensure user and namespace exist (idempotent)
         user_result = self.create_user(subject)
@@ -1302,6 +1305,7 @@ class WebService:
             'secret_key': iam_key_result['secret_key'],
             'create_date': iam_key_result['create_date'],
             'endpoint': self.bootstrap_servers or '',
+            'fresh': True,
         }
 
     def get_key(self, subject: str) -> dict[str, Any]:
@@ -1315,7 +1319,8 @@ class WebService:
 
         Returns:
             Dictionary with status, message, and key information
-            (access_key, secret_key, create_date, endpoint)
+            (access_key, secret_key, create_date, endpoint, fresh)
+            where fresh=False if retrieved from DynamoDB, fresh=True if created
         """
         # Try to get key from DynamoDB
         existing_key = self.namespace_service.dynamodb.get_key(subject)
@@ -1327,6 +1332,7 @@ class WebService:
                 'secret_key': existing_key['secret_key'],
                 'create_date': existing_key['create_date'],
                 'endpoint': self.bootstrap_servers or '',
+                'fresh': False,
             }
 
         # Key doesn't exist, create it (create_key workflow)
@@ -1494,3 +1500,54 @@ class WebService:
             }
 
         return kafka_result
+
+
+def main() -> None:
+    """Main method to delete a specific user."""
+    # Check required environment variables
+    EnvironmentChecker.check_env_variables(
+        'AWS_ACCESS_KEY_ID',
+        'AWS_SECRET_ACCESS_KEY',
+        'SERVER_CLIENT_ID',
+        'SERVER_SECRET',
+        'AWS_ACCOUNT_ID',
+        'AWS_ACCOUNT_REGION',
+        'MSK_CLUSTER_NAME',
+    )
+
+    # Initialize services
+    region = os.getenv('AWS_ACCOUNT_REGION') or ''
+    iam_service = IAMService(
+        account_id=os.getenv('AWS_ACCOUNT_ID') or '',
+        region=region,
+        cluster_name=os.getenv('MSK_CLUSTER_NAME') or '',
+    )
+    kafka_service = KafkaService(
+        bootstrap_servers=os.getenv('DEFAULT_SERVERS'),
+        region=region,
+    )
+    db_service = DynamoDBService(
+        region=region,
+        keys_table_name=os.getenv('KEYS_TABLE_NAME', 'diaspora-keys-table'),
+        users_table_name=os.getenv('USERS_TABLE_NAME', 'diaspora-users-table'),
+        namespace_table_name=os.getenv(
+            'NAMESPACE_TABLE_NAME',
+            'diaspora-namespace-table',
+        ),
+    )
+    namespace_service = NamespaceService(dynamodb_service=db_service)
+    web_service = WebService(
+        iam_service=iam_service,
+        kafka_service=kafka_service,
+        namespace_service=namespace_service,
+    )
+
+    # Delete the specified user
+    subject = ''
+    print(f'Deleting user: {subject}')
+    result = web_service.delete_user(subject)
+    print(json.dumps(result, indent=2, default=str))
+
+
+if __name__ == '__main__':
+    main()
