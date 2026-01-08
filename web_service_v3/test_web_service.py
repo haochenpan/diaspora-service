@@ -7,18 +7,15 @@ import json
 import logging
 import os
 import warnings
+from typing import Any
 
 import pytest
 
-from typing import Any
-
-from web_service_v3.services import (
-    DynamoDBService,
-    IAMService,
-    KafkaService,
-    NamespaceService,
-    WebService,
-)
+from web_service_v3.services import DynamoDBService
+from web_service_v3.services import IAMService
+from web_service_v3.services import KafkaService
+from web_service_v3.services import NamespaceService
+from web_service_v3.services import WebService
 
 # Suppress verbose logging and warnings from external libraries
 logging.getLogger('kafka').setLevel(logging.WARNING)
@@ -53,20 +50,22 @@ def iam_service() -> IAMService:
 
     if not all([account_id, region, cluster_name]):
         missing = [
-            var for var, val in [
+            var
+            for var, val in [
                 ('AWS_ACCOUNT_ID', account_id),
                 ('AWS_ACCOUNT_REGION', region),
                 ('MSK_CLUSTER_NAME', cluster_name),
-            ] if val is None
+            ]
+            if val is None
         ]
         raise ValueError(
             f'Missing required environment variables: {", ".join(missing)}',
         )
 
     return IAMService(
-        account_id=account_id,
-        region=region,
-        cluster_name=cluster_name,
+        account_id=account_id or '',
+        region=region or '',
+        cluster_name=cluster_name or '',
     )
 
 
@@ -175,8 +174,7 @@ def test_create_user_success(
 ) -> None:
     """Test create_user success case."""
     print(
-        f'\n[test_create_user_success] '
-        f'Testing with subject: {random_subject}',
+        f'\n[test_create_user_success] Testing with subject: {random_subject}',
     )
 
     # Mark for cleanup
@@ -238,8 +236,7 @@ def test_delete_user_success(
 ) -> None:
     """Test delete_user success case (user has only default namespace)."""
     print(
-        f'\n[test_delete_user_success] '
-        f'Testing with subject: {random_subject}',
+        f'\n[test_delete_user_success] Testing with subject: {random_subject}',
     )
 
     # Mark for cleanup
@@ -317,10 +314,8 @@ def test_delete_user_with_topics(
     assert result['status'] == 'success'
 
     # Verify topics are deleted
-    topics_after = (
-        web_service.namespace_service.dynamodb.get_namespace_topics(
-            namespace,
-        )
+    topics_after = web_service.namespace_service.dynamodb.get_namespace_topics(
+        namespace,
     )
     assert len(topics_after) == 0
 
@@ -403,8 +398,7 @@ def test_full_lifecycle(
 ) -> None:
     """Test full lifecycle: create user, delete user."""
     print(
-        f'\n[test_full_lifecycle] '
-        f'Testing with subject: {random_subject}',
+        f'\n[test_full_lifecycle] Testing with subject: {random_subject}',
     )
 
     # Mark for cleanup
@@ -457,10 +451,8 @@ def test_full_lifecycle(
     assert namespace not in user_namespaces_after
 
     # 8. Verify topic is deleted
-    topics_after = (
-        web_service.namespace_service.dynamodb.get_namespace_topics(
-            namespace,
-        )
+    topics_after = web_service.namespace_service.dynamodb.get_namespace_topics(
+        namespace,
     )
     assert topic not in topics_after
 
@@ -475,8 +467,7 @@ def test_create_key_success(
 ) -> None:
     """Test create_key success case."""
     print(
-        f'\n[test_create_key_success] '
-        f'Testing with subject: {random_subject}',
+        f'\n[test_create_key_success] Testing with subject: {random_subject}',
     )
 
     # Mark for cleanup
@@ -550,8 +541,7 @@ def test_get_key_existing(
 ) -> None:
     """Test get_key when key exists in DynamoDB."""
     print(
-        f'\n[test_get_key_existing] '
-        f'Testing with subject: {random_subject}',
+        f'\n[test_get_key_existing] Testing with subject: {random_subject}',
     )
 
     # Mark for cleanup
@@ -587,8 +577,7 @@ def test_get_key_nonexistent(
 ) -> None:
     """Test get_key when key doesn't exist (should create)."""
     print(
-        f'\n[test_get_key_nonexistent] '
-        f'Testing with subject: {random_subject}',
+        f'\n[test_get_key_nonexistent] Testing with subject: {random_subject}',
     )
 
     # Mark for cleanup
@@ -626,8 +615,7 @@ def test_delete_key_success(
 ) -> None:
     """Test delete_key success case."""
     print(
-        f'\n[test_delete_key_success] '
-        f'Testing with subject: {random_subject}',
+        f'\n[test_delete_key_success] Testing with subject: {random_subject}',
     )
 
     # Mark for cleanup
@@ -700,8 +688,7 @@ def test_key_lifecycle(
 ) -> None:
     """Test full key lifecycle: create, get, delete."""
     print(
-        f'\n[test_key_lifecycle] '
-        f'Testing with subject: {random_subject}',
+        f'\n[test_key_lifecycle] Testing with subject: {random_subject}',
     )
 
     # Mark for cleanup
@@ -789,10 +776,8 @@ def test_create_topic_success(
     assert topic in result['topics']
 
     # Verify topic exists in DynamoDB
-    topics = (
-        web_service.namespace_service.dynamodb.get_namespace_topics(
-            namespace,
-        )
+    topics = web_service.namespace_service.dynamodb.get_namespace_topics(
+        namespace,
     )
     assert topic in topics
 
@@ -921,10 +906,8 @@ def test_delete_topic_success(
     assert topic not in result['topics']
 
     # Verify topic is deleted from DynamoDB
-    topics_after = (
-        web_service.namespace_service.dynamodb.get_namespace_topics(
-            namespace,
-        )
+    topics_after = web_service.namespace_service.dynamodb.get_namespace_topics(
+        namespace,
     )
     assert topic not in topics_after
 
@@ -1018,8 +1001,7 @@ def test_topic_lifecycle(
 ) -> None:
     """Test full topic lifecycle: create, delete."""
     print(
-        f'\n[test_topic_lifecycle] '
-        f'Testing with subject: {random_subject}',
+        f'\n[test_topic_lifecycle] Testing with subject: {random_subject}',
     )
 
     # Mark for cleanup
@@ -1076,10 +1058,8 @@ def test_topic_lifecycle(
     assert topic2 in delete_topic1_result['topics']
 
     # 6. Verify only topic2 exists in DynamoDB
-    topics_after = (
-        web_service.namespace_service.dynamodb.get_namespace_topics(
-            namespace,
-        )
+    topics_after = web_service.namespace_service.dynamodb.get_namespace_topics(
+        namespace,
     )
     assert topic1 not in topics_after
     assert topic2 in topics_after
@@ -1096,10 +1076,8 @@ def test_topic_lifecycle(
     assert topic2 not in delete_topic2_result['topics']
 
     # 8. Verify no topics exist in DynamoDB
-    topics_final = (
-        web_service.namespace_service.dynamodb.get_namespace_topics(
-            namespace,
-        )
+    topics_final = web_service.namespace_service.dynamodb.get_namespace_topics(
+        namespace,
     )
     assert len(topics_final) == 0
 
@@ -1154,10 +1132,8 @@ def test_recreate_topic_success(
     assert 'message' in result
 
     # Verify topic still exists in DynamoDB after recreation
-    topics_after = (
-        web_service.namespace_service.dynamodb.get_namespace_topics(
-            namespace,
-        )
+    topics_after = web_service.namespace_service.dynamodb.get_namespace_topics(
+        namespace,
     )
     assert topic in topics_after
 
@@ -1329,10 +1305,8 @@ def test_recreate_topic_lifecycle(
     assert recreate_result['status'] == 'success'
 
     # 5. Verify topic still exists in DynamoDB after recreation
-    topics_after = (
-        web_service.namespace_service.dynamodb.get_namespace_topics(
-            namespace,
-        )
+    topics_after = web_service.namespace_service.dynamodb.get_namespace_topics(
+        namespace,
     )
     assert topic in topics_after
 
@@ -1343,4 +1317,3 @@ def test_recreate_topic_lifecycle(
     assert delete_result['status'] == 'success'
 
     print('  Recreate topic lifecycle test completed successfully')
-

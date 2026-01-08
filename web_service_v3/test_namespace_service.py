@@ -9,14 +9,15 @@ from typing import Any
 
 import pytest
 
-from web_service_v3.services import (
-    DynamoDBService,
-    NamespaceService,
-)
+from web_service_v3.services import DynamoDBService
+from web_service_v3.services import NamespaceService
 
 # ============================================================================
 # Test Constants
 # ============================================================================
+
+EXPECTED_NAMESPACE_LENGTH = 15  # 'ns-' + 12 chars
+EXPECTED_TOPICS_COUNT_2 = 2
 
 # ============================================================================
 # Test Fixtures
@@ -151,8 +152,7 @@ def test_generate_default(
 ) -> None:
     """Test generate_default namespace name."""
     print(
-        f'\n[test_generate_default] '
-        f'Testing with subject: {random_subject}',
+        f'\n[test_generate_default] Testing with subject: {random_subject}',
     )
 
     namespace = namespace_service.generate_default(random_subject)
@@ -160,7 +160,7 @@ def test_generate_default(
 
     # Assertions
     assert namespace.startswith('ns-')
-    assert len(namespace) == 15  # 'ns-' + 12 chars
+    assert len(namespace) == EXPECTED_NAMESPACE_LENGTH
     assert random_subject.replace('-', '')[-12:] in namespace
 
 
@@ -172,8 +172,7 @@ def test_create_namespace(
 ) -> None:
     """Test create_namespace with real DynamoDB service."""
     print(
-        f'\n[test_create_namespace] '
-        f'Testing with subject: {random_subject}',
+        f'\n[test_create_namespace] Testing with subject: {random_subject}',
     )
 
     # Mark for cleanup
@@ -246,8 +245,7 @@ def test_delete_namespace(
 ) -> None:
     """Test delete_namespace with real DynamoDB service."""
     print(
-        f'\n[test_delete_namespace] '
-        f'Testing with subject: {random_subject}',
+        f'\n[test_delete_namespace] Testing with subject: {random_subject}',
     )
 
     # Mark for cleanup
@@ -317,8 +315,7 @@ def test_create_topic(
 ) -> None:
     """Test create_topic with real DynamoDB service."""
     print(
-        f'\n[test_create_topic] '
-        f'Testing with subject: {random_subject}',
+        f'\n[test_create_topic] Testing with subject: {random_subject}',
     )
 
     # Mark for cleanup
@@ -401,8 +398,7 @@ def test_delete_topic(
 ) -> None:
     """Test delete_topic with real DynamoDB service."""
     print(
-        f'\n[test_delete_topic] '
-        f'Testing with subject: {random_subject}',
+        f'\n[test_delete_topic] Testing with subject: {random_subject}',
     )
 
     # Mark for cleanup
@@ -513,10 +509,12 @@ def test_full_lifecycle(
     random_subject: str,
     cleanup_data: Any,
 ) -> None:
-    """Test full lifecycle: create namespace, create topics, delete topics, delete namespace."""
+    """Test full lifecycle.
+
+    Creates namespace, creates topics, deletes topics, deletes namespace.
+    """
     print(
-        f'\n[test_full_lifecycle] '
-        f'Testing with subject: {random_subject}',
+        f'\n[test_full_lifecycle] Testing with subject: {random_subject}',
     )
 
     # Mark for cleanup
@@ -551,7 +549,7 @@ def test_full_lifecycle(
     # 3. List namespaces and topics
     list_result = namespace_service.list_namespace_and_topics(random_subject)
     assert list_result['status'] == 'success'
-    assert len(list_result['namespaces'][namespace]) == 2
+    assert len(list_result['namespaces'][namespace]) == EXPECTED_TOPICS_COUNT_2
 
     # 4. Delete topic
     delete_topic_result = namespace_service.delete_topic(
@@ -571,4 +569,3 @@ def test_full_lifecycle(
     assert namespace not in delete_result['namespaces']
 
     print('  Full lifecycle test completed successfully')
-

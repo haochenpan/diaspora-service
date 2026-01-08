@@ -32,20 +32,22 @@ def iam_service() -> IAMService:
 
     if not all([account_id, region, cluster_name]):
         missing = [
-            var for var, val in [
+            var
+            for var, val in [
                 ('AWS_ACCOUNT_ID', account_id),
                 ('AWS_ACCOUNT_REGION', region),
                 ('MSK_CLUSTER_NAME', cluster_name),
-            ] if val is None
+            ]
+            if val is None
         ]
         raise ValueError(
             f'Missing required environment variables: {", ".join(missing)}',
         )
 
     return IAMService(
-        account_id=account_id,
-        region=region,
-        cluster_name=cluster_name,
+        account_id=account_id or '',
+        region=region or '',
+        cluster_name=cluster_name or '',
     )
 
 
@@ -174,8 +176,7 @@ def test_delete_access_keys(
 ) -> None:
     """Test delete_access_keys with real AWS services."""
     print(
-        f'\n[test_delete_access_keys] '
-        f'Testing with subject: {random_subject}',
+        f'\n[test_delete_access_keys] Testing with subject: {random_subject}',
     )
 
     # Mark for cleanup

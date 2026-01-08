@@ -1,5 +1,7 @@
 """Pytest configuration for web_service_v3 tests."""
 
+from __future__ import annotations
+
 import warnings
 
 import pytest
@@ -27,4 +29,3 @@ warnings.filterwarnings(
     message='.*ssl.PROTOCOL_TLS.*',
     category=DeprecationWarning,
 )
-

@@ -66,21 +66,23 @@ class IAMService:
         ]
         return {
             'Version': '2012-10-17',
-            'Statement': [{
-                'Effect': 'Allow',
-                'Action': [
-                    'kafka-cluster:Connect',
-                    'kafka-cluster:DescribeTopic',
-                    'kafka-cluster:ReadData',
-                    'kafka-cluster:WriteData',
-                    'kafka-cluster:DescribeGroup',
-                    'kafka-cluster:AlterGroup',
-                    'kafka-cluster:WriteDataIdempotently',
-                    'kafka-cluster:DescribeTransactionalId',
-                    'kafka-cluster:AlterTransactionalId',
-                ],
-                'Resource': resources,
-            }],
+            'Statement': [
+                {
+                    'Effect': 'Allow',
+                    'Action': [
+                        'kafka-cluster:Connect',
+                        'kafka-cluster:DescribeTopic',
+                        'kafka-cluster:ReadData',
+                        'kafka-cluster:WriteData',
+                        'kafka-cluster:DescribeGroup',
+                        'kafka-cluster:AlterGroup',
+                        'kafka-cluster:WriteDataIdempotently',
+                        'kafka-cluster:DescribeTransactionalId',
+                        'kafka-cluster:AlterTransactionalId',
+                    ],
+                    'Resource': resources,
+                },
+            ],
         }
 
     def create_user_and_policy(self, subject: str) -> dict[str, Any]:
@@ -1173,9 +1175,7 @@ class WebService:
 
         return {
             'status': 'success',
-            'message': (
-                f'User {subject} created with namespace {namespace}'
-            ),
+            'message': (f'User {subject} created with namespace {namespace}'),
             'subject': subject,
             'namespace': namespace,
         }
@@ -1216,10 +1216,8 @@ class WebService:
             }
 
         # Delete all topics under the default namespace
-        topics = (
-            self.namespace_service.dynamodb.get_namespace_topics(
-                default_namespace,
-            )
+        topics = self.namespace_service.dynamodb.get_namespace_topics(
+            default_namespace,
         )
         for topic in topics:
             # Delete Kafka topic (idempotent)
@@ -1465,8 +1463,8 @@ class WebService:
             Dictionary with status and message from KafkaService
         """
         # Verify namespace exists for this user
-        user_namespaces = (
-            self.namespace_service.dynamodb.get_user_namespaces(subject)
+        user_namespaces = self.namespace_service.dynamodb.get_user_namespaces(
+            subject,
         )
         if namespace not in user_namespaces:
             return {
@@ -1475,8 +1473,8 @@ class WebService:
             }
 
         # Verify topic exists in DynamoDB
-        existing_topics = (
-            self.namespace_service.dynamodb.get_namespace_topics(namespace)
+        existing_topics = self.namespace_service.dynamodb.get_namespace_topics(
+            namespace,
         )
         if topic not in existing_topics:
             return {
@@ -1493,4 +1491,3 @@ class WebService:
             }
 
         return kafka_result
-

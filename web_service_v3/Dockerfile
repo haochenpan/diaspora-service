@@ -13,4 +13,3 @@ RUN pip install .
 
 # CMD [ "uvicorn", "web_service_v3.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload" ]
 CMD ["gunicorn", "--bind", "0.0.0.0:8000", "-k", "uvicorn.workers.UvicornWorker", "web_service_v3.main:app"]
-

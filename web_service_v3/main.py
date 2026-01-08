@@ -19,13 +19,11 @@ from web_service.utils import EnvironmentChecker
 from web_service.utils import WEB_SERVICE_DESC
 from web_service.utils import WEB_SERVICE_TAGS_METADATA
 
-from .services import (
-    DynamoDBService,
-    IAMService,
-    KafkaService,
-    NamespaceService,
-    WebService,
-)
+from .services import DynamoDBService
+from .services import IAMService
+from .services import KafkaService
+from .services import NamespaceService
+from .services import WebService
 
 
 def extract_val(alias: str) -> Callable[..., Any]:
@@ -258,4 +256,3 @@ app = service.app
 
 if __name__ == '__main__':
     uvicorn.run(app, host='0.0.0.0', port=8000)
-

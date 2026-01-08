@@ -16,6 +16,11 @@ from web_service_v3.services import DynamoDBService
 # Test Constants
 # ============================================================================
 
+EXPECTED_NAMESPACES_COUNT_3 = 3
+EXPECTED_NAMESPACES_COUNT_2 = 2
+EXPECTED_TOPICS_COUNT_3 = 3
+EXPECTED_TOPICS_COUNT_2 = 2
+
 # ============================================================================
 # Test Fixtures
 # ============================================================================
@@ -98,8 +103,7 @@ def test_store_key(
 ) -> None:
     """Test store_key with real DynamoDB service."""
     print(
-        f'\n[test_store_key] '
-        f'Testing with subject: {random_subject}',
+        f'\n[test_store_key] Testing with subject: {random_subject}',
     )
 
     # Mark for cleanup
@@ -107,7 +111,8 @@ def test_store_key(
 
     # Store key
     access_key = 'aaaaa'
-    secret_key = 'bbbbb'
+    secret_key = 'bbbbb'  # pragma: allowlist secret
+
     create_date = datetime.now().isoformat()
 
     db_service.store_key(
@@ -142,8 +147,7 @@ def test_get_key_nonexistent(
 ) -> None:
     """Test get_key with nonexistent subject."""
     print(
-        f'\n[test_get_key_nonexistent] '
-        f'Testing with subject: {random_subject}',
+        f'\n[test_get_key_nonexistent] Testing with subject: {random_subject}',
     )
 
     # Try to get non-existent key
@@ -162,8 +166,7 @@ def test_delete_key(
 ) -> None:
     """Test delete_key with real DynamoDB service."""
     print(
-        f'\n[test_delete_key] '
-        f'Testing with subject: {random_subject}',
+        f'\n[test_delete_key] Testing with subject: {random_subject}',
     )
 
     # Mark for cleanup
@@ -173,7 +176,7 @@ def test_delete_key(
     db_service.store_key(
         subject=random_subject,
         access_key='aaaaa',
-        secret_key='bbbbb',
+        secret_key='bbbbb',  # pragma: allowlist secret
         create_date=datetime.now().isoformat(),
     )
 
@@ -200,8 +203,7 @@ def test_put_user_namespace(
 ) -> None:
     """Test put_user_namespace with real DynamoDB service."""
     print(
-        f'\n[test_put_user_namespace] '
-        f'Testing with subject: {random_subject}',
+        f'\n[test_put_user_namespace] Testing with subject: {random_subject}',
     )
 
     # Mark for cleanup
@@ -222,7 +224,7 @@ def test_put_user_namespace(
 
     # Assertions
     assert isinstance(result, list)
-    assert len(result) == 3
+    assert len(result) == EXPECTED_NAMESPACES_COUNT_3
     assert set(result) == set(namespaces)
 
 
@@ -313,7 +315,7 @@ def test_put_namespace_topics(
 
     # Assertions
     assert isinstance(result, list)
-    assert len(result) == 3
+    assert len(result) == EXPECTED_TOPICS_COUNT_3
     assert set(result) == set(topics)
 
 
@@ -394,7 +396,7 @@ def test_put_global_namespaces(
 
     # Assertions
     assert isinstance(result, set)
-    assert len(result) == 3
+    assert len(result) == EXPECTED_NAMESPACES_COUNT_3
     assert result == namespaces
 
 
@@ -458,7 +460,7 @@ def test_full_lifecycle(
     db_service.store_key(
         subject=random_subject,
         access_key='aaaaa',
-        secret_key='bbbbb',
+        secret_key='bbbbb',  # pragma: allowlist secret
         create_date=create_date,
     )
     key_result = db_service.get_key(random_subject)
@@ -471,13 +473,13 @@ def test_full_lifecycle(
         namespaces=['ns1', 'ns2'],
     )
     namespaces_result = db_service.get_user_namespaces(random_subject)
-    assert len(namespaces_result) == 2
+    assert len(namespaces_result) == EXPECTED_NAMESPACES_COUNT_2
     assert set(namespaces_result) == {'ns1', 'ns2'}
 
     # 3. Store global namespaces
     db_service.put_global_namespaces({'global1', 'global2'})
     global_result = db_service.get_global_namespaces()
-    assert len(global_result) == 2
+    assert len(global_result) == EXPECTED_NAMESPACES_COUNT_2
     assert global_result == {'global1', 'global2'}
 
     # 4. Delete key
@@ -499,7 +501,7 @@ def test_full_lifecycle(
         topics=['topic1', 'topic2'],
     )
     topics_result = db_service.get_namespace_topics(random_namespace)
-    assert len(topics_result) == 2
+    assert len(topics_result) == EXPECTED_TOPICS_COUNT_2
     assert set(topics_result) == {'topic1', 'topic2'}
 
     # 8. Delete namespace topics
@@ -507,4 +509,3 @@ def test_full_lifecycle(
     assert len(db_service.get_namespace_topics(random_namespace)) == 0
 
     print('  Full lifecycle test completed successfully')
-

@@ -111,8 +111,7 @@ def test_create_topic(
     assert result['status'] == 'success'
     assert 'message' in result
     assert (
-        random_namespace in result['message'] or
-        'Topic' in result['message']
+        random_namespace in result['message'] or 'Topic' in result['message']
     )
 
 
@@ -198,8 +197,7 @@ def test_delete_topic(
     assert result['status'] == 'success'
     assert 'message' in result
     assert (
-        random_namespace in result['message'] or
-        'Topic' in result['message']
+        random_namespace in result['message'] or 'Topic' in result['message']
     )
 
 
@@ -230,8 +228,8 @@ def test_delete_topic_idempotent(
     assert result['status'] == 'success'
     assert 'message' in result
     assert (
-        'does not exist' in result['message'].lower() or
-        'deleted' in result['message'].lower()
+        'does not exist' in result['message'].lower()
+        or 'deleted' in result['message'].lower()
     )
 
 
@@ -330,6 +328,7 @@ def test_full_lifecycle(
     )
     if create_result is None:
         pytest.skip('Kafka bootstrap servers not configured')
+    assert create_result is not None
     assert create_result['status'] == 'success'
 
     # 2. Recreate topic (delete + 5s sleep + create)
@@ -337,6 +336,7 @@ def test_full_lifecycle(
         namespace=random_namespace,
         topic=random_topic,
     )
+    assert recreate_result is not None
     assert recreate_result['status'] == 'success'
     assert 'recreated' in recreate_result['message'].lower()
 
@@ -345,6 +345,7 @@ def test_full_lifecycle(
         namespace=random_namespace,
         topic=random_topic,
     )
+    assert delete_result is not None
     assert delete_result['status'] == 'success'
 
     # 4. Delete again (idempotent)
@@ -352,7 +353,7 @@ def test_full_lifecycle(
         namespace=random_namespace,
         topic=random_topic,
     )
+    assert delete_result2 is not None
     assert delete_result2['status'] == 'success'
 
     print('  Full lifecycle test completed successfully')
-
