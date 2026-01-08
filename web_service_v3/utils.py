@@ -6,7 +6,6 @@ import contextlib
 import threading
 from typing import Any
 
-import boto3
 from kafka.admin import KafkaAdminClient
 from kafka.admin import NewTopic
 from kafka.errors import TopicAlreadyExistsError
@@ -31,19 +30,15 @@ GLOBAL_NAMESPACES_KEY = '__global_namespaces__'
 class AWSManagerV3:
     """Manage AWS resources for Diaspora Service V3 - simplified version."""
 
-    def __init__(  # noqa: PLR0913
+    def __init__(
         self,
         account_id: str,
         region: str,
         cluster_name: str,
-        iam_public: str | None,
+        iam_public: str,
         keys_table_name: str | None = None,
         users_table_name: str | None = None,
         namespace_table_name: str | None = None,
-        iam_service: IAMService | None = None,
-        dynamodb_service: DynamoDBService | None = None,
-        kafka_service: KafkaService | None = None,
-        namespace_service: NamespaceService | None = None,
     ) -> None:
         """Initialize AWSManagerV3 with AWS credentials and configuration.
 
@@ -51,19 +46,13 @@ class AWSManagerV3:
             account_id: AWS account ID
             region: AWS region
             cluster_name: MSK cluster name
-            iam_public: IAM public endpoint (optional)
+            iam_public: IAM public endpoint
             keys_table_name: DynamoDB table name for keys
                 (defaults to 'diaspora-keys')
             users_table_name: DynamoDB table name for user records
                 (defaults to 'diaspora-users')
             namespace_table_name: DynamoDB table name for namespace/topic
                 records (defaults to 'diaspora-namespaces')
-            iam_service: Optional IAM service instance (for testing)
-            dynamodb_service: Optional DynamoDB service instance
-                (for testing)
-            kafka_service: Optional Kafka service instance (for testing)
-            namespace_service: Optional Namespace service instance
-                (for testing)
         """
         self.account_id = account_id
         self.region = region
@@ -71,102 +60,40 @@ class AWSManagerV3:
         self.iam_public = iam_public
         self.lock = threading.Lock()
 
-        # Initialize AWS clients
-        iam_client = boto3.client('iam')
-        dynamodb_client = boto3.client('dynamodb', region_name=region)
-
-        # Initialize services (allow dependency injection for testing)
-        self.iam_service = iam_service or IAMService(
-            iam_client,
+        # Initialize services
+        self.iam_service = IAMService(
             account_id,
             region,
             cluster_name,
         )
-        self.dynamodb_service = dynamodb_service or DynamoDBService(
-            dynamodb_client,
+        self.dynamodb_service = DynamoDBService(
+            region,
             keys_table_name or 'diaspora-keys',
             users_table_name or 'diaspora-users',
             namespace_table_name or 'diaspora-namespaces',
         )
-        self.kafka_service = kafka_service or KafkaService(
+        self.kafka_service = KafkaService(
             iam_public,
             region,
         )
-        self.namespace_service = namespace_service or NamespaceService(
+        self.namespace_service = NamespaceService(
             self.dynamodb_service,
         )
-
-    def _ensure_user_exists(self, subject: str) -> dict[str, bool]:
-        """Ensure IAM user exists with policy attached (idempotent).
-
-        This method does NOT use a lock - caller must hold lock.
-        Returns dict with flags indicating what was created.
-        """
-        return self.iam_service.ensure_user_exists(subject)
-
-    def _ensure_namespace_exists(self, subject: str) -> dict[str, Any]:
-        """Ensure namespace exists for the user (idempotent).
-
-        This method does NOT use a lock - caller must hold lock.
-        Tries to create namespace with subject-based name first.
-        If that fails (namespace already taken), retries with random
-        namespaces.
-
-        Returns:
-            dict with 'status': 'success' and 'namespace' if successful,
-            or 'status': 'failure' and 'message' if all retries failed.
-        """
-        # Try to create namespace with subject-based name first
-        namespace = self.namespace_service.generate_default(subject)
-        namespace_result = self.namespace_service.create(subject, namespace)
-
-        # If namespace creation failed, retry with random namespaces
-        # Only retry if the error is "namespace already taken"
-        max_retries = 10
-        retry_count = 0
-        while (
-            namespace_result.get('status') != 'success'
-            and retry_count < max_retries
-        ):
-            error_message = namespace_result.get('message', '').lower()
-            # Only retry if namespace is already taken
-            if 'already taken' not in error_message:
-                break
-
-            # Generate random 12-character alphanumeric string
-            namespace = self.namespace_service.generate_random()
-            namespace_result = self.namespace_service.create(
-                subject,
-                namespace,
-            )
-            retry_count += 1
-
-        # If still failed after all retries, return failure
-        if namespace_result.get('status') != 'success':
-            return {
-                'status': 'failure',
-                'message': namespace_result.get(
-                    'message',
-                    'Unknown error',
-                ),
-            }
-
-        # Namespace creation succeeded
-        return {
-            'status': 'success',
-            'namespace': namespace,
-        }
 
     def create_user(self, subject: str) -> dict[str, str]:
         """Create an IAM user with policy for the given subject.
 
-        Also creates and registers the namespace for the user.
+        Also creates and registers a default namespace for the user.
         If the default namespace (based on subject UUID) fails, retries with
         randomly generated namespaces until one succeeds.
+
+        Note: Users can have multiple namespaces, but only one is created
+        by default. Additional namespaces can be created via
+        create_namespace().
         """
         with self.lock:
-            iam_result = self._ensure_user_exists(subject)
-            namespace_result = self._ensure_namespace_exists(subject)
+            iam_result = self.iam_service.ensure_user_exists(subject)
+            namespace_result = self.namespace_service.ensure_exists(subject)
             result = combine_user_creation_result(
                 iam_result,
                 namespace_result,
@@ -202,7 +129,9 @@ class AWSManagerV3:
 
             # Delete each Kafka topic (idempotent)
             # Note: We delete Kafka topics but don't update DynamoDB here
-            # because deleting the namespace will clean up the topics record
+            # because deleting the namespace will clean up the topics record.
+            # This is safe because namespace deletion removes the namespace
+            # record from DynamoDB, which contains the topics list.
             for topic in topics:
                 self._delete_kafka_topic(namespace, topic)
 
@@ -227,12 +156,16 @@ class AWSManagerV3:
             return result
 
     def create_key(self, subject: str) -> dict[str, str]:
-        """Create an access key for a user, creating user if needed."""
+        """Create an access key for a user, creating user if needed.
+
+        Note: This method ALWAYS deletes existing keys before creating
+        a new one. Use get_key() if you want to preserve existing keys.
+        """
         with self.lock:
             # Ensure user exists first (idempotent)
-            self._ensure_user_exists(subject)
+            self.iam_service.ensure_user_exists(subject)
             # Ensure namespace exists (idempotent)
-            self._ensure_namespace_exists(subject)
+            self.namespace_service.ensure_exists(subject)
 
             # Delete existing keys from IAM if there are any
             self.iam_service.delete_access_keys(subject)
@@ -258,16 +191,21 @@ class AWSManagerV3:
                 'access_key': key_data['access_key'],
                 'secret_key': key_data['secret_key'],
                 'create_date': key_data['create_date'],
-                'endpoint': self.iam_public or '',
+                'endpoint': self.iam_public,
             }
 
     def get_key(self, subject: str) -> dict[str, Any]:
-        """Get access key from DynamoDB or create if needed."""
+        """Get access key from DynamoDB or create if needed.
+
+        Note: This method only creates a new key if no valid key exists.
+        Existing valid keys are preserved. Use create_key() to force
+        key replacement.
+        """
         with self.lock:
             # Ensure user exists first (idempotent)
-            self._ensure_user_exists(subject)
+            self.iam_service.ensure_user_exists(subject)
             # Ensure namespace exists (idempotent)
-            self._ensure_namespace_exists(subject)
+            self.namespace_service.ensure_exists(subject)
 
             # Try to retrieve key from DynamoDB first
             stored_key = self.dynamodb_service.get_key(subject)
@@ -282,7 +220,7 @@ class AWSManagerV3:
                         'username': subject,
                         'access_key': stored_key['access_key'],
                         'secret_key': stored_key['secret_key'],
-                        'endpoint': self.iam_public or '',
+                        'endpoint': self.iam_public,
                         'retrieved_from_dynamodb': True,
                     }
                     if 'create_date' in stored_key:
@@ -314,12 +252,17 @@ class AWSManagerV3:
                 'access_key': key_data['access_key'],
                 'secret_key': key_data['secret_key'],
                 'create_date': key_data['create_date'],
-                'endpoint': self.iam_public or '',
+                'endpoint': self.iam_public,
                 'retrieved_from_dynamodb': False,
             }
 
     def delete_key(self, subject: str) -> dict[str, str]:
-        """Delete access keys for a user."""
+        """Delete access keys for a user.
+
+        Note: For consistency with create_key() and get_key(), this method
+        ensures namespace exists, though keys can technically exist without
+        a namespace.
+        """
         with self.lock:
             # Check if user exists
             if not self.iam_service.user_exists(subject):
@@ -327,6 +270,11 @@ class AWSManagerV3:
                     'status': 'error',
                     'message': f'User {subject} does not exist.',
                 }
+
+            # Ensure namespace exists (for consistency with create_key/get_key)
+            # Note: This is optional since keys can exist without namespace,
+            # but improves symmetry with create/get operations
+            self.namespace_service.ensure_exists(subject)
 
             # Delete existing keys from IAM
             keys_deleted = self.iam_service.delete_access_keys(subject)
@@ -390,6 +338,9 @@ class AWSManagerV3:
     ) -> dict[str, Any]:
         """Delete a namespace for a user (idempotent).
 
+        Also deletes all topics under the namespace before deleting the
+        namespace itself. This ensures no orphaned Kafka topics remain.
+
         Args:
             subject: User subject ID
             namespace: Namespace name to delete
@@ -399,6 +350,15 @@ class AWSManagerV3:
             Returns success message even if namespace doesn't exist.
         """
         with self.lock:
+            # Get all topics for this namespace
+            topics = self.dynamodb_service.get_namespace_topics(namespace)
+
+            # Delete each Kafka topic first (idempotent)
+            # This prevents orphaned topics when namespace is deleted
+            for topic in topics:
+                self._delete_kafka_topic(namespace, topic)
+
+            # Then delete the namespace (this will clean up DynamoDB records)
             return self.namespace_service.delete(subject, namespace)
 
     def _create_kafka_topic(
@@ -475,6 +435,14 @@ class AWSManagerV3:
     ) -> dict[str, Any]:
         """Create a topic under a namespace.
 
+        Operation order:
+        1. Validate topic name
+        2. Ensure user exists
+        3. Verify namespace ownership
+        4. Check if topic exists (early return if exists)
+        5. Update DynamoDB
+        6. Create Kafka topic
+
         Args:
             subject: User subject ID
             namespace: Namespace name
@@ -486,14 +454,17 @@ class AWSManagerV3:
             namespace not owned by user)
         """
         with self.lock:
-            # Validate topic name (same rules as namespace)
+            # 1. Validate topic name (same rules as namespace)
             validation_error = self._validate_namespace_name(topic)
             if validation_error:
                 validation_error['namespace'] = namespace
                 validation_error['topic'] = topic
                 return validation_error
 
-            # Verify namespace belongs to user
+            # 2. Ensure user exists (for consistency with delete_topic)
+            self.iam_service.ensure_user_exists(subject)
+
+            # 3. Verify namespace belongs to user
             user_record = self.dynamodb_service.get_user_record(subject)
             if not user_record or 'namespaces' not in user_record:
                 return {
@@ -512,16 +483,13 @@ class AWSManagerV3:
                     'topic': topic,
                 }
 
-            # Get existing topics for namespace
+            # 4. Get existing topics and check if topic already exists
             existing_topics = self.dynamodb_service.get_namespace_topics(
                 namespace,
             )
 
-            # Check if topic already exists (must be unique under namespace)
             if topic in existing_topics:
-                # Topic already exists, ensure user exists and create Kafka
-                # topic (idempotent)
-                self._ensure_user_exists(subject)
+                # Topic already exists, create Kafka topic (idempotent)
                 kafka_result = self._create_kafka_topic(namespace, topic)
                 if kafka_result and kafka_result.get('status') == 'failure':
                     return {
@@ -543,17 +511,14 @@ class AWSManagerV3:
                     'topic': topic,
                 }
 
-            # Add topic to namespace
+            # 5. Update DynamoDB - add topic to namespace
             all_topics = sorted({*existing_topics, topic})
             self.dynamodb_service.update_namespace_topics(
                 namespace,
                 all_topics,
             )
 
-            # Ensure user exists
-            self._ensure_user_exists(subject)
-
-            # Create Kafka topic (idempotent)
+            # 6. Create Kafka topic (idempotent)
             kafka_result = self._create_kafka_topic(namespace, topic)
             if kafka_result and kafka_result.get('status') == 'failure':
                 return {
@@ -581,6 +546,17 @@ class AWSManagerV3:
     ) -> dict[str, Any]:
         """Delete a topic from a namespace (idempotent).
 
+        This operation is idempotent - it returns success even if the
+        namespace or topic doesn't exist. This differs from create_topic()
+        which validates existence and ownership before proceeding.
+
+        Operation order:
+        1. Ensure user exists (for consistency with create_topic)
+        2. Verify namespace ownership
+        3. Check if topic exists (early return if not exists)
+        4. Update/Delete from DynamoDB
+        5. Delete Kafka topic
+
         Args:
             subject: User subject ID
             namespace: Namespace name
@@ -591,7 +567,10 @@ class AWSManagerV3:
             Returns success message even if namespace or topic doesn't exist.
         """
         with self.lock:
-            # Verify namespace belongs to user
+            # 1. Ensure user exists (for consistency with create_topic)
+            self.iam_service.ensure_user_exists(subject)
+
+            # 2. Verify namespace belongs to user
             user_record = self.dynamodb_service.get_user_record(subject)
             if not user_record or 'namespaces' not in user_record:
                 # No namespaces found, already deleted (idempotent)
@@ -616,12 +595,11 @@ class AWSManagerV3:
                     'topic': topic,
                 }
 
-            # Get existing topics for namespace
+            # 3. Get existing topics and check if topic exists
             existing_topics = self.dynamodb_service.get_namespace_topics(
                 namespace,
             )
 
-            # Check if topic exists
             if topic not in existing_topics:
                 # Topic doesn't exist, delete from Kafka anyway (idempotent)
                 self._delete_kafka_topic(namespace, topic)
@@ -634,7 +612,7 @@ class AWSManagerV3:
                     'topic': topic,
                 }
 
-            # Remove topic from namespace
+            # 4. Update/Delete from DynamoDB
             remaining_topics = [t for t in existing_topics if t != topic]
             if remaining_topics:
                 self.dynamodb_service.update_namespace_topics(
@@ -644,7 +622,7 @@ class AWSManagerV3:
             else:
                 self.dynamodb_service.delete_namespace_topics(namespace)
 
-            # Delete Kafka topic (idempotent)
+            # 5. Delete Kafka topic (idempotent)
             kafka_result = self._delete_kafka_topic(namespace, topic)
             if kafka_result and kafka_result.get('status') == 'failure':
                 return {
@@ -701,7 +679,7 @@ class AWSManagerV3:
                 'namespaces': result,
             }
 
-    def recreate_topic(  # noqa: PLR0911
+    def recreate_topic(
         self,
         subject: str,
         namespace: str,
@@ -755,15 +733,6 @@ class AWSManagerV3:
                         f'Topic {topic} not found in namespace {namespace} '
                         f'for {subject}'
                     ),
-                    'namespace': namespace,
-                    'topic': topic,
-                }
-
-            # Check if Kafka endpoint is configured
-            if not self.iam_public:
-                return {
-                    'status': 'failure',
-                    'message': 'Kafka endpoint not configured',
                     'namespace': namespace,
                     'topic': topic,
                 }

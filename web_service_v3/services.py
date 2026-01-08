@@ -9,6 +9,7 @@ import secrets
 import string
 from typing import Any
 
+import boto3
 from aws_msk_iam_sasl_signer import MSKAuthTokenProvider
 from kafka.admin import KafkaAdminClient
 from kafka.admin import NewTopic
@@ -45,7 +46,6 @@ class IAMService:
 
     def __init__(
         self,
-        iam_client: Any,
         account_id: str,
         region: str,
         cluster_name: str,
@@ -53,12 +53,11 @@ class IAMService:
         """Initialize IAM service.
 
         Args:
-            iam_client: Boto3 IAM client
             account_id: AWS account ID
             region: AWS region
             cluster_name: MSK cluster name
         """
-        self.iam = iam_client
+        self.iam = boto3.client('iam')
         self.account_id = account_id
         self.region = region
         self.cluster_name = cluster_name
@@ -109,6 +108,9 @@ class IAMService:
             ],
         }
 
+    def create_user(self, subject: str) -> dict[str, bool]:
+        pass
+
     def ensure_user_exists(self, subject: str) -> dict[str, bool]:
         """Ensure IAM user exists with policy attached (idempotent).
 
@@ -155,46 +157,11 @@ class IAMService:
             )
             policy_attached = True
 
-        # 4. Update IAM policy to refresh with latest policy document
-        # This ensures the policy is always up-to-date and cleans up old
-        # versions
-        # Note: update_policy already handles NoSuchEntityException internally
-        self.update_policy(subject)
-
         return {
             'user_created': user_created,
             'policy_created': policy_created,
             'policy_attached': policy_attached,
         }
-
-    def update_policy(self, subject: str) -> None:
-        """Update IAM policy by creating a new version and deleting old ones.
-
-        This method refreshes the policy with the latest policy document,
-        creates a new version, and deletes old non-default versions to avoid
-        hitting the version quota.
-
-        This method does NOT use a lock - caller must hold lock.
-
-        Args:
-            subject: User subject ID
-        """
-        policy_arn = self.iam_policy_arn_prefix + subject
-        with contextlib.suppress(
-            self.iam.exceptions.NoSuchEntityException,
-        ):
-            # Get the latest policy document
-            latest_policy = self.generate_user_policy(subject)
-
-            # Create a new policy version with the latest policy
-            self.iam.create_policy_version(
-                PolicyArn=policy_arn,
-                PolicyDocument=json.dumps(latest_policy),
-                SetAsDefault=True,
-            )
-
-            # Delete old non-default versions
-            self.delete_policy_versions(policy_arn)
 
     def delete_policy_versions(self, policy_arn: str) -> None:
         """Delete all non-default policy versions.
@@ -355,7 +322,7 @@ class DynamoDBService:
 
     def __init__(
         self,
-        dynamodb_client: Any,
+        region: str,
         keys_table_name: str,
         users_table_name: str,
         namespace_table_name: str,
@@ -363,12 +330,12 @@ class DynamoDBService:
         """Initialize DynamoDB service.
 
         Args:
-            dynamodb_client: Boto3 DynamoDB client
+            region: AWS region
             keys_table_name: Table name for keys
             users_table_name: Table name for user records
             namespace_table_name: Table name for namespace/topic records
         """
-        self.dynamodb = dynamodb_client
+        self.dynamodb = boto3.client('dynamodb', region_name=region)
         self.keys_table_name = keys_table_name
         self.users_table_name = users_table_name
         self.namespace_table_name = namespace_table_name
