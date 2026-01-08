@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import threading
 from datetime import datetime
 from typing import Any
 
@@ -81,13 +82,22 @@ def cleanup_data(db_service: DynamoDBService) -> Any:
     for subject in created_subjects:
         with contextlib.suppress(Exception):
             db_service.delete_key(subject)
+        # Remove all user namespaces individually
         with contextlib.suppress(Exception):
-            db_service.delete_user_namespace(subject)
+            namespaces = db_service.get_user_namespaces(subject)
+            for namespace in namespaces:
+                db_service.remove_user_namespace(subject, namespace)
     for namespace in created_namespaces:
+        # Remove all namespace topics individually
         with contextlib.suppress(Exception):
-            db_service.delete_namespace_topics(namespace)
+            topics = db_service.get_namespace_topics(namespace)
+            for topic in topics:
+                db_service.remove_namespace_topic(namespace, topic)
+    # Remove all global namespaces individually
     with contextlib.suppress(Exception):
-        db_service.delete_global_namespaces()
+        global_namespaces = db_service.get_global_namespaces()
+        for namespace in global_namespaces:
+            db_service.remove_global_namespace(namespace)
 
 
 # ============================================================================
@@ -196,39 +206,6 @@ def test_delete_key(
 
 
 @pytest.mark.integration
-def test_put_user_namespace(
-    db_service: DynamoDBService,
-    random_subject: str,
-    cleanup_data: Any,
-) -> None:
-    """Test put_user_namespace with real DynamoDB service."""
-    print(
-        f'\n[test_put_user_namespace] Testing with subject: {random_subject}',
-    )
-
-    # Mark for cleanup
-    cleanup_data['subject'](random_subject)
-
-    # Store user namespaces
-    namespaces = ['namespace1', 'namespace2', 'namespace3']
-    db_service.put_user_namespace(
-        subject=random_subject,
-        namespaces=namespaces,
-    )
-    print(f'  Stored namespaces: {namespaces}')
-
-    # Verify it was stored
-    result = db_service.get_user_namespaces(random_subject)
-    print('  Retrieved namespaces:')
-    print(json.dumps(result, indent=2, default=str))
-
-    # Assertions
-    assert isinstance(result, list)
-    assert len(result) == EXPECTED_NAMESPACES_COUNT_3
-    assert set(result) == set(namespaces)
-
-
-@pytest.mark.integration
 def test_get_user_namespaces_nonexistent(
     db_service: DynamoDBService,
     random_subject: str,
@@ -249,14 +226,14 @@ def test_get_user_namespaces_nonexistent(
 
 
 @pytest.mark.integration
-def test_delete_user_namespace(
+def test_remove_user_namespace(
     db_service: DynamoDBService,
     random_subject: str,
     cleanup_data: Any,
 ) -> None:
-    """Test delete_user_namespace with real DynamoDB service."""
+    """Test remove_user_namespace with real DynamoDB service."""
     print(
-        f'\n[test_delete_user_namespace] '
+        f'\n[test_remove_user_namespace] '
         f'Testing with subject: {random_subject}',
     )
 
@@ -264,48 +241,50 @@ def test_delete_user_namespace(
     cleanup_data['subject'](random_subject)
 
     # Store user namespaces first
-    db_service.put_user_namespace(
-        subject=random_subject,
-        namespaces=['namespace1', 'namespace2'],
-    )
+    db_service.add_user_namespace(random_subject, 'namespace1')
+    db_service.add_user_namespace(random_subject, 'namespace2')
 
     # Verify it exists
-    assert len(db_service.get_user_namespaces(random_subject)) > 0
+    namespaces = db_service.get_user_namespaces(random_subject)
+    assert len(namespaces) == EXPECTED_NAMESPACES_COUNT_2
 
-    # Delete user namespace
-    db_service.delete_user_namespace(random_subject)
-    print(f'  Deleted namespaces for subject: {random_subject}')
+    # Remove one namespace
+    db_service.remove_user_namespace(random_subject, 'namespace1')
+    print(f'  Removed namespace1 for subject: {random_subject}')
 
-    # Verify it's gone
+    # Verify it's removed
     result = db_service.get_user_namespaces(random_subject)
-    print(f'  Retrieved namespaces after delete: {result}')
+    print(f'  Retrieved namespaces after remove: {result}')
 
     # Assertions
     assert isinstance(result, list)
-    assert len(result) == 0
+    assert len(result) == EXPECTED_NAMESPACES_COUNT_2 - 1
+    assert 'namespace2' in result
+    assert 'namespace1' not in result
 
 
 @pytest.mark.integration
-def test_put_namespace_topics(
+def test_add_namespace_topic(
     db_service: DynamoDBService,
     random_namespace: str,
     cleanup_data: Any,
 ) -> None:
-    """Test put_namespace_topics with real DynamoDB service."""
+    """Test add_namespace_topic with real DynamoDB service."""
     print(
-        f'\n[test_put_namespace_topics] '
+        f'\n[test_add_namespace_topic] '
         f'Testing with namespace: {random_namespace}',
     )
 
     # Mark for cleanup
     cleanup_data['namespace'](random_namespace)
 
-    # Store namespace topics
+    # Store namespace topics using add_namespace_topic
     topics = ['topic1', 'topic2', 'topic3']
-    db_service.put_namespace_topics(
-        namespace=random_namespace,
-        topics=topics,
-    )
+    for topic in topics:
+        db_service.add_namespace_topic(
+            namespace=random_namespace,
+            topic=topic,
+        )
     print(f'  Stored topics: {topics}')
 
     # Verify it was stored
@@ -340,14 +319,14 @@ def test_get_namespace_topics_nonexistent(
 
 
 @pytest.mark.integration
-def test_delete_namespace_topics(
+def test_remove_namespace_topic(
     db_service: DynamoDBService,
     random_namespace: str,
     cleanup_data: Any,
 ) -> None:
-    """Test delete_namespace_topics with real DynamoDB service."""
+    """Test remove_namespace_topic with real DynamoDB service."""
     print(
-        f'\n[test_delete_namespace_topics] '
+        f'\n[test_remove_namespace_topic] '
         f'Testing with namespace: {random_namespace}',
     )
 
@@ -355,49 +334,32 @@ def test_delete_namespace_topics(
     cleanup_data['namespace'](random_namespace)
 
     # Store namespace topics first
-    db_service.put_namespace_topics(
+    db_service.add_namespace_topic(
         namespace=random_namespace,
-        topics=['topic1', 'topic2'],
+        topic='topic1',
+    )
+    db_service.add_namespace_topic(
+        namespace=random_namespace,
+        topic='topic2',
     )
 
     # Verify it exists
-    assert len(db_service.get_namespace_topics(random_namespace)) > 0
+    topics = db_service.get_namespace_topics(random_namespace)
+    assert len(topics) == EXPECTED_TOPICS_COUNT_2
 
-    # Delete namespace topics
-    db_service.delete_namespace_topics(random_namespace)
-    print(f'  Deleted topics for namespace: {random_namespace}')
+    # Remove one topic
+    db_service.remove_namespace_topic(random_namespace, 'topic1')
+    print(f'  Removed topic1 for namespace: {random_namespace}')
 
-    # Verify it's gone
+    # Verify it's removed
     result = db_service.get_namespace_topics(random_namespace)
-    print(f'  Retrieved topics after delete: {result}')
+    print(f'  Retrieved topics after remove: {result}')
 
     # Assertions
     assert isinstance(result, list)
-    assert len(result) == 0
-
-
-@pytest.mark.integration
-def test_put_global_namespaces(
-    db_service: DynamoDBService,
-    cleanup_data: Any,
-) -> None:
-    """Test put_global_namespaces with real DynamoDB service."""
-    print('\n[test_put_global_namespaces] Testing global namespaces')
-
-    # Store global namespaces
-    namespaces = {'global1', 'global2', 'global3'}
-    db_service.put_global_namespaces(namespaces)
-    print(f'  Stored global namespaces: {sorted(namespaces)}')
-
-    # Verify it was stored
-    result = db_service.get_global_namespaces()
-    print('  Retrieved global namespaces:')
-    print(json.dumps(sorted(result), indent=2, default=str))
-
-    # Assertions
-    assert isinstance(result, set)
-    assert len(result) == EXPECTED_NAMESPACES_COUNT_3
-    assert result == namespaces
+    assert len(result) == EXPECTED_TOPICS_COUNT_2 - 1
+    assert 'topic2' in result
+    assert 'topic1' not in result
 
 
 @pytest.mark.integration
@@ -417,30 +379,34 @@ def test_get_global_namespaces_nonexistent(
 
 
 @pytest.mark.integration
-def test_delete_global_namespaces(
+def test_remove_global_namespace(
     db_service: DynamoDBService,
     cleanup_data: Any,
 ) -> None:
-    """Test delete_global_namespaces with real DynamoDB service."""
-    print('\n[test_delete_global_namespaces] Testing')
+    """Test remove_global_namespace with real DynamoDB service."""
+    print('\n[test_remove_global_namespace] Testing')
 
     # Store global namespaces first
-    db_service.put_global_namespaces({'global1', 'global2'})
+    db_service.add_global_namespace('global1')
+    db_service.add_global_namespace('global2')
 
     # Verify it exists
-    assert len(db_service.get_global_namespaces()) > 0
+    global_namespaces = db_service.get_global_namespaces()
+    assert len(global_namespaces) == EXPECTED_NAMESPACES_COUNT_2
 
-    # Delete global namespaces
-    db_service.delete_global_namespaces()
-    print('  Deleted global namespaces')
+    # Remove one namespace
+    db_service.remove_global_namespace('global1')
+    print('  Removed global1')
 
-    # Verify it's gone
+    # Verify it's removed
     result = db_service.get_global_namespaces()
-    print(f'  Retrieved global namespaces after delete: {result}')
+    print(f'  Retrieved global namespaces after remove: {result}')
 
     # Assertions
     assert isinstance(result, set)
-    assert len(result) == 0
+    assert len(result) == EXPECTED_NAMESPACES_COUNT_2 - 1
+    assert 'global2' in result
+    assert 'global1' not in result
 
 
 @pytest.mark.integration
@@ -468,16 +434,15 @@ def test_full_lifecycle(
     assert key_result['access_key'] == 'aaaaa'
 
     # 2. Store user namespaces
-    db_service.put_user_namespace(
-        subject=random_subject,
-        namespaces=['ns1', 'ns2'],
-    )
+    db_service.add_user_namespace(random_subject, 'ns1')
+    db_service.add_user_namespace(random_subject, 'ns2')
     namespaces_result = db_service.get_user_namespaces(random_subject)
     assert len(namespaces_result) == EXPECTED_NAMESPACES_COUNT_2
     assert set(namespaces_result) == {'ns1', 'ns2'}
 
     # 3. Store global namespaces
-    db_service.put_global_namespaces({'global1', 'global2'})
+    db_service.add_global_namespace('global1')
+    db_service.add_global_namespace('global2')
     global_result = db_service.get_global_namespaces()
     assert len(global_result) == EXPECTED_NAMESPACES_COUNT_2
     assert global_result == {'global1', 'global2'}
@@ -486,26 +451,297 @@ def test_full_lifecycle(
     db_service.delete_key(random_subject)
     assert db_service.get_key(random_subject) is None
 
-    # 5. Delete user namespace
-    db_service.delete_user_namespace(random_subject)
+    # 5. Remove user namespaces
+    db_service.remove_user_namespace(random_subject, 'ns1')
+    db_service.remove_user_namespace(random_subject, 'ns2')
     assert len(db_service.get_user_namespaces(random_subject)) == 0
 
-    # 6. Delete global namespaces
-    db_service.delete_global_namespaces()
+    # 6. Remove global namespaces
+    db_service.remove_global_namespace('global1')
+    db_service.remove_global_namespace('global2')
     assert len(db_service.get_global_namespaces()) == 0
 
     # 7. Store namespace topics
     random_namespace = f'test-namespace-{os.urandom(8).hex()}'
-    db_service.put_namespace_topics(
+    db_service.add_namespace_topic(
         namespace=random_namespace,
-        topics=['topic1', 'topic2'],
+        topic='topic1',
+    )
+    db_service.add_namespace_topic(
+        namespace=random_namespace,
+        topic='topic2',
     )
     topics_result = db_service.get_namespace_topics(random_namespace)
     assert len(topics_result) == EXPECTED_TOPICS_COUNT_2
     assert set(topics_result) == {'topic1', 'topic2'}
 
-    # 8. Delete namespace topics
-    db_service.delete_namespace_topics(random_namespace)
+    # 8. Remove namespace topics
+    db_service.remove_namespace_topic(random_namespace, 'topic1')
+    db_service.remove_namespace_topic(random_namespace, 'topic2')
     assert len(db_service.get_namespace_topics(random_namespace)) == 0
 
     print('  Full lifecycle test completed successfully')
+
+
+@pytest.mark.integration
+def test_concurrent_add_user_namespace(
+    db_service: DynamoDBService,
+    random_subject: str,
+    cleanup_data: Any,
+) -> None:
+    """Test race condition: concurrent add_user_namespace operations."""
+    print(
+        f'\n[test_concurrent_add_user_namespace] '
+        f'Testing with subject: {random_subject}',
+    )
+
+    # Mark for cleanup
+    cleanup_data['subject'](random_subject)
+
+    # Number of concurrent operations
+    num_threads = 10
+    namespaces_per_thread = 5
+    total_expected = num_threads * namespaces_per_thread
+
+    errors: list[Exception] = []
+    threads: list[threading.Thread] = []
+
+    def add_namespaces(thread_id: int) -> None:
+        """Add namespaces in a thread."""
+        try:
+            for i in range(namespaces_per_thread):
+                namespace = f'ns-{thread_id}-{i}'
+                db_service.add_user_namespace(random_subject, namespace)
+        except Exception as e:
+            errors.append(e)
+
+    # Start all threads
+    for i in range(num_threads):
+        thread = threading.Thread(target=add_namespaces, args=(i,))
+        threads.append(thread)
+        thread.start()
+
+    # Wait for all threads to complete
+    for thread in threads:
+        thread.join()
+
+    # Check for errors
+    if errors:
+        raise Exception(f'Errors occurred: {errors}')
+
+    # Verify all namespaces were added (sets deduplicate, so we check count)
+    result = db_service.get_user_namespaces(random_subject)
+    print(
+        f'  Added {len(result)} unique namespaces '
+        f'(expected ~{total_expected})',
+    )
+
+    # Assertions
+    assert isinstance(result, list)
+    # All namespaces should be present (no race condition losses)
+    assert len(result) == total_expected
+    # Verify specific namespaces exist
+    for thread_id in range(num_threads):
+        for i in range(namespaces_per_thread):
+            namespace = f'ns-{thread_id}-{i}'
+            assert namespace in result, f'Missing namespace: {namespace}'
+
+
+@pytest.mark.integration
+def test_concurrent_add_global_namespace(
+    db_service: DynamoDBService,
+    cleanup_data: Any,
+) -> None:
+    """Test race condition: concurrent add_global_namespace operations."""
+    print('\n[test_concurrent_add_global_namespace] Testing')
+
+    # Number of concurrent operations
+    num_threads = 10
+    namespaces_per_thread = 5
+    total_expected = num_threads * namespaces_per_thread
+
+    errors: list[Exception] = []
+    threads: list[threading.Thread] = []
+
+    def add_namespaces(thread_id: int) -> None:
+        """Add global namespaces in a thread."""
+        try:
+            for i in range(namespaces_per_thread):
+                namespace = f'global-{thread_id}-{i}'
+                db_service.add_global_namespace(namespace)
+        except Exception as e:
+            errors.append(e)
+
+    # Start all threads
+    for i in range(num_threads):
+        thread = threading.Thread(target=add_namespaces, args=(i,))
+        threads.append(thread)
+        thread.start()
+
+    # Wait for all threads to complete
+    for thread in threads:
+        thread.join()
+
+    # Check for errors
+    if errors:
+        raise Exception(f'Errors occurred: {errors}')
+
+    # Verify all namespaces were added
+    result = db_service.get_global_namespaces()
+    print(f'  Added {len(result)} unique global namespaces')
+
+    # Assertions
+    assert isinstance(result, set)
+    # All namespaces should be present (no race condition losses)
+    assert len(result) == total_expected
+    # Verify specific namespaces exist
+    for thread_id in range(num_threads):
+        for i in range(namespaces_per_thread):
+            namespace = f'global-{thread_id}-{i}'
+            assert namespace in result, f'Missing namespace: {namespace}'
+
+    # Cleanup
+    for namespace in result:
+        with contextlib.suppress(Exception):
+            db_service.remove_global_namespace(namespace)
+
+
+@pytest.mark.integration
+def test_concurrent_add_namespace_topic(
+    db_service: DynamoDBService,
+    random_namespace: str,
+    cleanup_data: Any,
+) -> None:
+    """Test race condition: concurrent add_namespace_topic operations."""
+    print(
+        f'\n[test_concurrent_add_namespace_topic] '
+        f'Testing with namespace: {random_namespace}',
+    )
+
+    # Mark for cleanup
+    cleanup_data['namespace'](random_namespace)
+
+    # Number of concurrent operations
+    num_threads = 10
+    topics_per_thread = 5
+    total_expected = num_threads * topics_per_thread
+
+    errors: list[Exception] = []
+    threads: list[threading.Thread] = []
+
+    def add_topics(thread_id: int) -> None:
+        """Add topics in a thread."""
+        try:
+            for i in range(topics_per_thread):
+                topic = f'topic-{thread_id}-{i}'
+                db_service.add_namespace_topic(random_namespace, topic)
+        except Exception as e:
+            errors.append(e)
+
+    # Start all threads
+    for i in range(num_threads):
+        thread = threading.Thread(target=add_topics, args=(i,))
+        threads.append(thread)
+        thread.start()
+
+    # Wait for all threads to complete
+    for thread in threads:
+        thread.join()
+
+    # Check for errors
+    if errors:
+        raise Exception(f'Errors occurred: {errors}')
+
+    # Verify all topics were added
+    result = db_service.get_namespace_topics(random_namespace)
+    print(f'  Added {len(result)} unique topics (expected {total_expected})')
+
+    # Assertions
+    assert isinstance(result, list)
+    # All topics should be present (no race condition losses)
+    assert len(result) == total_expected
+    # Verify specific topics exist
+    for thread_id in range(num_threads):
+        for i in range(topics_per_thread):
+            topic = f'topic-{thread_id}-{i}'
+            assert topic in result, f'Missing topic: {topic}'
+
+
+@pytest.mark.integration
+def test_concurrent_remove_operations(
+    db_service: DynamoDBService,
+    random_subject: str,
+    random_namespace: str,
+    cleanup_data: Any,
+) -> None:
+    """Test race condition: concurrent remove operations."""
+    print(
+        f'\n[test_concurrent_remove_operations] '
+        f'Testing with subject: {random_subject}, '
+        f'namespace: {random_namespace}',
+    )
+
+    # Mark for cleanup
+    cleanup_data['subject'](random_subject)
+    cleanup_data['namespace'](random_namespace)
+
+    # Setup: Add items first
+    num_items = 20
+    for i in range(num_items):
+        db_service.add_user_namespace(random_subject, f'ns-{i}')
+        db_service.add_global_namespace(f'global-{i}')
+        db_service.add_namespace_topic(random_namespace, f'topic-{i}')
+
+    # Number of concurrent remove operations
+    num_threads = 5
+    items_per_thread = 4  # Each thread removes 4 items
+
+    errors: list[Exception] = []
+    threads: list[threading.Thread] = []
+
+    def remove_items(thread_id: int) -> None:
+        """Remove items in a thread."""
+        try:
+            for i in range(items_per_thread):
+                item_id = thread_id * items_per_thread + i
+                if item_id < num_items:
+                    db_service.remove_user_namespace(
+                        random_subject,
+                        f'ns-{item_id}',
+                    )
+                    db_service.remove_global_namespace(f'global-{item_id}')
+                    db_service.remove_namespace_topic(
+                        random_namespace,
+                        f'topic-{item_id}',
+                    )
+        except Exception as e:
+            errors.append(e)
+
+    # Start all threads
+    for i in range(num_threads):
+        thread = threading.Thread(target=remove_items, args=(i,))
+        threads.append(thread)
+        thread.start()
+
+    # Wait for all threads to complete
+    for thread in threads:
+        thread.join()
+
+    # Check for errors
+    if errors:
+        raise Exception(f'Errors occurred: {errors}')
+
+    # Verify all items were removed
+    user_namespaces = db_service.get_user_namespaces(random_subject)
+    global_namespaces = db_service.get_global_namespaces()
+    topics = db_service.get_namespace_topics(random_namespace)
+
+    print(f'  Remaining user namespaces: {len(user_namespaces)}')
+    print(f'  Remaining global namespaces: {len(global_namespaces)}')
+    print(f'  Remaining topics: {len(topics)}')
+
+    # Assertions - all items should be removed (idempotent operations)
+    expected_remaining = max(0, num_items - (num_threads * items_per_thread))
+    assert len(user_namespaces) == expected_remaining
+    assert len(global_namespaces) == expected_remaining
+    assert len(topics) == expected_remaining

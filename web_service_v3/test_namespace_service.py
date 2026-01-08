@@ -28,9 +28,9 @@ EXPECTED_TOPICS_COUNT_2 = 2
 def db_service() -> DynamoDBService:
     """Create a DynamoDBService instance with real AWS services."""
     region = os.getenv('AWS_ACCOUNT_REGION')
-    keys_table_name = 'test-keys-table'
-    users_table_name = 'test-users-table'
-    namespace_table_name = 'test-namespace-table'
+    keys_table_name = 'test-diaspora-keys-table'
+    users_table_name = 'test-diaspora-users-table'
+    namespace_table_name = 'test-diaspora-namespace-table'
 
     if not region:
         raise ValueError(
@@ -94,10 +94,16 @@ def cleanup_data(
     for subject in created_subjects:
         with contextlib.suppress(Exception):
             db_service.delete_key(subject)
+        # Remove all user namespaces individually
         with contextlib.suppress(Exception):
-            db_service.delete_user_namespace(subject)
+            namespaces = db_service.get_user_namespaces(subject)
+            for namespace in namespaces:
+                db_service.remove_user_namespace(subject, namespace)
+    # Remove all global namespaces individually
     with contextlib.suppress(Exception):
-        db_service.delete_global_namespaces()
+        global_namespaces = db_service.get_global_namespaces()
+        for namespace in global_namespaces:
+            db_service.remove_global_namespace(namespace)
 
 
 # ============================================================================
