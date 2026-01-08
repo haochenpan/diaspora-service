@@ -300,11 +300,17 @@ class DynamoDBService:
             'secret_key': {'S': secret_key},
             'create_date': {'S': create_date},
         }
-        self._put_item_with_table_creation(
-            table_name=self.keys_table_name,
-            item=item,
-            create_table_func=self._create_keys_table,
-        )
+        try:
+            self.dynamodb.put_item(
+                TableName=self.keys_table_name,
+                Item=item,
+            )
+        except self.dynamodb.exceptions.ResourceNotFoundException:
+            self._create_keys_table()
+            self.dynamodb.put_item(
+                TableName=self.keys_table_name,
+                Item=item,
+            )
 
     def get_key(self, subject: str) -> dict[str, str] | None:
         """Get access key from DynamoDB.
@@ -349,29 +355,6 @@ class DynamoDBService:
     # User Namespace Management
     # ========================================================================
 
-    def put_user_namespace(
-        self,
-        subject: str,
-        namespaces: list[str],
-    ) -> None:
-        """Store user namespaces in DynamoDB.
-
-        Args:
-            subject: User subject ID
-            namespaces: List of namespace names
-        """
-        item = {
-            'subject': {'S': subject},
-            'namespaces': {
-                'L': [{'S': ns} for ns in sorted(set(namespaces))],
-            },
-        }
-        self._put_item_with_table_creation(
-            table_name=self.users_table_name,
-            item=item,
-            create_table_func=self._create_users_table,
-        )
-
     def get_user_namespaces(self, subject: str) -> list[str]:
         """Get user namespaces from DynamoDB.
 
@@ -379,7 +362,7 @@ class DynamoDBService:
             subject: User subject ID
 
         Returns:
-            List of namespace names, empty list if not found
+            List of namespace names (sorted), empty list if not found
         """
         with contextlib.suppress(
             self.dynamodb.exceptions.ResourceNotFoundException,
@@ -389,44 +372,79 @@ class DynamoDBService:
                 Key={'subject': {'S': subject}},
             )
             if 'Item' in response and 'namespaces' in response['Item']:
-                return [ns['S'] for ns in response['Item']['namespaces']['L']]
+                return sorted(response['Item']['namespaces']['SS'])
         return []
 
-    def delete_user_namespace(self, subject: str) -> None:
-        """Delete user namespace record from DynamoDB.
+    def add_user_namespace(
+        self,
+        subject: str,
+        namespace: str,
+    ) -> None:
+        """Atomically add a namespace to user namespaces in DynamoDB.
+
+        This method uses DynamoDB's ADD operation on a String Set (SS)
+        to atomically add a namespace. This prevents race conditions when
+        multiple namespaces are added concurrently.
 
         Args:
             subject: User subject ID
+            namespace: Namespace name to add
         """
+        try:
+            # Use ADD operation on a set - atomic and idempotent
+            self.dynamodb.update_item(
+                TableName=self.users_table_name,
+                Key={'subject': {'S': subject}},
+                UpdateExpression='ADD namespaces :namespace',
+                ExpressionAttributeValues={
+                    ':namespace': {'SS': [namespace]},
+                },
+            )
+        except self.dynamodb.exceptions.ResourceNotFoundException:
+            # Table doesn't exist, create it and retry
+            self._create_users_table()
+            self.dynamodb.update_item(
+                TableName=self.users_table_name,
+                Key={'subject': {'S': subject}},
+                UpdateExpression='ADD namespaces :namespace',
+                ExpressionAttributeValues={
+                    ':namespace': {'SS': [namespace]},
+                },
+            )
+
+    def remove_user_namespace(
+        self,
+        subject: str,
+        namespace: str,
+    ) -> None:
+        """Atomically remove a namespace from user namespaces in DynamoDB.
+
+        This method uses DynamoDB's DELETE operation on a String Set (SS)
+        to atomically remove a namespace. This is fully atomic and prevents
+        race conditions when multiple namespaces are removed concurrently.
+        The operation is idempotent - deleting a non-existent namespace
+        is a no-op.
+
+        Args:
+            subject: User subject ID
+            namespace: Namespace name to remove
+        """
+        # Use DELETE operation on a set - fully atomic and idempotent
         with contextlib.suppress(
             self.dynamodb.exceptions.ResourceNotFoundException,
         ):
-            self.dynamodb.delete_item(
+            self.dynamodb.update_item(
                 TableName=self.users_table_name,
                 Key={'subject': {'S': subject}},
+                UpdateExpression='DELETE namespaces :namespace',
+                ExpressionAttributeValues={
+                    ':namespace': {'SS': [namespace]},
+                },
             )
 
     # ========================================================================
     # Global Namespace Management
     # ========================================================================
-
-    def put_global_namespaces(self, namespaces: set[str]) -> None:
-        """Store global namespaces registry in DynamoDB.
-
-        Args:
-            namespaces: Set of namespace names
-        """
-        item = {
-            'subject': {'S': GLOBAL_NAMESPACES_KEY},
-            'namespaces': {
-                'L': [{'S': ns} for ns in sorted(namespaces)],
-            },
-        }
-        self._put_item_with_table_creation(
-            table_name=self.users_table_name,
-            item=item,
-            create_table_func=self._create_users_table,
-        )
 
     def get_global_namespaces(self) -> set[str]:
         """Get all globally registered namespace names.
@@ -442,45 +460,106 @@ class DynamoDBService:
                 Key={'subject': {'S': GLOBAL_NAMESPACES_KEY}},
             )
             if 'Item' in response and 'namespaces' in response['Item']:
-                return {ns['S'] for ns in response['Item']['namespaces']['L']}
+                return set(response['Item']['namespaces']['SS'])
         return set()
 
-    def delete_global_namespaces(self) -> None:
-        """Delete global namespaces registry from DynamoDB."""
+    def add_global_namespace(self, namespace: str) -> None:
+        """Atomically add a namespace to global namespaces in DynamoDB.
+
+        This method uses DynamoDB's ADD operation on a String Set (SS)
+        to atomically add a namespace. This prevents race conditions when
+        multiple namespaces are added concurrently.
+
+        Args:
+            namespace: Namespace name to add
+        """
+        try:
+            # Use ADD operation on a set - atomic and idempotent
+            self.dynamodb.update_item(
+                TableName=self.users_table_name,
+                Key={'subject': {'S': GLOBAL_NAMESPACES_KEY}},
+                UpdateExpression='ADD namespaces :namespace',
+                ExpressionAttributeValues={
+                    ':namespace': {'SS': [namespace]},
+                },
+            )
+        except self.dynamodb.exceptions.ResourceNotFoundException:
+            # Table doesn't exist, create it and retry
+            self._create_users_table()
+            self.dynamodb.update_item(
+                TableName=self.users_table_name,
+                Key={'subject': {'S': GLOBAL_NAMESPACES_KEY}},
+                UpdateExpression='ADD namespaces :namespace',
+                ExpressionAttributeValues={
+                    ':namespace': {'SS': [namespace]},
+                },
+            )
+
+    def remove_global_namespace(self, namespace: str) -> None:
+        """Atomically remove a namespace from global namespaces in DynamoDB.
+
+        This method uses DynamoDB's DELETE operation on a String Set (SS)
+        to atomically remove a namespace. This is fully atomic and prevents
+        race conditions when multiple namespaces are removed concurrently.
+        The operation is idempotent - deleting a non-existent namespace
+        is a no-op.
+
+        Args:
+            namespace: Namespace name to remove
+        """
+        # Use DELETE operation on a set - fully atomic and idempotent
         with contextlib.suppress(
             self.dynamodb.exceptions.ResourceNotFoundException,
         ):
-            self.dynamodb.delete_item(
+            self.dynamodb.update_item(
                 TableName=self.users_table_name,
                 Key={'subject': {'S': GLOBAL_NAMESPACES_KEY}},
+                UpdateExpression='DELETE namespaces :namespace',
+                ExpressionAttributeValues={
+                    ':namespace': {'SS': [namespace]},
+                },
             )
 
     # ========================================================================
     # Namespace Topics Management
     # ========================================================================
 
-    def put_namespace_topics(
+    def add_namespace_topic(
         self,
         namespace: str,
-        topics: list[str],
+        topic: str,
     ) -> None:
-        """Store namespace topics in DynamoDB.
+        """Atomically add a topic to namespace topics in DynamoDB.
+
+        This method uses DynamoDB's ADD operation on a String Set (SS)
+        to atomically add a topic. This prevents race conditions when
+        multiple topics are added concurrently.
 
         Args:
             namespace: Namespace name
-            topics: List of topic names
+            topic: Topic name to add
         """
-        item = {
-            'namespace': {'S': namespace},
-            'topics': {
-                'L': [{'S': t} for t in sorted(set(topics))],
-            },
-        }
-        self._put_item_with_table_creation(
-            table_name=self.namespace_table_name,
-            item=item,
-            create_table_func=self._create_namespace_table,
-        )
+        try:
+            # Use ADD operation on a set - atomic and idempotent
+            self.dynamodb.update_item(
+                TableName=self.namespace_table_name,
+                Key={'namespace': {'S': namespace}},
+                UpdateExpression='ADD topics :topic',
+                ExpressionAttributeValues={
+                    ':topic': {'SS': [topic]},
+                },
+            )
+        except self.dynamodb.exceptions.ResourceNotFoundException:
+            # Table doesn't exist, create it and retry
+            self._create_namespace_table()
+            self.dynamodb.update_item(
+                TableName=self.namespace_table_name,
+                Key={'namespace': {'S': namespace}},
+                UpdateExpression='ADD topics :topic',
+                ExpressionAttributeValues={
+                    ':topic': {'SS': [topic]},
+                },
+            )
 
     def get_namespace_topics(self, namespace: str) -> list[str]:
         """Get list of topics for a namespace from DynamoDB.
@@ -489,7 +568,7 @@ class DynamoDBService:
             namespace: Namespace name
 
         Returns:
-            List of topic names, empty list if not found
+            List of topic names (sorted), empty list if not found
         """
         with contextlib.suppress(
             self.dynamodb.exceptions.ResourceNotFoundException,
@@ -499,51 +578,42 @@ class DynamoDBService:
                 Key={'namespace': {'S': namespace}},
             )
             if 'Item' in response and 'topics' in response['Item']:
-                return [t['S'] for t in response['Item']['topics']['L']]
+                return sorted(response['Item']['topics']['SS'])
         return []
 
-    def delete_namespace_topics(self, namespace: str) -> None:
-        """Delete namespace topics record from DynamoDB.
+    def remove_namespace_topic(
+        self,
+        namespace: str,
+        topic: str,
+    ) -> None:
+        """Atomically remove a topic from namespace topics in DynamoDB.
+
+        This method uses DynamoDB's DELETE operation on a String Set (SS)
+        to atomically remove a topic. This is fully atomic and prevents
+        race conditions when multiple topics are removed concurrently.
+        The operation is idempotent - deleting a non-existent topic
+        is a no-op.
 
         Args:
             namespace: Namespace name
+            topic: Topic name to remove
         """
+        # Use DELETE operation on a set - fully atomic and idempotent
         with contextlib.suppress(
             self.dynamodb.exceptions.ResourceNotFoundException,
         ):
-            self.dynamodb.delete_item(
+            self.dynamodb.update_item(
                 TableName=self.namespace_table_name,
                 Key={'namespace': {'S': namespace}},
+                UpdateExpression='DELETE topics :topic',
+                ExpressionAttributeValues={
+                    ':topic': {'SS': [topic]},
+                },
             )
 
     # ========================================================================
     # Table Management
     # ========================================================================
-
-    def _put_item_with_table_creation(
-        self,
-        table_name: str,
-        item: dict[str, Any],
-        create_table_func: Any,
-    ) -> None:
-        """Put item in DynamoDB table, creating table if it doesn't exist.
-
-        Args:
-            table_name: Name of the DynamoDB table
-            item: Item to put in the table
-            create_table_func: Function to call to create the table
-        """
-        try:
-            self.dynamodb.put_item(
-                TableName=table_name,
-                Item=item,
-            )
-        except self.dynamodb.exceptions.ResourceNotFoundException:
-            create_table_func()
-            self.dynamodb.put_item(
-                TableName=table_name,
-                Item=item,
-            )
 
     def _create_keys_table(self) -> None:
         """Create DynamoDB table for storing keys if it doesn't exist."""
@@ -903,7 +973,6 @@ class NamespaceService:
         if validation_error:
             return validation_error
 
-        global_namespaces = self.dynamodb.get_global_namespaces()
         existing_namespaces = self.dynamodb.get_user_namespaces(subject)
 
         # If namespace already exists for this user, return success
@@ -915,17 +984,22 @@ class NamespaceService:
                 'namespaces': existing_namespaces,
             }
 
-        # If namespace is taken by another user, return failure
+        # Check if namespace is taken by another user
+        global_namespaces = self.dynamodb.get_global_namespaces()
         if namespace in global_namespaces:
             return {
                 'status': 'failure',
                 'message': f'Namespace already taken: {namespace}',
             }
 
-        # Create namespace (idempotent - safe to retry)
-        all_namespaces = sorted({*existing_namespaces, namespace})
-        self.dynamodb.put_global_namespaces(global_namespaces | {namespace})
-        self.dynamodb.put_user_namespace(subject, all_namespaces)
+        # Atomically add namespace to global and user lists
+        # This prevents race conditions when multiple calls happen
+        # concurrently
+        self.dynamodb.add_global_namespace(namespace)
+        self.dynamodb.add_user_namespace(subject, namespace)
+
+        # Read back the updated list (already sorted and deduplicated)
+        all_namespaces = self.dynamodb.get_user_namespaces(subject)
 
         return {
             'status': 'success',
@@ -960,22 +1034,13 @@ class NamespaceService:
                 'namespaces': existing_namespaces,
             }
 
-        # Delete namespace (idempotent - safe to retry)
-        remaining_namespaces = [
-            ns for ns in existing_namespaces if ns != namespace
-        ]
+        # Atomically remove namespace from user and global lists
+        # These methods handle the RMW pattern internally
+        self.dynamodb.remove_user_namespace(subject, namespace)
+        self.dynamodb.remove_global_namespace(namespace)
 
-        if remaining_namespaces:
-            self.dynamodb.put_user_namespace(subject, remaining_namespaces)
-        else:
-            self.dynamodb.delete_user_namespace(subject)
-
-        global_namespaces = self.dynamodb.get_global_namespaces()
-        updated_global = global_namespaces - {namespace}
-        if updated_global:
-            self.dynamodb.put_global_namespaces(updated_global)
-        else:
-            self.dynamodb.delete_global_namespaces()
+        # Read back the updated list to return
+        remaining_namespaces = self.dynamodb.get_user_namespaces(subject)
 
         return {
             'status': 'success',
@@ -1015,7 +1080,7 @@ class NamespaceService:
                 'message': f'Namespace {namespace} not found for {subject}',
             }
 
-        # Get existing topics for the namespace
+        # Get existing topics for the namespace (for idempotency check)
         existing_topics = self.dynamodb.get_namespace_topics(namespace)
 
         # If topic already exists, return success (idempotent)
@@ -1026,9 +1091,12 @@ class NamespaceService:
                 'topics': existing_topics,
             }
 
-        # Add topic to the list
-        all_topics = sorted({*existing_topics, topic})
-        self.dynamodb.put_namespace_topics(namespace, all_topics)
+        # Atomically add topic to the list (prevents race conditions)
+        self.dynamodb.add_namespace_topic(namespace, topic)
+
+        # Read back the updated list
+        # (already deduplicated by get_namespace_topics)
+        all_topics = self.dynamodb.get_namespace_topics(namespace)
 
         return {
             'status': 'success',
@@ -1074,13 +1142,11 @@ class NamespaceService:
                 'topics': existing_topics,
             }
 
-        # Remove topic from the list
-        remaining_topics = [t for t in existing_topics if t != topic]
+        # Atomically remove topic from the set
+        self.dynamodb.remove_namespace_topic(namespace, topic)
 
-        if remaining_topics:
-            self.dynamodb.put_namespace_topics(namespace, remaining_topics)
-        else:
-            self.dynamodb.delete_namespace_topics(namespace)
+        # Read back the updated list
+        remaining_topics = self.dynamodb.get_namespace_topics(namespace)
 
         return {
             'status': 'success',

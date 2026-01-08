@@ -94,10 +94,16 @@ def cleanup_data(
     for subject in created_subjects:
         with contextlib.suppress(Exception):
             db_service.delete_key(subject)
+        # Remove all user namespaces individually
         with contextlib.suppress(Exception):
-            db_service.delete_user_namespace(subject)
+            namespaces = db_service.get_user_namespaces(subject)
+            for namespace in namespaces:
+                db_service.remove_user_namespace(subject, namespace)
+    # Remove all global namespaces individually
     with contextlib.suppress(Exception):
-        db_service.delete_global_namespaces()
+        global_namespaces = db_service.get_global_namespaces()
+        for namespace in global_namespaces:
+            db_service.remove_global_namespace(namespace)
 
 
 # ============================================================================
