@@ -6,6 +6,7 @@ import contextlib
 import json
 import os
 import re
+import threading
 import time
 from typing import Any
 
@@ -899,6 +900,9 @@ class NamespaceService:
             dynamodb_service: DynamoDB service instance
         """
         self.dynamodb = dynamodb_service
+        # Per-namespace locks for atomic create_namespace() operations
+        self._namespace_creation_locks: dict[str, threading.Lock] = {}
+        self._locks_lock = threading.Lock()  # Protects the locks dictionary
 
     @classmethod
     def validate_name(cls, name: str) -> dict[str, str] | None:
@@ -951,6 +955,24 @@ class NamespaceService:
         """
         return f'ns-{subject.replace("-", "")[-12:]}'
 
+    def _get_namespace_lock(self, namespace: str) -> threading.Lock:
+        """Get or create a lock for a specific namespace.
+
+        Args:
+            namespace: Namespace name
+
+        Returns:
+            Lock object for the namespace
+        """
+        # Double-checked locking pattern for thread-safe lock creation
+        if namespace not in self._namespace_creation_locks:
+            with self._locks_lock:
+                if namespace not in self._namespace_creation_locks:
+                    self._namespace_creation_locks[namespace] = (
+                        threading.Lock()
+                    )
+        return self._namespace_creation_locks[namespace]
+
     def create_namespace(
         self,
         subject: str,
@@ -960,6 +982,9 @@ class NamespaceService:
 
         Namespace names must be globally unique.
         Safe to call multiple times with the same parameters.
+
+        This method is atomic per namespace - concurrent calls for the same
+        namespace are serialized using a per-namespace lock.
 
         Args:
             subject: User subject ID
@@ -973,39 +998,42 @@ class NamespaceService:
         if validation_error:
             return validation_error
 
-        existing_namespaces = self.dynamodb.get_user_namespaces(subject)
+        # Get per-namespace lock to ensure atomicity
+        lock = self._get_namespace_lock(namespace)
+        with lock:
+            existing_namespaces = self.dynamodb.get_user_namespaces(subject)
 
-        # If namespace already exists for this user, return success
-        # (idempotent)
-        if namespace in existing_namespaces:
+            # If namespace already exists for this user, return success
+            # (idempotent)
+            if namespace in existing_namespaces:
+                return {
+                    'status': 'success',
+                    'message': f'Namespace already exists for {subject}',
+                    'namespaces': existing_namespaces,
+                }
+
+            # Check if namespace is taken by another user
+            global_namespaces = self.dynamodb.get_global_namespaces()
+            if namespace in global_namespaces:
+                return {
+                    'status': 'failure',
+                    'message': f'Namespace already taken: {namespace}',
+                }
+
+            # Atomically add namespace to global and user lists
+            # This prevents race conditions when multiple calls happen
+            # concurrently
+            self.dynamodb.add_global_namespace(namespace)
+            self.dynamodb.add_user_namespace(subject, namespace)
+
+            # Read back the updated list (already sorted and deduplicated)
+            all_namespaces = self.dynamodb.get_user_namespaces(subject)
+
             return {
                 'status': 'success',
-                'message': f'Namespace already exists for {subject}',
-                'namespaces': existing_namespaces,
+                'message': f'Namespace created for {subject}',
+                'namespaces': all_namespaces,
             }
-
-        # Check if namespace is taken by another user
-        global_namespaces = self.dynamodb.get_global_namespaces()
-        if namespace in global_namespaces:
-            return {
-                'status': 'failure',
-                'message': f'Namespace already taken: {namespace}',
-            }
-
-        # Atomically add namespace to global and user lists
-        # This prevents race conditions when multiple calls happen
-        # concurrently
-        self.dynamodb.add_global_namespace(namespace)
-        self.dynamodb.add_user_namespace(subject, namespace)
-
-        # Read back the updated list (already sorted and deduplicated)
-        all_namespaces = self.dynamodb.get_user_namespaces(subject)
-
-        return {
-            'status': 'success',
-            'message': f'Namespace created for {subject}',
-            'namespaces': all_namespaces,
-        }
 
     def delete_namespace(
         self,
@@ -1203,6 +1231,9 @@ class WebService:
         self.kafka_service = kafka_service
         self.namespace_service = namespace_service
         self.bootstrap_servers = kafka_service.bootstrap_servers
+        # Per-subject locks for atomic create_key() operations
+        self._key_creation_locks: dict[str, threading.Lock] = {}
+        self._locks_lock = threading.Lock()  # Protects the locks dictionary
 
     def create_user(self, subject: str) -> dict[str, Any]:
         """Create a user in IAM and create its default namespace.
@@ -1257,139 +1288,111 @@ class WebService:
         allowed. Otherwise, deletes the default namespace, cached DynamoDB
         keys, and IAM user.
 
+        This method is atomic per subject - concurrent calls for the same
+        subject are serialized using a per-subject lock.
+
         Args:
             subject: User subject ID
 
         Returns:
             Dictionary with status and message
         """
-        # Check if user has any namespaces
-        user_namespaces = self.namespace_service.dynamodb.get_user_namespaces(
-            subject,
-        )
-
-        # Get default namespace
-        default_namespace = self.namespace_service.generate_default(subject)
-
-        # Check if user has namespaces other than the default one
-        other_namespaces = [
-            ns for ns in user_namespaces if ns != default_namespace
-        ]
-
-        if other_namespaces:
-            return {
-                'status': 'failure',
-                'message': (
-                    f'Cannot delete user {subject}: '
-                    f'user has {len(other_namespaces)} additional '
-                    f'namespace(s). Delete namespaces first.'
-                ),
-            }
-
-        # Delete all topics under the default namespace
-        topics = self.namespace_service.dynamodb.get_namespace_topics(
-            default_namespace,
-        )
-        for topic in topics:
-            # Delete Kafka topic (idempotent)
-            with contextlib.suppress(Exception):
-                self.kafka_service.delete_topic(default_namespace, topic)
-            # Delete topic from DynamoDB (idempotent)
-            self.namespace_service.delete_topic(
-                subject,
-                default_namespace,
-                topic,
+        # Get per-subject lock to ensure atomicity
+        lock = self._get_subject_lock(subject)
+        with lock:
+            # Check if user has any namespaces
+            user_namespaces = (
+                self.namespace_service.dynamodb.get_user_namespaces(
+                    subject,
+                )
             )
 
-        # Delete default namespace (idempotent, safe even if doesn't exist)
-        self.namespace_service.delete_namespace(subject, default_namespace)
+            # Get default namespace
+            default_namespace = self.namespace_service.generate_default(
+                subject,
+            )
 
-        # Delete cached key from DynamoDB
-        # (idempotent, safe even if doesn't exist)
-        self.namespace_service.dynamodb.delete_key(subject)
+            # Check if user has namespaces other than the default one
+            other_namespaces = [
+                ns for ns in user_namespaces if ns != default_namespace
+            ]
 
-        # Delete user in IAM
-        iam_result = self.iam_service.delete_user_and_policy(subject)
-        if iam_result['status'] != 'success':
+            if other_namespaces:
+                return {
+                    'status': 'failure',
+                    'message': (
+                        f'Cannot delete user {subject}: '
+                        f'user has {len(other_namespaces)} additional '
+                        f'namespace(s). Delete namespaces first.'
+                    ),
+                }
+
+            # Delete all topics under the default namespace
+            topics = self.namespace_service.dynamodb.get_namespace_topics(
+                default_namespace,
+            )
+            for topic in topics:
+                # Delete Kafka topic (idempotent)
+                with contextlib.suppress(Exception):
+                    self.kafka_service.delete_topic(default_namespace, topic)
+                # Delete topic from DynamoDB (idempotent)
+                self.namespace_service.delete_topic(
+                    subject,
+                    default_namespace,
+                    topic,
+                )
+
+            # Delete default namespace (idempotent, safe even if doesn't exist)
+            self.namespace_service.delete_namespace(
+                subject,
+                default_namespace,
+            )
+
+            # Delete cached key from DynamoDB
+            # (idempotent, safe even if doesn't exist)
+            self.namespace_service.dynamodb.delete_key(subject)
+
+            # Delete user in IAM
+            iam_result = self.iam_service.delete_user_and_policy(subject)
+            if iam_result['status'] != 'success':
+                return {
+                    'status': 'failure',
+                    'message': (
+                        f'Failed to delete IAM user: '
+                        f'{iam_result["message"]}'
+                    ),
+                }
+
             return {
-                'status': 'failure',
-                'message': (
-                    f'Failed to delete IAM user: {iam_result["message"]}'
-                ),
+                'status': 'success',
+                'message': f'User {subject} deleted',
             }
 
-        return {
-            'status': 'success',
-            'message': f'User {subject} deleted',
-        }
-
-    def create_key(self, subject: str) -> dict[str, Any]:
-        """Create an access key for a user (force refresh).
-
-        Creates user and namespace if they don't exist, then creates
-        a new access key and stores it (always creates new key, even if
-        one exists in DynamoDB).
-
-        Consistency guarantees for concurrent calls:
-        - Concurrent calls may create multiple IAM keys temporarily
-        - DynamoDB uses "last write wins" - only the last completed write
-          is stored
-        - Subsequent calls clean up old IAM keys
+    def _get_subject_lock(self, subject: str) -> threading.Lock:
+        """Get or create a lock for a specific subject.
 
         Args:
             subject: User subject ID
 
         Returns:
-            Dictionary with status, message, and key information
-            (access_key, secret_key, create_date, endpoint, fresh=True)
+            Lock object for the subject
         """
-        # Ensure user and namespace exist (idempotent)
-        user_result = self.create_user(subject)
-        if user_result['status'] != 'success':
-            return {
-                'status': 'failure',
-                'message': (
-                    f'Failed to create user: {user_result["message"]}'
-                ),
-            }
+        # Double-checked locking pattern for thread-safe lock creation
+        if subject not in self._key_creation_locks:
+            with self._locks_lock:
+                if subject not in self._key_creation_locks:
+                    self._key_creation_locks[subject] = threading.Lock()
+        return self._key_creation_locks[subject]
 
-        # Delete existing access keys in IAM before creating new one
-        self.iam_service.delete_access_keys(subject)
+    def create_key(self, subject: str) -> dict[str, Any]:
+        """Create an access key for a user.
 
-        # Create new access key in IAM
-        iam_key_result = self.iam_service.create_access_key(subject)
-        if iam_key_result['status'] != 'success':
-            return {
-                'status': 'failure',
-                'message': (
-                    f'Failed to create IAM access key: '
-                    f'{iam_key_result["message"]}'
-                ),
-            }
+        Creates user and namespace if they don't exist, then creates
+        a new access key and stores it. If a key already exists in DynamoDB,
+        returns it without creating a new one (idempotent behavior).
 
-        # Store key in DynamoDB (overwrites existing)
-        self.namespace_service.dynamodb.store_key(
-            subject=subject,
-            access_key=iam_key_result['access_key'],
-            secret_key=iam_key_result['secret_key'],
-            create_date=iam_key_result['create_date'],
-        )
-
-        return {
-            'status': 'success',
-            'message': f'Access key created for {subject}',
-            'access_key': iam_key_result['access_key'],
-            'secret_key': iam_key_result['secret_key'],
-            'create_date': iam_key_result['create_date'],
-            'endpoint': self.bootstrap_servers or '',
-            'fresh': True,
-        }
-
-    def get_key(self, subject: str) -> dict[str, Any]:
-        """Get an access key for a user.
-
-        Retrieves key from DynamoDB if it exists. If key doesn't exist,
-        creates user, namespace, and access key (create_key workflow).
+        This method is atomic per subject - concurrent calls for the same
+        subject are serialized using a per-subject lock.
 
         Args:
             subject: User subject ID
@@ -1397,23 +1400,66 @@ class WebService:
         Returns:
             Dictionary with status, message, and key information
             (access_key, secret_key, create_date, endpoint, fresh)
-            where fresh=False if retrieved from DynamoDB, fresh=True if created
+            where fresh=False if key existed in DynamoDB,
+            fresh=True if newly created
         """
-        # Try to get key from DynamoDB
-        existing_key = self.namespace_service.dynamodb.get_key(subject)
-        if existing_key:
+        # Get per-subject lock to ensure atomicity
+        lock = self._get_subject_lock(subject)
+        with lock:
+            # Check if key already exists in DynamoDB (fast path)
+            existing_key = self.namespace_service.dynamodb.get_key(subject)
+            if existing_key:
+                return {
+                    'status': 'success',
+                    'message': f'Access key already exists for {subject}',
+                    'access_key': existing_key['access_key'],
+                    'secret_key': existing_key['secret_key'],
+                    'create_date': existing_key['create_date'],
+                    'endpoint': self.bootstrap_servers or '',
+                    'fresh': False,
+                }
+
+            # Ensure user and namespace exist (idempotent)
+            user_result = self.create_user(subject)
+            if user_result['status'] != 'success':
+                return {
+                    'status': 'failure',
+                    'message': (
+                        f'Failed to create user: {user_result["message"]}'
+                    ),
+                }
+
+            # Delete existing access keys in IAM before creating new one
+            self.iam_service.delete_access_keys(subject)
+
+            # Create new access key in IAM
+            iam_key_result = self.iam_service.create_access_key(subject)
+            if iam_key_result['status'] != 'success':
+                return {
+                    'status': 'failure',
+                    'message': (
+                        f'Failed to create IAM access key: '
+                        f'{iam_key_result["message"]}'
+                    ),
+                }
+
+            # Store key in DynamoDB (overwrites existing)
+            self.namespace_service.dynamodb.store_key(
+                subject=subject,
+                access_key=iam_key_result['access_key'],
+                secret_key=iam_key_result['secret_key'],
+                create_date=iam_key_result['create_date'],
+            )
+
             return {
                 'status': 'success',
-                'message': f'Access key retrieved for {subject}',
-                'access_key': existing_key['access_key'],
-                'secret_key': existing_key['secret_key'],
-                'create_date': existing_key['create_date'],
+                'message': f'Access key created for {subject}',
+                'access_key': iam_key_result['access_key'],
+                'secret_key': iam_key_result['secret_key'],
+                'create_date': iam_key_result['create_date'],
                 'endpoint': self.bootstrap_servers or '',
-                'fresh': False,
+                'fresh': True,
             }
-
-        # Key doesn't exist, create it (create_key workflow)
-        return self.create_key(subject)
 
     def delete_key(self, subject: str) -> dict[str, Any]:
         """Delete an access key for a user.

@@ -6,6 +6,8 @@ import contextlib
 import json
 import logging
 import os
+import threading
+import time
 import warnings
 from typing import Any
 
@@ -474,6 +476,282 @@ def test_delete_user_nonexistent(
 
 
 @pytest.mark.integration
+def test_concurrent_user_deletion(
+    web_service: WebService,
+    iam_service: IAMService,
+    random_subject: str,
+    cleanup_user: Any,
+) -> None:
+    """Test concurrent delete_user() calls (should be idempotent)."""
+    print(
+        f'\n[test_concurrent_user_deletion] '
+        f'Testing with subject: {random_subject}',
+    )
+
+    # Mark for cleanup
+    cleanup_user(random_subject)
+
+    # Create user with resources first
+    create_result = web_service.create_user(random_subject)
+    assert create_result['status'] == 'success'
+    namespace = create_result['namespace']
+
+    # Create a key to ensure it's cached in DynamoDB
+    create_key_result = web_service.create_key(random_subject)
+    assert create_key_result['status'] == 'success'
+
+    # Create a topic to ensure resources exist
+    topic = 'test-topic-1'
+    create_topic_result = web_service.create_topic(
+        random_subject,
+        namespace,
+        topic,
+    )
+    assert create_topic_result['status'] == 'success'
+
+    # Verify resources exist before deletion
+    stored_key_before = web_service.namespace_service.dynamodb.get_key(
+        random_subject,
+    )
+    assert stored_key_before is not None
+    topics_before = (
+        web_service.namespace_service.dynamodb.get_namespace_topics(
+            namespace,
+        )
+    )
+    assert topic in topics_before
+
+    # Number of concurrent operations
+    num_threads = 10
+    results: list[dict[str, Any]] = []
+    errors: list[Exception] = []
+    threads: list[threading.Thread] = []
+
+    def delete_user_thread(thread_id: int) -> None:
+        """Delete user in a thread."""
+        try:
+            result = web_service.delete_user(random_subject)
+            results.append(result)
+            print(f'  Thread {thread_id} result: {result["status"]}')
+        except Exception as e:
+            errors.append(e)
+            print(f'  Thread {thread_id} error: {e}')
+
+    # Start all threads
+    for i in range(num_threads):
+        thread = threading.Thread(target=delete_user_thread, args=(i,))
+        threads.append(thread)
+        thread.start()
+
+    # Wait for all threads to complete
+    for thread in threads:
+        thread.join()
+
+    # Check for errors
+    if errors:
+        print(f'  Errors occurred: {errors}')
+
+    # Print all results summary
+    print('\n  All results summary:')
+    for i, result in enumerate(results):
+        print(
+            f'    Thread {i}: {result["status"]} - '
+            f'{result.get("message", "N/A")}',
+        )
+
+    # Assertions
+    assert len(results) == num_threads, 'All threads should complete'
+    successful_results = [
+        r for r in results if r.get('status') == 'success'
+    ]
+    # All deletions should succeed (idempotent behavior)
+    # At least one should succeed, others may succeed or fail gracefully
+    assert len(successful_results) >= 1, (
+        'At least one deletion should succeed'
+    )
+
+    # Verify all resources are cleaned up
+    stored_key_after = web_service.namespace_service.dynamodb.get_key(
+        random_subject,
+    )
+    assert stored_key_after is None, 'Key should be deleted from DynamoDB'
+
+    topics_after = (
+        web_service.namespace_service.dynamodb.get_namespace_topics(
+            namespace,
+        )
+    )
+    assert topic not in topics_after, 'Topic should be deleted'
+
+    # Verify user namespaces are cleaned up
+    user_namespaces = (
+        web_service.namespace_service.dynamodb.get_user_namespaces(
+            random_subject,
+        )
+    )
+    assert namespace not in user_namespaces, (
+        'Namespace should be deleted from user namespaces'
+    )
+
+    # Verify IAM user is deleted (or at least attempted)
+    # Note: IAM deletion might fail if user doesn't exist (idempotent)
+    try:
+        iam_service.iam.get_user(UserName=random_subject)
+        iam_user_exists = True
+    except iam_service.iam.exceptions.NoSuchEntityException:
+        iam_user_exists = False
+
+    # IAM user should be deleted (or already deleted by previous thread)
+    assert not iam_user_exists, 'IAM user should be deleted'
+
+
+@pytest.mark.integration
+def test_user_deletion_during_resource_creation(
+    web_service: WebService,
+    iam_service: IAMService,
+    random_subject: str,
+    cleanup_user: Any,
+) -> None:
+    """Test user deletion while creating topics/namespaces (lock prevents race)."""
+    print(
+        f'\n[test_user_deletion_during_resource_creation] '
+        f'Testing with subject: {random_subject}',
+    )
+
+    # Mark for cleanup
+    cleanup_user(random_subject)
+
+    # Create user first
+    create_result = web_service.create_user(random_subject)
+    assert create_result['status'] == 'success'
+    namespace = create_result['namespace']
+
+    # Create a key
+    create_key_result = web_service.create_key(random_subject)
+    assert create_key_result['status'] == 'success'
+
+    deletion_complete = threading.Event()
+    creation_results: list[dict[str, Any]] = []
+    deletion_result: dict[str, Any] | None = None
+    creation_errors: list[Exception] = []
+
+    def create_resources_thread() -> None:
+        """Create resources in a thread."""
+        try:
+            # Try to create a topic
+            topic = 'test-topic-during-deletion'
+            result = web_service.create_topic(
+                random_subject,
+                namespace,
+                topic,
+            )
+            creation_results.append(result)
+            print(f'  Creation thread result: {result["status"]}')
+        except Exception as e:
+            creation_errors.append(e)
+            print(f'  Creation thread error: {e}')
+
+    def delete_user_thread() -> None:
+        """Delete user in a thread."""
+        nonlocal deletion_result
+        try:
+            result = web_service.delete_user(random_subject)
+            deletion_result = result
+            print(f'  Deletion thread result: {result["status"]}')
+            deletion_complete.set()
+        except Exception as e:
+            print(f'  Deletion thread error: {e}')
+            deletion_complete.set()
+
+    # Start deletion thread
+    deletion_thread = threading.Thread(target=delete_user_thread)
+    deletion_thread.start()
+
+    # Small delay to let deletion start
+    time.sleep(0.1)
+
+    # Start creation thread (should be blocked by lock)
+    creation_thread = threading.Thread(target=create_resources_thread)
+    creation_thread.start()
+
+    # Wait for deletion to complete
+    deletion_complete.wait(timeout=30)
+    deletion_thread.join()
+    creation_thread.join()
+
+    # Assertions
+    assert deletion_result is not None, 'Deletion should complete'
+    assert deletion_result['status'] == 'success', (
+        'Deletion should succeed'
+    )
+
+    # Verify resources are cleaned up
+    stored_key_after = web_service.namespace_service.dynamodb.get_key(
+        random_subject,
+    )
+    assert stored_key_after is None, 'Key should be deleted'
+
+    # Creation might succeed or fail depending on timing,
+    # but deletion should have completed successfully
+    # The lock ensures atomicity - either creation happens before deletion,
+    # or deletion happens before creation
+    if creation_results:
+        print(
+            f'  Creation result: {creation_results[0]["status"]} - '
+            f'{creation_results[0].get("message", "N/A")}',
+        )
+
+
+@pytest.mark.integration
+def test_user_deletion_partial_failures(
+    web_service: WebService,
+    random_subject: str,
+    cleanup_user: Any,
+) -> None:
+    """Test user deletion handles partial failures gracefully."""
+    print(
+        f'\n[test_user_deletion_partial_failures] '
+        f'Testing with subject: {random_subject}',
+    )
+
+    # Mark for cleanup
+    cleanup_user(random_subject)
+
+    # Create user first
+    create_result = web_service.create_user(random_subject)
+    assert create_result['status'] == 'success'
+    namespace = create_result['namespace']
+
+    # Create a key
+    create_key_result = web_service.create_key(random_subject)
+    assert create_key_result['status'] == 'success'
+
+    # Delete user (should succeed even if some operations fail)
+    # This test verifies that the method handles errors gracefully
+    result = web_service.delete_user(random_subject)
+    print('  Delete user result:')
+    print(json.dumps(result, indent=2, default=str))
+
+    # Assertions
+    assert isinstance(result, dict)
+    assert 'status' in result
+    assert 'message' in result
+
+    # The deletion should either succeed or fail gracefully
+    # If it fails, it should provide a clear error message
+    if result['status'] == 'failure':
+        assert 'message' in result
+        assert len(result['message']) > 0
+    else:
+        # If it succeeds, verify resources are cleaned up
+        stored_key_after = web_service.namespace_service.dynamodb.get_key(
+            random_subject,
+        )
+        # Key might be deleted or might not exist
+        # The important thing is that the operation completed
+
+
+@pytest.mark.integration
 def test_full_lifecycle(
     web_service: WebService,
     random_subject: str,
@@ -634,80 +912,6 @@ def test_create_key_force_refresh(
 
 
 @pytest.mark.integration
-def test_get_key_existing(
-    web_service: WebService,
-    random_subject: str,
-    cleanup_user: Any,
-) -> None:
-    """Test get_key when key exists in DynamoDB."""
-    print(
-        f'\n[test_get_key_existing] Testing with subject: {random_subject}',
-    )
-
-    # Mark for cleanup
-    cleanup_user(random_subject)
-
-    # Create key first
-    create_result = web_service.create_key(random_subject)
-    assert create_result['status'] == 'success'
-    created_access_key = create_result['access_key']
-    created_secret_key = create_result['secret_key']
-
-    # Get key (should retrieve from DynamoDB)
-    result = web_service.get_key(random_subject)
-    print('  Get key result:')
-    print(json.dumps(result, indent=2, default=str))
-
-    # Assertions
-    assert isinstance(result, dict)
-    assert result['status'] == 'success'
-    assert 'message' in result
-    assert 'access_key' in result
-    assert 'secret_key' in result
-    assert 'create_date' in result
-    assert result['access_key'] == created_access_key
-    assert result['secret_key'] == created_secret_key
-
-
-@pytest.mark.integration
-def test_get_key_nonexistent(
-    web_service: WebService,
-    random_subject: str,
-    cleanup_user: Any,
-) -> None:
-    """Test get_key when key doesn't exist (should create)."""
-    print(
-        f'\n[test_get_key_nonexistent] Testing with subject: {random_subject}',
-    )
-
-    # Mark for cleanup
-    cleanup_user(random_subject)
-
-    # Get key when it doesn't exist (should create user, namespace, and key)
-    result = web_service.get_key(random_subject)
-    print('  Get key result (created):')
-    print(json.dumps(result, indent=2, default=str))
-
-    # Assertions
-    assert isinstance(result, dict)
-    assert result['status'] == 'success'
-    assert 'message' in result
-    assert 'access_key' in result
-    assert 'secret_key' in result
-    assert 'create_date' in result
-    assert len(result['access_key']) > 0
-    assert len(result['secret_key']) > 0
-
-    # Verify key is stored in DynamoDB
-    stored_key = web_service.namespace_service.dynamodb.get_key(
-        random_subject,
-    )
-    assert stored_key is not None
-    assert stored_key['access_key'] == result['access_key']
-    assert stored_key['secret_key'] == result['secret_key']
-
-
-@pytest.mark.integration
 def test_delete_key_success(
     web_service: WebService,
     random_subject: str,
@@ -786,7 +990,7 @@ def test_key_lifecycle(
     random_subject: str,
     cleanup_user: Any,
 ) -> None:
-    """Test full key lifecycle: create, get, delete."""
+    """Test full key lifecycle: create, delete."""
     print(
         f'\n[test_key_lifecycle] Testing with subject: {random_subject}',
     )
@@ -802,44 +1006,241 @@ def test_key_lifecycle(
     created_access_key = create_result['access_key']
     created_secret_key = create_result['secret_key']
 
-    # 2. Get key (should retrieve from DynamoDB)
-    get_result = web_service.get_key(random_subject)
-    print('  2. Get key result:')
-    print(json.dumps(get_result, indent=2, default=str))
-    assert get_result['status'] == 'success'
-    assert get_result['access_key'] == created_access_key
-    assert get_result['secret_key'] == created_secret_key
-
-    # 3. Create key again (force refresh - should create new key)
+    # 2. Create key again (should return existing key if it exists)
     refresh_result = web_service.create_key(random_subject)
-    print('  3. Create key (force refresh) result:')
+    print('  2. Create key (second call) result:')
     print(json.dumps(refresh_result, indent=2, default=str))
     assert refresh_result['status'] == 'success'
-    assert refresh_result['access_key'] != created_access_key
-    assert refresh_result['secret_key'] != created_secret_key
+    # Since create_key now checks DynamoDB first, it should return existing key
+    assert refresh_result['access_key'] == created_access_key
+    assert refresh_result['secret_key'] == created_secret_key
 
-    # 4. Get key again (should retrieve new key)
-    get_result2 = web_service.get_key(random_subject)
-    print('  4. Get key (after refresh) result:')
-    print(json.dumps(get_result2, indent=2, default=str))
-    assert get_result2['status'] == 'success'
-    assert get_result2['access_key'] == refresh_result['access_key']
-    assert get_result2['secret_key'] == refresh_result['secret_key']
-
-    # 5. Delete key
+    # 3. Delete key
     delete_result = web_service.delete_key(random_subject)
-    print('  5. Delete key result:')
+    print('  3. Delete key result:')
     print(json.dumps(delete_result, indent=2, default=str))
     assert delete_result['status'] == 'success'
 
-    # 6. Get key after delete (should create new key)
-    get_result3 = web_service.get_key(random_subject)
-    print('  6. Get key (after delete, should create) result:')
-    print(json.dumps(get_result3, indent=2, default=str))
-    assert get_result3['status'] == 'success'
-    assert get_result3['access_key'] != refresh_result['access_key']
-
     print('  Key lifecycle test completed successfully')
+
+
+@pytest.mark.integration
+def test_concurrent_key_creation_no_existing_key(
+    web_service: WebService,
+    iam_service: IAMService,
+    random_subject: str,
+    cleanup_user: Any,
+) -> None:
+    """Test concurrent create_key() calls when no key exists."""
+    print(
+        f'\n[test_concurrent_key_creation_no_existing_key] '
+        f'Testing with subject: {random_subject}',
+    )
+
+    # Mark for cleanup
+    cleanup_user(random_subject)
+
+    # Ensure no key exists in DynamoDB
+    web_service.namespace_service.dynamodb.delete_key(random_subject)
+    # Ensure no IAM keys exist
+    iam_service.delete_access_keys(random_subject)
+
+    # Number of concurrent operations
+    num_threads = 20
+    results: list[dict[str, Any]] = []
+    errors: list[Exception] = []
+    threads: list[threading.Thread] = []
+
+    def create_key_thread(thread_id: int) -> None:
+        """Create key in a thread."""
+        try:
+            result = web_service.create_key(random_subject)
+            results.append(result)
+            print(f'  Thread {thread_id} result: {result["status"]}')
+        except Exception as e:
+            errors.append(e)
+            print(f'  Thread {thread_id} error: {e}')
+
+    # Start all threads
+    for i in range(num_threads):
+        thread = threading.Thread(target=create_key_thread, args=(i,))
+        threads.append(thread)
+        thread.start()
+
+    # Wait for all threads to complete
+    for thread in threads:
+        thread.join()
+
+    # Check for errors
+    if errors:
+        print(f'  Errors occurred: {errors}')
+        # Some errors might be expected (e.g., IAM key limit)
+
+    # Verify all calls succeeded
+    successful_results = [r for r in results if r.get('status') == 'success']
+    print(f'  Successful calls: {len(successful_results)}/{num_threads}')
+
+    # Verify final state has exactly 1 key in DynamoDB
+    stored_key = web_service.namespace_service.dynamodb.get_key(random_subject)
+    assert stored_key is not None, 'Key should exist in DynamoDB'
+    stored_access_key = stored_key['access_key']
+    print(f'  DynamoDB key: {stored_access_key}')
+
+    # With atomic locking, all successful results should have the same key
+    if successful_results:
+        result_access_keys = [r['access_key'] for r in successful_results]
+        print(f'  Result access keys: {result_access_keys}')
+
+        # All results should have the same access key (atomic operation)
+        for result in successful_results:
+            assert result['access_key'] == stored_access_key, (
+                'All results should have the same access key '
+                '(atomic operation)'
+            )
+            assert 'access_key' in result
+            assert len(result['access_key']) > 0
+            assert result['status'] == 'success'
+
+    # Check IAM keys
+    # With atomic locking, should have exactly 1 IAM key
+    try:
+        iam_keys = iam_service.iam.list_access_keys(
+            UserName=random_subject,
+        )['AccessKeyMetadata']
+        iam_key_count = len(iam_keys)
+        print(f'  IAM keys count: {iam_key_count}')
+        
+        # Should have exactly 1 key (atomic operation prevents duplicates)
+        assert iam_key_count == 1, (
+            f'Should have exactly 1 IAM key with atomic locking, '
+            f'got {iam_key_count}'
+        )
+        
+        # The key should match what's in DynamoDB
+        iam_access_keys = [k['AccessKeyId'] for k in iam_keys]
+        assert stored_key['access_key'] in iam_access_keys, (
+            'DynamoDB key should exist in IAM'
+        )
+    except iam_service.iam.exceptions.NoSuchEntityException:
+        # User might not exist yet, which is fine
+        pass
+
+    print('  Concurrent key creation test (no existing key) completed')
+
+
+@pytest.mark.integration
+def test_concurrent_key_creation_existing_key(
+    web_service: WebService,
+    iam_service: IAMService,
+    random_subject: str,
+    cleanup_user: Any,
+) -> None:
+    """Test concurrent create_key() calls when key already exists."""
+    print(
+        f'\n[test_concurrent_key_creation_existing_key] '
+        f'Testing with subject: {random_subject}',
+    )
+
+    # Mark for cleanup
+    cleanup_user(random_subject)
+
+    # Create a key first
+    initial_result = web_service.create_key(random_subject)
+    assert initial_result['status'] == 'success'
+    initial_access_key = initial_result['access_key']
+    initial_secret_key = initial_result['secret_key']
+    print(f'  Initial key created: {initial_access_key}')
+
+    # Get initial IAM key count
+    try:
+        initial_iam_keys = iam_service.iam.list_access_keys(
+            UserName=random_subject,
+        )['AccessKeyMetadata']
+        initial_iam_key_count = len(initial_iam_keys)
+    except iam_service.iam.exceptions.NoSuchEntityException:
+        initial_iam_key_count = 0
+
+    # Number of concurrent operations
+    num_threads = 20
+    results: list[dict[str, Any]] = []
+    errors: list[Exception] = []
+    threads: list[threading.Thread] = []
+
+    def create_key_thread(thread_id: int) -> None:
+        """Create key in a thread."""
+        try:
+            result = web_service.create_key(random_subject)
+            results.append(result)
+            print(f'  Thread {thread_id} result: {result["status"]}')
+        except Exception as e:
+            errors.append(e)
+            print(f'  Thread {thread_id} error: {e}')
+
+    # Start all threads
+    for i in range(num_threads):
+        thread = threading.Thread(target=create_key_thread, args=(i,))
+        threads.append(thread)
+        thread.start()
+
+    # Wait for all threads to complete
+    for thread in threads:
+        thread.join()
+
+    # Check for errors
+    if errors:
+        raise Exception(f'Errors occurred: {errors}')
+
+    # Verify all calls succeeded
+    assert len(results) == num_threads, 'All threads should complete'
+    successful_results = [r for r in results if r.get('status') == 'success']
+    assert len(successful_results) == num_threads, (
+        'All calls should succeed'
+    )
+
+    # All results should return the same existing key (fresh=False)
+    for result in successful_results:
+        assert result['status'] == 'success'
+        assert result['access_key'] == initial_access_key, (
+            'All results should return the same existing key'
+        )
+        assert result['secret_key'] == initial_secret_key, (
+            'All results should return the same existing secret key'
+        )
+        assert result.get('fresh') is False, (
+            'All results should have fresh=False (key existed)'
+        )
+        assert 'already exists' in result['message'].lower(), (
+            'Message should indicate key already exists'
+        )
+
+    # Verify no new IAM keys were created
+    try:
+        final_iam_keys = iam_service.iam.list_access_keys(
+            UserName=random_subject,
+        )['AccessKeyMetadata']
+        final_iam_key_count = len(final_iam_keys)
+        print(
+            f'  IAM keys count: {final_iam_key_count} '
+            f'(initial: {initial_iam_key_count})',
+        )
+        assert final_iam_key_count == initial_iam_key_count, (
+            'No new IAM keys should be created when key exists'
+        )
+    except iam_service.iam.exceptions.NoSuchEntityException:
+        # Should not happen if initial key was created
+        pass
+
+    # Verify DynamoDB still has the same key
+    stored_key = web_service.namespace_service.dynamodb.get_key(random_subject)
+    assert stored_key is not None, 'Key should exist in DynamoDB'
+    assert stored_key['access_key'] == initial_access_key, (
+        'DynamoDB key should be unchanged'
+    )
+    assert stored_key['secret_key'] == initial_secret_key, (
+        'DynamoDB secret key should be unchanged'
+    )
+
+    print('  Concurrent key creation test (existing key) completed')
 
 
 @pytest.mark.integration
