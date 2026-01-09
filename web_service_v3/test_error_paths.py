@@ -5,8 +5,10 @@ to reproduce with real AWS services (e.g., IAM exceptions, network failures).
 Some tests have integration variants that use real AWS services where the
 error conditions can be naturally tested.
 
-To run only unit tests (mocked): pytest web_service_v3/test_error_paths.py
-To run only integration tests: pytest web_service_v3/test_error_paths.py -m integration
+To run only unit tests (mocked):
+    pytest web_service_v3/test_error_paths.py
+To run only integration tests:
+    pytest web_service_v3/test_error_paths.py -m integration
 """
 
 from __future__ import annotations
@@ -14,7 +16,8 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 from unittest.mock import patch
 
-import pytest
+from botocore.exceptions import ClientError
+from kafka.errors import KafkaError
 
 from web_service_v3.services import DynamoDBService
 from web_service_v3.services import IAMService
@@ -22,6 +25,8 @@ from web_service_v3.services import KafkaService
 from web_service_v3.services import NamespaceService
 from web_service_v3.services import WebService
 
+# Test constants
+EXPECTED_RETRY_COUNT = 2
 
 # ============================================================================
 # IAMService Error Path Tests
@@ -56,17 +61,19 @@ def test_create_user_and_policy_policy_creation_failure() -> None:
     )
 
     # Mock user creation succeeds, policy creation fails
-    with patch.object(iam_service.iam, 'create_user'):
-        with patch.object(
+    with (
+        patch.object(iam_service.iam, 'create_user'),
+        patch.object(
             iam_service.iam,
             'create_policy',
-        ) as mock_create_policy:
-            mock_create_policy.side_effect = Exception('Policy limit exceeded')
+        ) as mock_create_policy,
+    ):
+        mock_create_policy.side_effect = Exception('Policy limit exceeded')
 
-            result = iam_service.create_user_and_policy('test-subject')
+        result = iam_service.create_user_and_policy('test-subject')
 
-            assert result['status'] == 'failure'
-            assert 'Failed to create user and policy' in result['message']
+        assert result['status'] == 'failure'
+        assert 'Failed to create user and policy' in result['message']
 
 
 def test_create_access_key_user_not_found() -> None:
@@ -79,8 +86,6 @@ def test_create_access_key_user_not_found() -> None:
 
     # Mock IAM client to raise NoSuchEntity exception
     with patch.object(iam_service.iam, 'create_access_key') as mock_create_key:
-        from botocore.exceptions import ClientError
-
         error_response = {
             'Error': {
                 'Code': 'NoSuchEntity',
@@ -108,8 +113,6 @@ def test_create_access_key_limit_exceeded() -> None:
 
     # Mock IAM client to raise LimitExceeded exception
     with patch.object(iam_service.iam, 'create_access_key') as mock_create_key:
-        from botocore.exceptions import ClientError
-
         error_response = {
             'Error': {
                 'Code': 'LimitExceeded',
@@ -163,31 +166,31 @@ def test_delete_user_and_policy_partial_failure() -> None:
     ) as mock_delete_keys:
         mock_delete_keys.return_value = {'status': 'success'}
 
-        with patch.object(
-            iam_service.iam,
-            'detach_user_policy',
-        ):
-            with patch.object(
+        with (
+            patch.object(
+                iam_service.iam,
+                'detach_user_policy',
+            ),
+            patch.object(
                 iam_service.iam,
                 'delete_policy',
-            ) as mock_delete_policy:
-                from botocore.exceptions import ClientError
+            ) as mock_delete_policy,
+        ):
+            error_response = {
+                'Error': {
+                    'Code': 'NoSuchEntity',
+                    'Message': 'Policy not found',
+                },
+            }
+            mock_delete_policy.side_effect = ClientError(
+                error_response,
+                'DeletePolicy',
+            )
 
-                error_response = {
-                    'Error': {
-                        'Code': 'NoSuchEntity',
-                        'Message': 'Policy not found',
-                    },
-                }
-                mock_delete_policy.side_effect = ClientError(
-                    error_response,
-                    'DeletePolicy',
-                )
-
-                # Should still succeed due to suppress
-                result = iam_service.delete_user_and_policy('test-user')
-                # The method suppresses NoSuchEntityException, so should succeed
-                assert result['status'] == 'success'
+            # Should still succeed due to suppress
+            result = iam_service.delete_user_and_policy('test-user')
+            # The method suppresses NoSuchEntityException, so should succeed
+            assert result['status'] == 'success'
 
 
 # ============================================================================
@@ -205,13 +208,12 @@ def test_store_key_table_not_found() -> None:
     )
 
     # Mock DynamoDB client with exceptions attribute
-    from botocore.exceptions import ClientError
-
     mock_dynamodb = MagicMock()
+
     # Create a mock exceptions object with ResourceNotFoundException
     # that inherits from ClientError so it can be caught properly
-    class MockResourceNotFoundException(ClientError):
-        """Mock ResourceNotFoundException for testing."""
+    class MockResourceNotFoundError(ClientError):
+        """Mock ResourceNotFoundError for testing."""
 
         def __init__(self, operation_name: str = 'PutItem'):
             error_response = {
@@ -223,13 +225,13 @@ def test_store_key_table_not_found() -> None:
             super().__init__(error_response, operation_name)
 
     mock_exceptions = MagicMock()
-    mock_exceptions.ResourceNotFoundException = MockResourceNotFoundException
+    mock_exceptions.ResourceNotFoundException = MockResourceNotFoundError
     mock_dynamodb.exceptions = mock_exceptions
     db_service.dynamodb = mock_dynamodb
 
-    # First call raises ResourceNotFoundException, second succeeds
+    # First call raises ResourceNotFoundError, second succeeds
     mock_dynamodb.put_item.side_effect = [
-        MockResourceNotFoundException('PutItem'),
+        MockResourceNotFoundError('PutItem'),
         None,  # Second call succeeds
     ]
 
@@ -238,16 +240,17 @@ def test_store_key_table_not_found() -> None:
         mock_create_table.return_value = None
 
         # Should not raise exception
+        # pragma: allowlist secret
         db_service.store_key(
             subject='test-subject',
-            access_key='AKIAIOSFODNN7EXAMPLE',
-            secret_key='test-secret-key',
+            access_key='AKIAIOSFODNN7EXAMPLE',  # pragma: allowlist secret
+            secret_key='test-secret-key',  # pragma: allowlist secret
             create_date='2024-01-01T00:00:00',
         )
 
         # Should have called create_table and retried put_item
         mock_create_table.assert_called_once()
-        assert mock_dynamodb.put_item.call_count == 2
+        assert mock_dynamodb.put_item.call_count == EXPECTED_RETRY_COUNT
 
 
 def test_get_key_table_not_found() -> None:
@@ -260,13 +263,12 @@ def test_get_key_table_not_found() -> None:
     )
 
     # Mock DynamoDB client with exceptions attribute
-    from botocore.exceptions import ClientError
-
     mock_dynamodb = MagicMock()
+
     # Create a mock exceptions object with ResourceNotFoundException
     # that inherits from ClientError so it can be caught properly
-    class MockResourceNotFoundException(ClientError):
-        """Mock ResourceNotFoundException for testing."""
+    class MockResourceNotFoundError(ClientError):
+        """Mock ResourceNotFoundError for testing."""
 
         def __init__(self, operation_name: str = 'GetItem'):
             error_response = {
@@ -278,11 +280,11 @@ def test_get_key_table_not_found() -> None:
             super().__init__(error_response, operation_name)
 
     mock_exceptions = MagicMock()
-    mock_exceptions.ResourceNotFoundException = MockResourceNotFoundException
+    mock_exceptions.ResourceNotFoundException = MockResourceNotFoundError
     mock_dynamodb.exceptions = mock_exceptions
     db_service.dynamodb = mock_dynamodb
 
-    mock_dynamodb.get_item.side_effect = MockResourceNotFoundException('GetItem')
+    mock_dynamodb.get_item.side_effect = MockResourceNotFoundError('GetItem')
 
     # Should return None (gracefully handled)
     result = db_service.get_key('test-subject')
@@ -299,13 +301,12 @@ def test_add_user_namespace_table_creation_retry() -> None:
     )
 
     # Mock DynamoDB client with exceptions attribute
-    from botocore.exceptions import ClientError
-
     mock_dynamodb = MagicMock()
+
     # Create a mock exceptions object with ResourceNotFoundException
     # that inherits from ClientError so it can be caught properly
-    class MockResourceNotFoundException(ClientError):
-        """Mock ResourceNotFoundException for testing."""
+    class MockResourceNotFoundError(ClientError):
+        """Mock ResourceNotFoundError for testing."""
 
         def __init__(self, operation_name: str = 'UpdateItem'):
             error_response = {
@@ -317,13 +318,13 @@ def test_add_user_namespace_table_creation_retry() -> None:
             super().__init__(error_response, operation_name)
 
     mock_exceptions = MagicMock()
-    mock_exceptions.ResourceNotFoundException = MockResourceNotFoundException
+    mock_exceptions.ResourceNotFoundException = MockResourceNotFoundError
     mock_dynamodb.exceptions = mock_exceptions
     db_service.dynamodb = mock_dynamodb
 
-    # First call raises ResourceNotFoundException, second succeeds
+    # First call raises ResourceNotFoundError, second succeeds
     mock_dynamodb.update_item.side_effect = [
-        MockResourceNotFoundException('UpdateItem'),
+        MockResourceNotFoundError('UpdateItem'),
         None,  # Second call succeeds
     ]
 
@@ -336,7 +337,7 @@ def test_add_user_namespace_table_creation_retry() -> None:
 
         # Should have called create_table and retried update_item
         mock_create_table.assert_called_once()
-        assert mock_dynamodb.update_item.call_count == 2
+        assert mock_dynamodb.update_item.call_count == EXPECTED_RETRY_COUNT
 
 
 # ============================================================================
@@ -357,8 +358,6 @@ def test_create_topic_all_retries_fail() -> None:
     ) as mock_admin_class:
         mock_admin = MagicMock()
         mock_admin_class.return_value = mock_admin
-
-        from kafka.errors import KafkaError
 
         mock_admin.create_topics.side_effect = KafkaError('Connection failed')
 
@@ -395,8 +394,6 @@ def test_delete_topic_all_retries_fail() -> None:
     ) as mock_admin_class:
         mock_admin = MagicMock()
         mock_admin_class.return_value = mock_admin
-
-        from kafka.errors import KafkaError
 
         mock_admin.delete_topics.side_effect = KafkaError('Connection failed')
 
@@ -489,7 +486,7 @@ def test_create_namespace_validation_failure() -> None:
 
 
 def test_create_namespace_already_taken() -> None:
-    """Test create_namespace handles namespace already taken by another user."""
+    """Test create_namespace handles namespace taken by another user."""
     db_service = DynamoDBService(
         region='us-east-1',
         keys_table_name='test-keys-table',
@@ -505,7 +502,7 @@ def test_create_namespace_already_taken() -> None:
     ) as mock_get_user_ns:
         mock_get_user_ns.return_value = []
 
-        # Mock get_global_namespaces to return namespace (taken by another user)
+        # Mock get_global_namespaces to return namespace (taken by other user)
         with patch.object(
             db_service,
             'get_global_namespaces',
@@ -555,9 +552,6 @@ def test_create_topic_namespace_not_found() -> None:
 
 def test_create_user_iam_fails_namespace_succeeds() -> None:
     """Test create_user handles IAM failure (namespace cleanup)."""
-    mock_iam = MagicMock()
-    mock_kafka = MagicMock()
-    mock_db = MagicMock()
     mock_namespace = MagicMock(spec=NamespaceService)
 
     iam_service = MagicMock()
@@ -566,6 +560,7 @@ def test_create_user_iam_fails_namespace_succeeds() -> None:
         'message': 'IAM service unavailable',
     }
 
+    mock_kafka = MagicMock()
     web_service = WebService(
         iam_service=iam_service,
         kafka_service=mock_kafka,
@@ -582,8 +577,6 @@ def test_create_user_iam_fails_namespace_succeeds() -> None:
 
 def test_create_user_namespace_fails_cleanup() -> None:
     """Test create_user handles namespace failure and cleans up IAM."""
-    mock_iam = MagicMock()
-    mock_kafka = MagicMock()
     mock_namespace = MagicMock(spec=NamespaceService)
 
     iam_service = MagicMock()
@@ -602,6 +595,7 @@ def test_create_user_namespace_fails_cleanup() -> None:
         'message': 'Namespace creation failed',
     }
 
+    mock_kafka = MagicMock()
     web_service = WebService(
         iam_service=iam_service,
         kafka_service=mock_kafka,
@@ -618,11 +612,6 @@ def test_create_user_namespace_fails_cleanup() -> None:
 
 def test_create_topic_dynamodb_succeeds_kafka_fails() -> None:
     """Test create_topic handles Kafka failure and cleans up DynamoDB."""
-    mock_iam = MagicMock()
-    mock_kafka = MagicMock()
-    mock_db = MagicMock()
-    mock_namespace = MagicMock(spec=NamespaceService)
-
     namespace_service = MagicMock(spec=NamespaceService)
     namespace_service.create_topic.return_value = {
         'status': 'success',
@@ -640,13 +629,18 @@ def test_create_topic_dynamodb_succeeds_kafka_fails() -> None:
         'message': 'Kafka connection failed',
     }
 
+    mock_iam = MagicMock()
     web_service = WebService(
         iam_service=mock_iam,
         kafka_service=kafka_service,
         namespace_service=namespace_service,
     )
 
-    result = web_service.create_topic('test-subject', 'test-namespace', 'test-topic')
+    result = web_service.create_topic(
+        'test-subject',
+        'test-namespace',
+        'test-topic',
+    )
 
     assert result['status'] == 'failure'
     assert 'Failed to create Kafka topic' in result['message']

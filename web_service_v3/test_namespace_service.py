@@ -112,7 +112,7 @@ def cleanup_data(
 
 
 @pytest.mark.integration
-def test_validate_name(
+def test_validate_name(  # noqa: PLR0915
     namespace_service: NamespaceService,
 ) -> None:
     """Test validate_name with comprehensive edge cases.
@@ -131,12 +131,12 @@ def test_validate_name(
     # ========================================================================
     assert namespace_service.validate_name('valid-ns-123') is None
     assert namespace_service.validate_name('Valid_NS_123') is None
-    assert namespace_service.validate_name('abc') is None  # Min length (3)
+    assert namespace_service.validate_name('abc') is None  # Min (3)
     assert namespace_service.validate_name('a' * 32) is None  # Max (32)
-    assert namespace_service.validate_name('valid-name') is None  # Dash OK
-    assert namespace_service.validate_name('valid_name') is None  # Underscore OK
-    assert namespace_service.validate_name('valid123name') is None  # Numbers OK
-    assert namespace_service.validate_name('ValidName123') is None  # Mixed case OK
+    assert namespace_service.validate_name('valid-name') is None  # Dash
+    assert namespace_service.validate_name('valid_name') is None  # Underscore
+    assert namespace_service.validate_name('valid123name') is None  # Numbers
+    assert namespace_service.validate_name('ValidName123') is None  # Mixed
 
     # ========================================================================
     # Invalid: Empty and too short
@@ -192,7 +192,7 @@ def test_validate_name(
     msg_lower = result['message'].lower()
     assert 'end' in msg_lower or 'start' in msg_lower
 
-    result = namespace_service.validate_name('_invalid')  # Starts with underscore
+    result = namespace_service.validate_name('_invalid')  # Starts underscore
     assert result is not None
     assert result['status'] == 'failure'
     assert 'start' in result['message'].lower()

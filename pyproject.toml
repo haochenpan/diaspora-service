@@ -147,7 +147,7 @@ ignore_missing_imports = true
 
 [tool.ruff]
 line-length = 79
-target-version = "py38"
+target-version = "py39"
 extend-include = ["*.ipynb"]
 
 [tool.ruff.format]

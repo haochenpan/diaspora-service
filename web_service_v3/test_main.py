@@ -3,6 +3,7 @@
 Tests validate exact response formats, error conditions, input validation,
 and edge cases.
 """
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock
@@ -13,7 +14,6 @@ import pytest
 from web_service_v3.main import DiasporaService
 from web_service_v3.main import extract_val
 
-
 # ============================================================================
 # Test Fixtures
 # ============================================================================
@@ -23,10 +23,10 @@ from web_service_v3.main import extract_val
 def mock_env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
     """Set up mock environment variables."""
     env_vars = {
-        'AWS_ACCESS_KEY_ID': 'test-access-key',
-        'AWS_SECRET_ACCESS_KEY': 'test-secret-key',
-        'SERVER_CLIENT_ID': 'test-client-id',
-        'SERVER_SECRET': 'test-server-secret',
+        'AWS_ACCESS_KEY_ID': 'test-access-key',  # pragma: allowlist secret
+        'AWS_SECRET_ACCESS_KEY': 'test-secret-key',  # pragma: allowlist secret
+        'SERVER_CLIENT_ID': 'test-client-id',  # pragma: allowlist secret
+        'SERVER_SECRET': 'test-server-secret',  # pragma: allowlist secret
         'AWS_ACCOUNT_ID': '123456789012',
         'AWS_ACCOUNT_REGION': 'us-east-1',
         'MSK_CLUSTER_NAME': 'test-cluster',
@@ -62,22 +62,24 @@ def diaspora_service(
     mock_web_service: MagicMock,
 ) -> DiasporaService:
     """Create a DiasporaService instance with mocked dependencies."""
-    with patch(
-        'web_service_v3.main.AuthManager',
-        return_value=mock_auth_manager,
+    with (
+        patch(
+            'web_service_v3.main.AuthManager',
+            return_value=mock_auth_manager,
+        ),
+        patch('web_service_v3.main.IAMService'),
+        patch('web_service_v3.main.KafkaService'),
+        patch('web_service_v3.main.DynamoDBService'),
+        patch('web_service_v3.main.NamespaceService'),
+        patch(
+            'web_service_v3.main.WebService',
+            return_value=mock_web_service,
+        ),
     ):
-        with patch('web_service_v3.main.IAMService'):
-            with patch('web_service_v3.main.KafkaService'):
-                with patch('web_service_v3.main.DynamoDBService'):
-                    with patch('web_service_v3.main.NamespaceService'):
-                        with patch(
-                            'web_service_v3.main.WebService',
-                            return_value=mock_web_service,
-                        ):
-                            service = DiasporaService()
-                            service.auth = mock_auth_manager
-                            service.web_service = mock_web_service
-                            return service
+        service = DiasporaService()
+        service.auth = mock_auth_manager
+        service.web_service = mock_web_service
+        return service
 
 
 @pytest.fixture
@@ -227,7 +229,9 @@ async def test_create_user_authentication_failure(
     assert result['status'] == 'error'
     assert 'reason' in result
     # Verify web_service.create_user was not called due to auth failure
-    diaspora_service.web_service.create_user.assert_not_called()
+    web_svc = diaspora_service.web_service
+    if isinstance(web_svc, MagicMock):
+        web_svc.create_user.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -300,7 +304,9 @@ async def test_delete_user_authentication_failure(
 
     assert result['status'] == 'error'
     # Verify web_service.delete_user was not called due to auth failure
-    diaspora_service.web_service.delete_user.assert_not_called()
+    web_svc = diaspora_service.web_service
+    if isinstance(web_svc, MagicMock):
+        web_svc.delete_user.assert_not_called()
 
 
 # ============================================================================
@@ -320,8 +326,10 @@ async def test_create_key_success(
     mock_web_service.create_key.return_value = {
         'status': 'success',
         'message': 'Access key created',
-        'access_key': 'AKIAIOSFODNN7EXAMPLE',
-        'secret_key': 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY',
+        'access_key': 'AKIAIOSFODNN7EXAMPLE',  # pragma: allowlist secret
+        'secret_key': (  # pragma: allowlist secret
+            'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY'  # pragma: allowlist secret  # noqa: E501
+        ),
         'create_date': '2024-01-01T00:00:00',
     }
 
@@ -373,8 +381,10 @@ async def test_get_key_success(
     mock_web_service.get_key.return_value = {
         'status': 'success',
         'message': 'Access key retrieved',
-        'access_key': 'AKIAIOSFODNN7EXAMPLE',
-        'secret_key': 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY',
+        'access_key': 'AKIAIOSFODNN7EXAMPLE',  # pragma: allowlist secret
+        'secret_key': (  # pragma: allowlist secret
+            'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY'  # pragma: allowlist secret  # noqa: E501
+        ),
         'create_date': '2024-01-01T00:00:00',
         'fresh': False,
     }
