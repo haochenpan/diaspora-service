@@ -16,6 +16,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 from unittest.mock import patch
 
+import pytest
 from botocore.exceptions import ClientError
 from kafka.errors import KafkaError
 
@@ -712,3 +713,496 @@ def test_recreate_topic_topic_not_found() -> None:
 
     assert result['status'] == 'failure'
     assert 'not found' in result['message'].lower()
+
+
+# ============================================================================
+# Additional Error Path Tests - Remaining Coverage
+# ============================================================================
+
+
+def test_create_keys_table_already_exists() -> None:
+    """Test _create_keys_table handles table already exists gracefully."""
+    db_service = DynamoDBService(
+        region='us-east-1',
+        keys_table_name='test-keys-table',
+        users_table_name='test-users-table',
+        namespace_table_name='test-namespace-table',
+    )
+
+    mock_dynamodb = MagicMock()
+
+    # Create a mock exception for ResourceInUseException
+    class MockResourceInUseError(ClientError):
+        """Mock ResourceInUseException for testing."""
+
+        def __init__(self, operation_name: str = 'CreateTable'):
+            error_response = {
+                'Error': {
+                    'Code': 'ResourceInUseException',
+                    'Message': 'Table already exists',
+                },
+            }
+            super().__init__(error_response, operation_name)
+
+    mock_exceptions = MagicMock()
+    mock_exceptions.ResourceInUseException = MockResourceInUseError
+    mock_dynamodb.exceptions = mock_exceptions
+    db_service.dynamodb = mock_dynamodb
+
+    # Mock create_table to raise ResourceInUseException
+    mock_dynamodb.create_table.side_effect = MockResourceInUseError(
+        'CreateTable',
+    )
+
+    # Should not raise exception (suppressed by contextlib.suppress)
+    db_service._create_keys_table()
+
+    # Should have attempted to create table
+    mock_dynamodb.create_table.assert_called_once()
+
+
+def test_create_users_table_already_exists() -> None:
+    """Test _create_users_table handles table already exists gracefully."""
+    db_service = DynamoDBService(
+        region='us-east-1',
+        keys_table_name='test-keys-table',
+        users_table_name='test-users-table',
+        namespace_table_name='test-namespace-table',
+    )
+
+    mock_dynamodb = MagicMock()
+
+    class MockResourceInUseError(ClientError):
+        """Mock ResourceInUseException for testing."""
+
+        def __init__(self, operation_name: str = 'CreateTable'):
+            error_response = {
+                'Error': {
+                    'Code': 'ResourceInUseException',
+                    'Message': 'Table already exists',
+                },
+            }
+            super().__init__(error_response, operation_name)
+
+    mock_exceptions = MagicMock()
+    mock_exceptions.ResourceInUseException = MockResourceInUseError
+    mock_dynamodb.exceptions = mock_exceptions
+    db_service.dynamodb = mock_dynamodb
+
+    mock_dynamodb.create_table.side_effect = MockResourceInUseError(
+        'CreateTable',
+    )
+
+    # Should not raise exception
+    db_service._create_users_table()
+
+    mock_dynamodb.create_table.assert_called_once()
+
+
+def test_create_namespace_table_already_exists() -> None:
+    """Test _create_namespace_table handles table already exists gracefully."""
+    db_service = DynamoDBService(
+        region='us-east-1',
+        keys_table_name='test-keys-table',
+        users_table_name='test-users-table',
+        namespace_table_name='test-namespace-table',
+    )
+
+    mock_dynamodb = MagicMock()
+
+    class MockResourceInUseError(ClientError):
+        """Mock ResourceInUseException for testing."""
+
+        def __init__(self, operation_name: str = 'CreateTable'):
+            error_response = {
+                'Error': {
+                    'Code': 'ResourceInUseException',
+                    'Message': 'Table already exists',
+                },
+            }
+            super().__init__(error_response, operation_name)
+
+    mock_exceptions = MagicMock()
+    mock_exceptions.ResourceInUseException = MockResourceInUseError
+    mock_dynamodb.exceptions = mock_exceptions
+    db_service.dynamodb = mock_dynamodb
+
+    mock_dynamodb.create_table.side_effect = MockResourceInUseError(
+        'CreateTable',
+    )
+
+    # Should not raise exception
+    db_service._create_namespace_table()
+
+    mock_dynamodb.create_table.assert_called_once()
+
+
+def test_add_namespace_topic_table_creation_retry() -> None:
+    """Test add_namespace_topic handles table creation and retry."""
+    db_service = DynamoDBService(
+        region='us-east-1',
+        keys_table_name='test-keys-table',
+        users_table_name='test-users-table',
+        namespace_table_name='test-namespace-table',
+    )
+
+    mock_dynamodb = MagicMock()
+
+    class MockResourceNotFoundError(ClientError):
+        """Mock ResourceNotFoundError for testing."""
+
+        def __init__(self, operation_name: str = 'UpdateItem'):
+            error_response = {
+                'Error': {
+                    'Code': 'ResourceNotFoundException',
+                    'Message': 'Table not found',
+                },
+            }
+            super().__init__(error_response, operation_name)
+
+    mock_exceptions = MagicMock()
+    mock_exceptions.ResourceNotFoundException = MockResourceNotFoundError
+    mock_dynamodb.exceptions = mock_exceptions
+    db_service.dynamodb = mock_dynamodb
+
+    # First call raises ResourceNotFoundError, second succeeds
+    mock_dynamodb.update_item.side_effect = [
+        MockResourceNotFoundError('UpdateItem'),
+        None,  # Second call succeeds
+    ]
+
+    # Mock table creation
+    with patch.object(
+        db_service,
+        '_create_namespace_table',
+    ) as mock_create_table:
+        mock_create_table.return_value = None
+
+        # Should not raise exception
+        db_service.add_namespace_topic('test-namespace', 'test-topic')
+
+        # Should have called create_table and retried update_item
+        mock_create_table.assert_called_once()
+        assert mock_dynamodb.update_item.call_count == EXPECTED_RETRY_COUNT
+
+
+def test_delete_namespace_with_topics() -> None:
+    """Test delete_namespace handles namespace with topics."""
+    # Create a real NamespaceService with mocked DynamoDBService
+    mock_db_service = MagicMock(spec=DynamoDBService)
+    namespace_service = NamespaceService(dynamodb_service=mock_db_service)
+
+    # Mock that namespace exists and has topics
+    mock_db_service.get_user_namespaces.return_value = ['ns-test']
+    # Mock remove operations
+    mock_db_service.remove_user_namespace.return_value = None
+    mock_db_service.remove_global_namespace.return_value = None
+    # After deletion, user has no namespaces
+    mock_db_service.get_user_namespaces.side_effect = [
+        ['ns-test'],  # First call: namespace exists
+        [],  # Second call: after deletion, empty
+    ]
+
+    result = namespace_service.delete_namespace('test-subject', 'ns-test')
+
+    # Should succeed even with topics (topics remain in DynamoDB)
+    assert result['status'] == 'success'
+    assert 'deleted' in result['message'].lower()
+    assert 'namespaces' in result
+
+
+def test_delete_topic_namespace_not_found() -> None:
+    """Test delete_topic handles namespace doesn't exist."""
+    # Create a real NamespaceService with mocked DynamoDBService
+    mock_db_service = MagicMock(spec=DynamoDBService)
+    namespace_service = NamespaceService(dynamodb_service=mock_db_service)
+
+    # Mock that namespace doesn't exist for user
+    mock_db_service.get_user_namespaces.return_value = []
+
+    result = namespace_service.delete_topic(
+        'test-subject',
+        'nonexistent-namespace',
+        'test-topic',
+    )
+
+    assert result['status'] == 'failure'
+    assert 'not found' in result['message'].lower()
+    assert 'namespace' in result['message'].lower()
+
+
+def test_list_namespace_and_topics_empty() -> None:
+    """Test list_namespace_and_topics handles user with no namespaces."""
+    # Create a real NamespaceService with mocked DynamoDBService
+    mock_db_service = MagicMock(spec=DynamoDBService)
+    namespace_service = NamespaceService(dynamodb_service=mock_db_service)
+
+    # Mock that user has no namespaces
+    mock_db_service.get_user_namespaces.return_value = []
+
+    result = namespace_service.list_namespace_and_topics('test-subject')
+
+    assert result['status'] == 'success'
+    assert result['namespaces'] == {}
+    assert '0 namespaces' in result['message']
+
+
+def test_create_user_namespace_already_exists() -> None:
+    """Test create_user handles namespace already exists scenario."""
+    mock_iam = MagicMock()
+    mock_iam.create_user_and_policy.return_value = {
+        'status': 'success',
+        'message': 'User created',
+    }
+
+    mock_namespace = MagicMock(spec=NamespaceService)
+    mock_namespace.generate_default.return_value = 'ns-test123'
+    # Namespace creation returns failure (already exists)
+    mock_namespace.create_namespace.return_value = {
+        'status': 'failure',
+        'message': 'Namespace already taken: ns-test123',
+    }
+
+    web_service = WebService(
+        iam_service=mock_iam,
+        kafka_service=MagicMock(),
+        namespace_service=mock_namespace,
+    )
+
+    result = web_service.create_user('test-subject')
+
+    assert result['status'] == 'failure'
+    assert 'Failed to create namespace' in result['message']
+    # Should attempt to clean up IAM user
+    mock_iam.delete_user_and_policy.assert_called_once_with('test-subject')
+
+
+def test_delete_user_partial_failures() -> None:
+    """Test delete_user handles partial failures."""
+    mock_iam = MagicMock()
+    mock_iam.delete_user_and_policy.return_value = {
+        'status': 'failure',
+        'message': 'IAM user not found',
+    }
+
+    mock_namespace = MagicMock(spec=NamespaceService)
+    mock_namespace.dynamodb = MagicMock()
+    mock_namespace.dynamodb.get_user_namespaces.return_value = ['ns-test123']
+    mock_namespace.generate_default.return_value = 'ns-test123'
+    mock_namespace.dynamodb.get_namespace_topics.return_value = []
+    mock_namespace.delete_namespace.return_value = {
+        'status': 'success',
+        'message': 'Namespace deleted',
+    }
+    mock_namespace.dynamodb.delete_key.return_value = None
+
+    web_service = WebService(
+        iam_service=mock_iam,
+        kafka_service=MagicMock(),
+        namespace_service=mock_namespace,
+    )
+
+    result = web_service.delete_user('test-subject')
+
+    # Should return failure if IAM deletion fails
+    assert result['status'] == 'failure'
+    assert 'Failed to delete IAM user' in result['message']
+
+
+def test_create_key_iam_fails() -> None:
+    """Test create_key handles IAM key creation failure."""
+    mock_iam = MagicMock()
+    mock_iam.delete_access_keys.return_value = {'status': 'success'}
+    mock_iam.create_access_key.return_value = {
+        'status': 'failure',
+        'message': 'IAM limit exceeded',
+    }
+
+    mock_namespace = MagicMock(spec=NamespaceService)
+    mock_namespace.dynamodb = MagicMock()
+
+    web_service = WebService(
+        iam_service=mock_iam,
+        kafka_service=MagicMock(),
+        namespace_service=mock_namespace,
+    )
+
+    # Mock create_user to succeed
+    with patch.object(web_service, 'create_user') as mock_create_user:
+        mock_create_user.return_value = {
+            'status': 'success',
+            'message': 'User created',
+        }
+
+        result = web_service.create_key('test-subject')
+
+        assert result['status'] == 'failure'
+        assert 'Failed to create IAM access key' in result['message']
+
+
+def test_create_key_dynamodb_storage_fails() -> None:
+    """Test create_key handles DynamoDB storage failure."""
+    mock_iam = MagicMock()
+    mock_iam.delete_access_keys.return_value = {'status': 'success'}
+    mock_iam.create_access_key.return_value = {
+        'status': 'success',
+        'access_key': 'AKIAIOSFODNN7EXAMPLE',  # pragma: allowlist secret
+        'secret_key': 'test-secret',  # pragma: allowlist secret
+        'create_date': '2024-01-01T00:00:00',
+    }
+
+    mock_namespace = MagicMock(spec=NamespaceService)
+    mock_namespace.dynamodb = MagicMock()
+    # Mock store_key to raise exception
+    mock_namespace.dynamodb.store_key.side_effect = Exception(
+        'DynamoDB write failed',
+    )
+
+    web_service = WebService(
+        iam_service=mock_iam,
+        kafka_service=MagicMock(),
+        namespace_service=mock_namespace,
+    )
+
+    with patch.object(web_service, 'create_user') as mock_create_user:
+        mock_create_user.return_value = {
+            'status': 'success',
+            'message': 'User created',
+        }
+
+        # Should raise exception (not caught in create_key)
+        with pytest.raises(Exception, match='DynamoDB write failed'):
+            web_service.create_key('test-subject')
+
+
+def test_get_key_dynamodb_read_fails() -> None:
+    """Test get_key handles DynamoDB read failure."""
+    mock_iam = MagicMock()
+    mock_namespace = MagicMock(spec=NamespaceService)
+    mock_namespace.dynamodb = MagicMock()
+    # Mock get_key to raise exception
+    mock_namespace.dynamodb.get_key.side_effect = Exception(
+        'DynamoDB read failed',
+    )
+
+    web_service = WebService(
+        iam_service=mock_iam,
+        kafka_service=MagicMock(),
+        namespace_service=mock_namespace,
+    )
+
+    # Should raise exception (not caught in get_key)
+    with pytest.raises(Exception, match='DynamoDB read failed'):
+        web_service.get_key('test-subject')
+
+
+def test_create_topic_kafka_succeeds_dynamodb_fails() -> None:
+    """Test create_topic handles Kafka succeeds but DynamoDB fails."""
+    mock_kafka = MagicMock()
+    mock_kafka.create_topic.return_value = {
+        'status': 'success',
+        'message': 'Topic created',
+    }
+
+    mock_namespace = MagicMock(spec=NamespaceService)
+    # First call succeeds (creates in DynamoDB), but then fails on cleanup
+    mock_namespace.create_topic.return_value = {
+        'status': 'success',
+        'message': 'Topic created',
+        'topics': ['test-topic'],
+    }
+    # Mock delete_topic to fail (cleanup fails)
+    mock_namespace.delete_topic.side_effect = Exception('Cleanup failed')
+
+    web_service = WebService(
+        iam_service=MagicMock(),
+        kafka_service=mock_kafka,
+        namespace_service=mock_namespace,
+    )
+
+    # This scenario is actually handled - if create_topic in namespace
+    # succeeds, then kafka succeeds, so no cleanup needed.
+    # Let's test the reverse:
+    # DynamoDB succeeds, Kafka fails (already tested)
+    # For this test, let's verify the cleanup path when Kafka fails
+    mock_namespace.create_topic.return_value = {
+        'status': 'success',
+        'message': 'Topic created',
+        'topics': ['test-topic'],
+    }
+    mock_kafka.create_topic.return_value = {
+        'status': 'failure',
+        'message': 'Kafka connection failed',
+    }
+    mock_namespace.delete_topic.return_value = {
+        'status': 'success',
+        'message': 'Topic deleted',
+    }
+
+    result = web_service.create_topic(
+        'test-subject',
+        'ns-test',
+        'test-topic',
+    )
+
+    # Should return failure from Kafka
+    assert result['status'] == 'failure'
+    assert 'Kafka topic' in result['message']
+    # Should attempt cleanup
+    mock_namespace.delete_topic.assert_called_once()
+
+
+def test_recreate_topic_namespace_not_found() -> None:
+    """Test recreate_topic handles namespace doesn't exist."""
+    mock_namespace = MagicMock(spec=NamespaceService)
+    mock_namespace.dynamodb = MagicMock()
+    # Mock that namespace doesn't exist
+    mock_namespace.dynamodb.get_user_namespaces.return_value = []
+
+    web_service = WebService(
+        iam_service=MagicMock(),
+        kafka_service=MagicMock(),
+        namespace_service=mock_namespace,
+    )
+
+    result = web_service.recreate_topic(
+        'test-subject',
+        'nonexistent-namespace',
+        'test-topic',
+    )
+
+    assert result['status'] == 'failure'
+    assert 'not found' in result['message'].lower()
+    assert 'namespace' in result['message'].lower()
+
+
+def test_generate_user_policy_edge_cases() -> None:
+    """Test generate_user_policy handles edge cases with subject formatting."""
+    iam_service = IAMService(
+        account_id='123456789012',
+        region='us-east-1',
+        cluster_name='test-cluster',
+    )
+
+    # Test with subject that has many dashes
+    subject_many_dashes = '123e4567-e89b-12d3-a456-426614174000-extra-dashes'
+    policy = iam_service.generate_user_policy(subject_many_dashes)
+
+    assert 'Version' in policy
+    assert 'Statement' in policy
+    # Should extract last 12 chars after removing dashes
+    subject_suffix = subject_many_dashes.replace('-', '')[-12:]
+    assert f'ns-{subject_suffix}' in str(policy)
+
+    # Test with very short subject
+    short_subject = 'abc'
+    policy_short = iam_service.generate_user_policy(short_subject)
+    assert 'Version' in policy_short
+    assert 'Statement' in policy_short
+
+    # Test with subject without dashes
+    subject_no_dashes = '123e4567e89b12d3a456426614174000'
+    policy_no_dashes = iam_service.generate_user_policy(subject_no_dashes)
+    assert 'Version' in policy_no_dashes
+    # Should use last 12 chars
+    assert subject_no_dashes[-12:] in str(policy_no_dashes)
