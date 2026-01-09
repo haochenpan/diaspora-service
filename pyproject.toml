@@ -12,11 +12,11 @@ dependencies = [
     "diaspora-event-sdk",
     "fastapi",
     "flask",
-    "globus_action_provider_tools",
     "globus_sdk",
     "gunicorn",
     "jinja2",
     "kafka-python",
+    "pydantic",
     "requests",
     "uvicorn",
 ]
@@ -48,6 +48,7 @@ repository = "https://github.com/haochenpan/diaspora-service"
 dev = [
     "covdefaults>=2.2",
     "coverage",
+    "httpx",
     "mypy",
     "pre-commit",
     "pytest",
