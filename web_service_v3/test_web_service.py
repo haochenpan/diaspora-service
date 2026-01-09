@@ -1299,6 +1299,10 @@ def test_topic_deletion_during_creation(
             f'{creation_results[0].get("message", "N/A")}',
         )
 
+    # Explicit cleanup: ensure topic is deleted regardless of race condition
+    with contextlib.suppress(Exception):
+        web_service.delete_topic(random_subject, namespace, topic)
+
 
 @pytest.mark.integration
 def test_full_lifecycle(
