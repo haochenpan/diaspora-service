@@ -900,9 +900,8 @@ class NamespaceService:
             dynamodb_service: DynamoDB service instance
         """
         self.dynamodb = dynamodb_service
-        # Per-namespace locks for atomic create_namespace() operations
-        self._namespace_creation_locks: dict[str, threading.Lock] = {}
-        self._locks_lock = threading.Lock()  # Protects the locks dictionary
+        # Global lock for all namespace and topic operations
+        self._global_lock = threading.Lock()
 
     @classmethod
     def validate_name(cls, name: str) -> dict[str, str] | None:
@@ -955,23 +954,6 @@ class NamespaceService:
         """
         return f'ns-{subject.replace("-", "")[-12:]}'
 
-    def _get_namespace_lock(self, namespace: str) -> threading.Lock:
-        """Get or create a lock for a specific namespace.
-
-        Args:
-            namespace: Namespace name
-
-        Returns:
-            Lock object for the namespace
-        """
-        # Double-checked locking pattern for thread-safe lock creation
-        if namespace not in self._namespace_creation_locks:
-            with self._locks_lock:
-                if namespace not in self._namespace_creation_locks:
-                    self._namespace_creation_locks[namespace] = (
-                        threading.Lock()
-                    )
-        return self._namespace_creation_locks[namespace]
 
     def create_namespace(
         self,
@@ -983,8 +965,8 @@ class NamespaceService:
         Namespace names must be globally unique.
         Safe to call multiple times with the same parameters.
 
-        This method is atomic per namespace - concurrent calls for the same
-        namespace are serialized using a per-namespace lock.
+        This method is atomic - concurrent calls are serialized using a
+        global lock.
 
         Args:
             subject: User subject ID
@@ -998,9 +980,8 @@ class NamespaceService:
         if validation_error:
             return validation_error
 
-        # Get per-namespace lock to ensure atomicity
-        lock = self._get_namespace_lock(namespace)
-        with lock:
+        # Use global lock to ensure atomicity
+        with self._global_lock:
             existing_namespaces = self.dynamodb.get_user_namespaces(subject)
 
             # If namespace already exists for this user, return success
@@ -1086,6 +1067,9 @@ class NamespaceService:
 
         Safe to call multiple times with the same parameters.
 
+        This method is atomic - concurrent calls are serialized using a
+        global lock.
+
         Args:
             subject: User subject ID
             namespace: Namespace name
@@ -1100,37 +1084,41 @@ class NamespaceService:
         if validation_error:
             return validation_error
 
-        # Check that namespace exists for this user
-        user_namespaces = self.dynamodb.get_user_namespaces(subject)
-        if namespace not in user_namespaces:
-            return {
-                'status': 'failure',
-                'message': f'Namespace {namespace} not found for {subject}',
-            }
+        # Use global lock to ensure atomicity
+        with self._global_lock:
+            # Check that namespace exists for this user
+            user_namespaces = self.dynamodb.get_user_namespaces(subject)
+            if namespace not in user_namespaces:
+                return {
+                    'status': 'failure',
+                    'message': (
+                        f'Namespace {namespace} not found for {subject}'
+                    ),
+                }
 
-        # Get existing topics for the namespace (for idempotency check)
-        existing_topics = self.dynamodb.get_namespace_topics(namespace)
+            # Get existing topics for the namespace (for idempotency check)
+            existing_topics = self.dynamodb.get_namespace_topics(namespace)
 
-        # If topic already exists, return success (idempotent)
-        if topic in existing_topics:
+            # If topic already exists, return success (idempotent)
+            if topic in existing_topics:
+                return {
+                    'status': 'success',
+                    'message': f'Topic {topic} already exists in {namespace}',
+                    'topics': existing_topics,
+                }
+
+            # Atomically add topic to the list (prevents race conditions)
+            self.dynamodb.add_namespace_topic(namespace, topic)
+
+            # Read back the updated list
+            # (already deduplicated by get_namespace_topics)
+            all_topics = self.dynamodb.get_namespace_topics(namespace)
+
             return {
                 'status': 'success',
-                'message': f'Topic {topic} already exists in {namespace}',
-                'topics': existing_topics,
+                'message': f'Topic {topic} created in {namespace}',
+                'topics': all_topics,
             }
-
-        # Atomically add topic to the list (prevents race conditions)
-        self.dynamodb.add_namespace_topic(namespace, topic)
-
-        # Read back the updated list
-        # (already deduplicated by get_namespace_topics)
-        all_topics = self.dynamodb.get_namespace_topics(namespace)
-
-        return {
-            'status': 'success',
-            'message': f'Topic {topic} created in {namespace}',
-            'topics': all_topics,
-        }
 
     def delete_topic(
         self,
@@ -1142,6 +1130,9 @@ class NamespaceService:
 
         Safe to call multiple times with the same parameters.
 
+        This method is atomic - concurrent calls are serialized using a
+        global lock.
+
         Args:
             subject: User subject ID
             namespace: Namespace name
@@ -1151,36 +1142,40 @@ class NamespaceService:
             Dictionary with status, message, and remaining topics list.
             Returns success message even if topic doesn't exist.
         """
-        # Check that namespace exists for this user
-        user_namespaces = self.dynamodb.get_user_namespaces(subject)
-        if namespace not in user_namespaces:
-            return {
-                'status': 'failure',
-                'message': f'Namespace {namespace} not found for {subject}',
-            }
+        # Use global lock to ensure atomicity
+        with self._global_lock:
+            # Check that namespace exists for this user
+            user_namespaces = self.dynamodb.get_user_namespaces(subject)
+            if namespace not in user_namespaces:
+                return {
+                    'status': 'failure',
+                    'message': (
+                        f'Namespace {namespace} not found for {subject}'
+                    ),
+                }
 
-        # Get existing topics for the namespace
-        existing_topics = self.dynamodb.get_namespace_topics(namespace)
+            # Get existing topics for the namespace
+            existing_topics = self.dynamodb.get_namespace_topics(namespace)
 
-        # If topic doesn't exist, return success (idempotent)
-        if topic not in existing_topics:
+            # If topic doesn't exist, return success (idempotent)
+            if topic not in existing_topics:
+                return {
+                    'status': 'success',
+                    'message': f'Topic {topic} not found in {namespace}',
+                    'topics': existing_topics,
+                }
+
+            # Atomically remove topic from the set
+            self.dynamodb.remove_namespace_topic(namespace, topic)
+
+            # Read back the updated list
+            remaining_topics = self.dynamodb.get_namespace_topics(namespace)
+
             return {
                 'status': 'success',
-                'message': f'Topic {topic} not found in {namespace}',
-                'topics': existing_topics,
+                'message': f'Topic {topic} deleted from {namespace}',
+                'topics': remaining_topics,
             }
-
-        # Atomically remove topic from the set
-        self.dynamodb.remove_namespace_topic(namespace, topic)
-
-        # Read back the updated list
-        remaining_topics = self.dynamodb.get_namespace_topics(namespace)
-
-        return {
-            'status': 'success',
-            'message': f'Topic {topic} deleted from {namespace}',
-            'topics': remaining_topics,
-        }
 
     def list_namespace_and_topics(
         self,
@@ -1231,9 +1226,8 @@ class WebService:
         self.kafka_service = kafka_service
         self.namespace_service = namespace_service
         self.bootstrap_servers = kafka_service.bootstrap_servers
-        # Per-subject locks for atomic create_key() operations
-        self._key_creation_locks: dict[str, threading.Lock] = {}
-        self._locks_lock = threading.Lock()  # Protects the locks dictionary
+        # Global lock for all user operations
+        self._global_lock = threading.Lock()
 
     def create_user(self, subject: str) -> dict[str, Any]:
         """Create a user in IAM and create its default namespace.
@@ -1288,8 +1282,8 @@ class WebService:
         allowed. Otherwise, deletes the default namespace, cached DynamoDB
         keys, and IAM user.
 
-        This method is atomic per subject - concurrent calls for the same
-        subject are serialized using a per-subject lock.
+        This method is atomic - concurrent calls are serialized using a
+        global lock.
 
         Args:
             subject: User subject ID
@@ -1297,9 +1291,8 @@ class WebService:
         Returns:
             Dictionary with status and message
         """
-        # Get per-subject lock to ensure atomicity
-        lock = self._get_subject_lock(subject)
-        with lock:
+        # Use global lock to ensure atomicity
+        with self._global_lock:
             # Check if user has any namespaces
             user_namespaces = (
                 self.namespace_service.dynamodb.get_user_namespaces(
@@ -1368,21 +1361,6 @@ class WebService:
                 'message': f'User {subject} deleted',
             }
 
-    def _get_subject_lock(self, subject: str) -> threading.Lock:
-        """Get or create a lock for a specific subject.
-
-        Args:
-            subject: User subject ID
-
-        Returns:
-            Lock object for the subject
-        """
-        # Double-checked locking pattern for thread-safe lock creation
-        if subject not in self._key_creation_locks:
-            with self._locks_lock:
-                if subject not in self._key_creation_locks:
-                    self._key_creation_locks[subject] = threading.Lock()
-        return self._key_creation_locks[subject]
 
     def create_key(self, subject: str) -> dict[str, Any]:
         """Create an access key for a user.
@@ -1391,8 +1369,8 @@ class WebService:
         a new access key and stores it. If a key already exists in DynamoDB,
         returns it without creating a new one (idempotent behavior).
 
-        This method is atomic per subject - concurrent calls for the same
-        subject are serialized using a per-subject lock.
+        This method is atomic - concurrent calls are serialized using a
+        global lock.
 
         Args:
             subject: User subject ID
@@ -1403,9 +1381,8 @@ class WebService:
             where fresh=False if key existed in DynamoDB,
             fresh=True if newly created
         """
-        # Get per-subject lock to ensure atomicity
-        lock = self._get_subject_lock(subject)
-        with lock:
+        # Use global lock to ensure atomicity
+        with self._global_lock:
             # Check if key already exists in DynamoDB (fast path)
             existing_key = self.namespace_service.dynamodb.get_key(subject)
             if existing_key:

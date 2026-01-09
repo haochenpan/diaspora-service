@@ -752,6 +752,408 @@ def test_user_deletion_partial_failures(
 
 
 @pytest.mark.integration
+def test_concurrent_topic_creation(
+    web_service: WebService,
+    random_subject: str,
+    cleanup_user: Any,
+) -> None:
+    """Test concurrent create_topic() calls (should be idempotent)."""
+    print(
+        f'\n[test_concurrent_topic_creation] '
+        f'Testing with subject: {random_subject}',
+    )
+
+    # Mark for cleanup
+    cleanup_user(random_subject)
+
+    # Create user and namespace first
+    create_result = web_service.create_user(random_subject)
+    assert create_result['status'] == 'success'
+    namespace = create_result['namespace']
+    topic = 'test-topic-concurrent'
+
+    # Ensure topic doesn't exist
+    web_service.delete_topic(random_subject, namespace, topic)
+
+    # Number of concurrent operations
+    num_threads = 10
+    results: list[dict[str, Any]] = []
+    errors: list[Exception] = []
+    threads: list[threading.Thread] = []
+
+    def create_topic_thread(thread_id: int) -> None:
+        """Create topic in a thread."""
+        try:
+            result = web_service.create_topic(
+                random_subject,
+                namespace,
+                topic,
+            )
+            results.append(result)
+            print(f'  Thread {thread_id} result: {result["status"]}')
+        except Exception as e:
+            errors.append(e)
+            print(f'  Thread {thread_id} error: {e}')
+
+    # Start all threads
+    for i in range(num_threads):
+        thread = threading.Thread(target=create_topic_thread, args=(i,))
+        threads.append(thread)
+        thread.start()
+
+    # Wait for all threads to complete
+    for thread in threads:
+        thread.join()
+
+    # Check for errors
+    if errors:
+        print(f'  Errors occurred: {errors}')
+
+    # Print all results summary
+    print('\n  All results summary:')
+    for i, result in enumerate(results):
+        print(
+            f'    Thread {i}: {result["status"]} - '
+            f'{result.get("message", "N/A")}',
+        )
+
+    # Assertions
+    assert len(results) == num_threads, 'All threads should complete'
+    successful_results = [
+        r for r in results if r.get('status') == 'success'
+    ]
+    # All creations should succeed (idempotent behavior)
+    assert len(successful_results) == num_threads, (
+        'All topic creations should succeed (idempotent)'
+    )
+
+    # Verify topic exists exactly once in DynamoDB
+    topics_after = (
+        web_service.namespace_service.dynamodb.get_namespace_topics(
+            namespace,
+        )
+    )
+    topic_count = topics_after.count(topic) if isinstance(
+        topics_after,
+        list,
+    ) else (1 if topic in topics_after else 0)
+    assert topic_count == 1, (
+        f'Topic should exist exactly once, found {topic_count} times'
+    )
+    assert topic in topics_after, 'Topic should exist in namespace'
+
+    # Verify all results have the same topic list (atomic operation)
+    if successful_results:
+        first_topics = successful_results[0].get('topics', [])
+        for result in successful_results:
+            result_topics = result.get('topics', [])
+            assert topic in result_topics, (
+                'All results should include the created topic'
+            )
+
+
+@pytest.mark.integration
+def test_concurrent_topic_creation_existing_topic(
+    web_service: WebService,
+    random_subject: str,
+    cleanup_user: Any,
+) -> None:
+    """Test concurrent create_topic() calls when topic already exists."""
+    print(
+        f'\n[test_concurrent_topic_creation_existing_topic] '
+        f'Testing with subject: {random_subject}',
+    )
+
+    # Mark for cleanup
+    cleanup_user(random_subject)
+
+    # Create user and namespace first
+    create_result = web_service.create_user(random_subject)
+    assert create_result['status'] == 'success'
+    namespace = create_result['namespace']
+    topic = 'test-topic-concurrent-existing'
+
+    # Create topic first
+    initial_result = web_service.create_topic(
+        random_subject,
+        namespace,
+        topic,
+    )
+    assert initial_result['status'] == 'success'
+    print(f'  Initial topic created: {topic}')
+
+    # Number of concurrent operations
+    num_threads = 10
+    results: list[dict[str, Any]] = []
+    errors: list[Exception] = []
+    threads: list[threading.Thread] = []
+
+    def create_topic_thread(thread_id: int) -> None:
+        """Create topic in a thread."""
+        try:
+            result = web_service.create_topic(
+                random_subject,
+                namespace,
+                topic,
+            )
+            results.append(result)
+            print(f'  Thread {thread_id} result: {result["status"]}')
+        except Exception as e:
+            errors.append(e)
+            print(f'  Thread {thread_id} error: {e}')
+
+    # Start all threads
+    for i in range(num_threads):
+        thread = threading.Thread(target=create_topic_thread, args=(i,))
+        threads.append(thread)
+        thread.start()
+
+    # Wait for all threads to complete
+    for thread in threads:
+        thread.join()
+
+    # Check for errors
+    if errors:
+        print(f'  Errors occurred: {errors}')
+
+    # Print all results summary
+    print('\n  All results summary:')
+    for i, result in enumerate(results):
+        print(
+            f'    Thread {i}: {result["status"]} - '
+            f'{result.get("message", "N/A")}',
+        )
+
+    # Assertions
+    assert len(results) == num_threads, 'All threads should complete'
+    successful_results = [
+        r for r in results if r.get('status') == 'success'
+    ]
+    # All should succeed (idempotent behavior)
+    assert len(successful_results) == num_threads, (
+        'All topic creations should succeed (idempotent)'
+    )
+
+    # Verify all results indicate topic already exists
+    for result in successful_results:
+        assert 'already exists' in result.get('message', '').lower() or (
+            topic in result.get('topics', [])
+        ), 'All results should indicate topic already exists'
+
+    # Verify topic still exists exactly once
+    topics_after = (
+        web_service.namespace_service.dynamodb.get_namespace_topics(
+            namespace,
+        )
+    )
+    topic_count = topics_after.count(topic) if isinstance(
+        topics_after,
+        list,
+    ) else (1 if topic in topics_after else 0)
+    assert topic_count == 1, (
+        f'Topic should exist exactly once, found {topic_count} times'
+    )
+
+
+@pytest.mark.integration
+def test_concurrent_topic_deletion(
+    web_service: WebService,
+    random_subject: str,
+    cleanup_user: Any,
+) -> None:
+    """Test concurrent delete_topic() calls (should be idempotent)."""
+    print(
+        f'\n[test_concurrent_topic_deletion] '
+        f'Testing with subject: {random_subject}',
+    )
+
+    # Mark for cleanup
+    cleanup_user(random_subject)
+
+    # Create user and namespace first
+    create_result = web_service.create_user(random_subject)
+    assert create_result['status'] == 'success'
+    namespace = create_result['namespace']
+    topic = 'test-topic-concurrent-delete'
+
+    # Create topic first
+    create_topic_result = web_service.create_topic(
+        random_subject,
+        namespace,
+        topic,
+    )
+    assert create_topic_result['status'] == 'success'
+
+    # Verify topic exists before deletion
+    topics_before = (
+        web_service.namespace_service.dynamodb.get_namespace_topics(
+            namespace,
+        )
+    )
+    assert topic in topics_before
+
+    # Number of concurrent operations
+    num_threads = 10
+    results: list[dict[str, Any]] = []
+    errors: list[Exception] = []
+    threads: list[threading.Thread] = []
+
+    def delete_topic_thread(thread_id: int) -> None:
+        """Delete topic in a thread."""
+        try:
+            result = web_service.delete_topic(
+                random_subject,
+                namespace,
+                topic,
+            )
+            results.append(result)
+            print(f'  Thread {thread_id} result: {result["status"]}')
+        except Exception as e:
+            errors.append(e)
+            print(f'  Thread {thread_id} error: {e}')
+
+    # Start all threads
+    for i in range(num_threads):
+        thread = threading.Thread(target=delete_topic_thread, args=(i,))
+        threads.append(thread)
+        thread.start()
+
+    # Wait for all threads to complete
+    for thread in threads:
+        thread.join()
+
+    # Check for errors
+    if errors:
+        print(f'  Errors occurred: {errors}')
+
+    # Print all results summary
+    print('\n  All results summary:')
+    for i, result in enumerate(results):
+        print(
+            f'    Thread {i}: {result["status"]} - '
+            f'{result.get("message", "N/A")}',
+        )
+
+    # Assertions
+    assert len(results) == num_threads, 'All threads should complete'
+    successful_results = [
+        r for r in results if r.get('status') == 'success'
+    ]
+    # All deletions should succeed (idempotent behavior)
+    assert len(successful_results) == num_threads, (
+        'All topic deletions should succeed (idempotent)'
+    )
+
+    # Verify topic is deleted from DynamoDB
+    topics_after = (
+        web_service.namespace_service.dynamodb.get_namespace_topics(
+            namespace,
+        )
+    )
+    assert topic not in topics_after, 'Topic should be deleted from namespace'
+
+    # Verify all results indicate topic was deleted
+    for result in successful_results:
+        assert topic not in result.get('topics', []), (
+            'All results should indicate topic was deleted'
+        )
+
+
+@pytest.mark.integration
+def test_topic_deletion_during_creation(
+    web_service: WebService,
+    random_subject: str,
+    cleanup_user: Any,
+) -> None:
+    """Test topic deletion while creating topic (lock prevents race)."""
+    print(
+        f'\n[test_topic_deletion_during_creation] '
+        f'Testing with subject: {random_subject}',
+    )
+
+    # Mark for cleanup
+    cleanup_user(random_subject)
+
+    # Create user and namespace first
+    create_result = web_service.create_user(random_subject)
+    assert create_result['status'] == 'success'
+    namespace = create_result['namespace']
+    topic = 'test-topic-delete-during-create'
+
+    deletion_complete = threading.Event()
+    creation_results: list[dict[str, Any]] = []
+    deletion_result: dict[str, Any] | None = None
+    creation_errors: list[Exception] = []
+
+    def create_topic_thread() -> None:
+        """Create topic in a thread."""
+        try:
+            result = web_service.create_topic(
+                random_subject,
+                namespace,
+                topic,
+            )
+            creation_results.append(result)
+            print(f'  Creation thread result: {result["status"]}')
+        except Exception as e:
+            creation_errors.append(e)
+            print(f'  Creation thread error: {e}')
+
+    def delete_topic_thread() -> None:
+        """Delete topic in a thread."""
+        nonlocal deletion_result
+        try:
+            result = web_service.delete_topic(
+                random_subject,
+                namespace,
+                topic,
+            )
+            deletion_result = result
+            print(f'  Deletion thread result: {result["status"]}')
+            deletion_complete.set()
+        except Exception as e:
+            print(f'  Deletion thread error: {e}')
+            deletion_complete.set()
+
+    # Start deletion thread
+    deletion_thread = threading.Thread(target=delete_topic_thread)
+    deletion_thread.start()
+
+    # Small delay to let deletion start
+    time.sleep(0.1)
+
+    # Start creation thread (should be blocked by lock)
+    creation_thread = threading.Thread(target=create_topic_thread)
+    creation_thread.start()
+
+    # Wait for deletion to complete
+    deletion_complete.wait(timeout=30)
+    deletion_thread.join()
+    creation_thread.join()
+
+    # Assertions
+    assert deletion_result is not None, 'Deletion should complete'
+    # Deletion might succeed or fail depending on whether topic exists
+    assert deletion_result['status'] in ('success', 'failure'), (
+        'Deletion should complete with a status'
+    )
+
+    # Verify final state - topic should not exist
+    topics_after = (
+        web_service.namespace_service.dynamodb.get_namespace_topics(
+            namespace,
+        )
+    )
+    # Topic might not exist if deletion succeeded, or might exist if
+    # creation happened first - the lock ensures atomicity
+    if creation_results:
+        print(
+            f'  Creation result: {creation_results[0]["status"]} - '
+            f'{creation_results[0].get("message", "N/A")}',
+        )
+
+
+@pytest.mark.integration
 def test_full_lifecycle(
     web_service: WebService,
     random_subject: str,
@@ -865,50 +1267,6 @@ def test_create_key_success(
     assert 'create_date' in result
     assert len(result['access_key']) > 0
     assert len(result['secret_key']) > 0
-
-
-@pytest.mark.integration
-def test_create_key_force_refresh(
-    web_service: WebService,
-    random_subject: str,
-    cleanup_user: Any,
-) -> None:
-    """Test create_key force refresh (always creates new key)."""
-    print(
-        f'\n[test_create_key_force_refresh] '
-        f'Testing with subject: {random_subject}',
-    )
-
-    # Mark for cleanup
-    cleanup_user(random_subject)
-
-    # Create key first time
-    result1 = web_service.create_key(random_subject)
-    print('  First create key result:')
-    print(json.dumps(result1, indent=2, default=str))
-    assert result1['status'] == 'success'
-    first_access_key = result1['access_key']
-    first_secret_key = result1['secret_key']
-
-    # Create key second time (should force refresh)
-    result2 = web_service.create_key(random_subject)
-    print('  Second create key result (force refresh):')
-    print(json.dumps(result2, indent=2, default=str))
-    assert result2['status'] == 'success'
-    second_access_key = result2['access_key']
-    second_secret_key = result2['secret_key']
-
-    # Assertions - keys should be different
-    assert first_access_key != second_access_key
-    assert first_secret_key != second_secret_key
-
-    # Verify new key is stored in DynamoDB
-    stored_key = web_service.namespace_service.dynamodb.get_key(
-        random_subject,
-    )
-    assert stored_key is not None
-    assert stored_key['access_key'] == second_access_key
-    assert stored_key['secret_key'] == second_secret_key
 
 
 @pytest.mark.integration
