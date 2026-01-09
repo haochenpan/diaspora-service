@@ -1254,7 +1254,8 @@ class WebService:
         """Delete a user from IAM and its namespace.
 
         If the user has namespaces beyond the default one, deletion is not
-        allowed. Otherwise, deletes the default namespace and IAM user.
+        allowed. Otherwise, deletes the default namespace, cached DynamoDB
+        keys, and IAM user.
 
         Args:
             subject: User subject ID
@@ -1303,6 +1304,10 @@ class WebService:
         # Delete default namespace (idempotent, safe even if doesn't exist)
         self.namespace_service.delete_namespace(subject, default_namespace)
 
+        # Delete cached key from DynamoDB
+        # (idempotent, safe even if doesn't exist)
+        self.namespace_service.dynamodb.delete_key(subject)
+
         # Delete user in IAM
         iam_result = self.iam_service.delete_user_and_policy(subject)
         if iam_result['status'] != 'success':
@@ -1324,6 +1329,12 @@ class WebService:
         Creates user and namespace if they don't exist, then creates
         a new access key and stores it (always creates new key, even if
         one exists in DynamoDB).
+
+        Consistency guarantees for concurrent calls:
+        - Concurrent calls may create multiple IAM keys temporarily
+        - DynamoDB uses "last write wins" - only the last completed write
+          is stored
+        - Subsequent calls clean up old IAM keys
 
         Args:
             subject: User subject ID

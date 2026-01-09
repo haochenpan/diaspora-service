@@ -246,6 +246,16 @@ def test_delete_user_success(
     create_result = web_service.create_user(random_subject)
     assert create_result['status'] == 'success'
 
+    # Create a key to ensure it's cached in DynamoDB
+    create_key_result = web_service.create_key(random_subject)
+    assert create_key_result['status'] == 'success'
+
+    # Verify key exists in DynamoDB before deletion
+    stored_key_before = web_service.namespace_service.dynamodb.get_key(
+        random_subject,
+    )
+    assert stored_key_before is not None
+
     # Delete user (should succeed as user has only default namespace)
     result = web_service.delete_user(random_subject)
     print('  Delete user result:')
@@ -256,6 +266,12 @@ def test_delete_user_success(
     assert result['status'] == 'success'
     assert 'message' in result
     assert random_subject in result['message']
+
+    # Verify cached key is deleted from DynamoDB
+    stored_key_after = web_service.namespace_service.dynamodb.get_key(
+        random_subject,
+    )
+    assert stored_key_after is None
 
 
 @pytest.mark.integration
@@ -304,7 +320,17 @@ def test_delete_user_with_topics(
     assert topic1 in topics_before
     assert topic2 in topics_before
 
-    # Delete user (should delete topics, namespace, and IAM user)
+    # Create a key to ensure it's cached in DynamoDB
+    create_key_result = web_service.create_key(random_subject)
+    assert create_key_result['status'] == 'success'
+
+    # Verify key exists in DynamoDB before deletion
+    stored_key_before = web_service.namespace_service.dynamodb.get_key(
+        random_subject,
+    )
+    assert stored_key_before is not None
+
+    # Delete user (should delete topics, namespace, cached keys, and IAM user)
     result = web_service.delete_user(random_subject)
     print('  Delete user result:')
     print(json.dumps(result, indent=2, default=str))
@@ -318,6 +344,63 @@ def test_delete_user_with_topics(
         namespace,
     )
     assert len(topics_after) == 0
+
+    # Verify cached key is deleted from DynamoDB
+    stored_key_after = web_service.namespace_service.dynamodb.get_key(
+        random_subject,
+    )
+    assert stored_key_after is None
+
+
+@pytest.mark.integration
+def test_delete_user_deletes_cached_key(
+    web_service: WebService,
+    random_subject: str,
+    cleanup_user: Any,
+) -> None:
+    """Test delete_user deletes cached key from DynamoDB."""
+    print(
+        f'\n[test_delete_user_deletes_cached_key] '
+        f'Testing with subject: {random_subject}',
+    )
+
+    # Mark for cleanup
+    cleanup_user(random_subject)
+
+    # Create user first
+    create_result = web_service.create_user(random_subject)
+    assert create_result['status'] == 'success'
+
+    # Create a key to ensure it's cached in DynamoDB
+    create_key_result = web_service.create_key(random_subject)
+    assert create_key_result['status'] == 'success'
+    created_access_key = create_key_result['access_key']
+    created_secret_key = create_key_result['secret_key']
+
+    # Verify key exists in DynamoDB before deletion
+    stored_key_before = web_service.namespace_service.dynamodb.get_key(
+        random_subject,
+    )
+    assert stored_key_before is not None
+    assert stored_key_before['access_key'] == created_access_key
+    assert stored_key_before['secret_key'] == created_secret_key
+
+    # Delete user
+    result = web_service.delete_user(random_subject)
+    print('  Delete user result:')
+    print(json.dumps(result, indent=2, default=str))
+
+    # Assertions
+    assert isinstance(result, dict)
+    assert result['status'] == 'success'
+
+    # Verify cached key is deleted from DynamoDB
+    stored_key_after = web_service.namespace_service.dynamodb.get_key(
+        random_subject,
+    )
+    assert stored_key_after is None, (
+        'Cached key should be deleted from DynamoDB when user is deleted'
+    )
 
 
 @pytest.mark.integration
@@ -438,7 +521,18 @@ def test_full_lifecycle(
     )
     assert topic in topics_before
 
-    # 6. Delete user (should delete topic, namespace, and IAM user)
+    # 5a. Create a key to ensure it's cached in DynamoDB
+    create_key_result = web_service.create_key(random_subject)
+    assert create_key_result['status'] == 'success'
+
+    # 5b. Verify key exists in DynamoDB before deletion
+    stored_key_before = web_service.namespace_service.dynamodb.get_key(
+        random_subject,
+    )
+    assert stored_key_before is not None
+
+    # 6. Delete user (should delete topic, namespace, cached keys,
+    # and IAM user)
     delete_result = web_service.delete_user(random_subject)
     assert delete_result['status'] == 'success'
 
@@ -455,6 +549,12 @@ def test_full_lifecycle(
         namespace,
     )
     assert topic not in topics_after
+
+    # 9. Verify cached key is deleted from DynamoDB
+    stored_key_after = web_service.namespace_service.dynamodb.get_key(
+        random_subject,
+    )
+    assert stored_key_after is None
 
     print('  Full lifecycle test completed successfully')
 

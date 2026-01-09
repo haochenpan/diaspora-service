@@ -112,33 +112,75 @@ def cleanup_data(
 
 
 @pytest.mark.integration
-def test_validate_name(
+def test_validate_name(  # noqa: PLR0915
     namespace_service: NamespaceService,
 ) -> None:
-    """Test validate_name with various inputs."""
+    """Test validate_name with comprehensive edge cases.
+
+    Covers all validation scenarios including:
+    - Empty strings and boundary values
+    - Length constraints (min/max)
+    - Special characters and invalid patterns
+    - Valid patterns (dash, underscore, numbers, mixed case)
+    - Unicode and whitespace characters
+    """
     print('\n[test_validate_name] Testing name validation')
 
+    # ========================================================================
     # Valid names
+    # ========================================================================
     assert namespace_service.validate_name('valid-ns-123') is None
     assert namespace_service.validate_name('Valid_NS_123') is None
-    assert namespace_service.validate_name('abc') is None  # Min length
-    assert namespace_service.validate_name('a' * 32) is None  # Max length
+    assert namespace_service.validate_name('abc') is None  # Min (3)
+    assert namespace_service.validate_name('a' * 32) is None  # Max (32)
+    assert namespace_service.validate_name('valid-name') is None  # Dash
+    assert namespace_service.validate_name('valid_name') is None  # Underscore
+    assert namespace_service.validate_name('valid123name') is None  # Numbers
+    assert namespace_service.validate_name('ValidName123') is None  # Mixed
 
-    # Invalid names
-    result = namespace_service.validate_name('ab')  # Too short
+    # ========================================================================
+    # Invalid: Empty and too short
+    # ========================================================================
+    result = namespace_service.validate_name('')  # Empty string
     assert result is not None
     assert result['status'] == 'failure'
     assert 'between' in result['message'].lower()
 
-    result = namespace_service.validate_name('a' * 33)  # Too long
+    result = namespace_service.validate_name('ab')  # Too short (2 chars)
     assert result is not None
     assert result['status'] == 'failure'
+    assert 'between' in result['message'].lower()
 
-    result = namespace_service.validate_name('invalid!name')  # Invalid char
+    # ========================================================================
+    # Invalid: Too long
+    # ========================================================================
+    result = namespace_service.validate_name('a' * 33)  # Too long (33 chars)
     assert result is not None
     assert result['status'] == 'failure'
-    assert 'letters' in result['message'].lower()
+    assert 'between' in result['message'].lower()
 
+    # ========================================================================
+    # Invalid: Special characters
+    # ========================================================================
+    invalid_special_chars = [
+        'test@name',
+        'test.name',
+        'test name',  # Space
+        'test!name',
+        'test#name',
+    ]
+    for name in invalid_special_chars:
+        result = namespace_service.validate_name(name)
+        assert result is not None, f'{name} should be invalid'
+        assert result['status'] == 'failure'
+        assert (
+            'letters' in result['message'].lower()
+            or 'characters' in result['message'].lower()
+        )
+
+    # ========================================================================
+    # Invalid: Starts/ends with dash or underscore
+    # ========================================================================
     result = namespace_service.validate_name('-invalid')  # Starts with dash
     assert result is not None
     assert result['status'] == 'failure'
@@ -147,8 +189,63 @@ def test_validate_name(
     result = namespace_service.validate_name('invalid-')  # Ends with dash
     assert result is not None
     assert result['status'] == 'failure'
+    msg_lower = result['message'].lower()
+    assert 'end' in msg_lower or 'start' in msg_lower
 
-    print('  Validation tests passed')
+    result = namespace_service.validate_name('_invalid')  # Starts underscore
+    assert result is not None
+    assert result['status'] == 'failure'
+    assert 'start' in result['message'].lower()
+
+    result = namespace_service.validate_name('invalid_')  # Ends underscore
+    assert result is not None
+    assert result['status'] == 'failure'
+    msg_lower = result['message'].lower()
+    assert 'end' in msg_lower or 'start' in msg_lower
+
+    # ========================================================================
+    # Invalid: Unicode characters
+    # ========================================================================
+    unicode_names = ['测试', 'тест', 'テスト', '🎉test']
+    for name in unicode_names:
+        result = namespace_service.validate_name(name)
+        assert result is not None, f'{name} should be invalid'
+        assert result['status'] == 'failure'
+
+    # ========================================================================
+    # Invalid: Whitespace and control characters
+    # ========================================================================
+    result = namespace_service.validate_name('   ')  # Whitespace only
+    assert result is not None
+    assert result['status'] == 'failure'
+
+    result = namespace_service.validate_name('test\nname')  # Newline
+    assert result is not None
+    assert result['status'] == 'failure'
+
+    result = namespace_service.validate_name('test\tname')  # Tab
+    assert result is not None
+    assert result['status'] == 'failure'
+
+    # ========================================================================
+    # Boundary value tests
+    # ========================================================================
+    boundary_cases = [
+        ('ab', False),  # Too short (2 chars)
+        ('abc', True),  # Minimum valid (3 chars)
+        ('a' * 32, True),  # Maximum valid (32 chars)
+        ('a' * 33, False),  # Too long (33 chars)
+    ]
+
+    for name, should_be_valid in boundary_cases:
+        result = namespace_service.validate_name(name)
+        if should_be_valid:
+            assert result is None, f'{name} should be valid'
+        else:
+            assert result is not None, f'{name} should be invalid'
+            assert result['status'] == 'failure'
+
+    print('  All validation tests passed')
 
 
 @pytest.mark.integration
