@@ -357,38 +357,6 @@ async def test_create_key_success_exact_format(
 
 
 @pytest.mark.asyncio
-async def test_get_key_fresh_false_exact_format(
-    mock_diaspora_service: DiasporaService,
-    valid_subject: str,
-    valid_token: str,
-    mock_web_service: MagicMock,
-) -> None:
-    """Test get_key returns exact format when key exists (fresh=False)."""
-    mock_web_service.get_key.return_value = {
-        'status': 'success',
-        'message': f'Access key retrieved for {valid_subject}',
-        'access_key': 'AKIAIOSFODNN7EXAMPLE',  # pragma: allowlist secret
-        'secret_key': (  # pragma: allowlist secret
-            'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY'  # pragma: allowlist secret  # noqa: E501
-        ),
-        'create_date': '2024-01-01T00:00:00',
-        'endpoint': 'bootstrap.kafka:9092',
-        'fresh': False,  # Key retrieved from cache
-    }
-
-    result = await mock_diaspora_service.get_key(
-        subject=valid_subject,
-        token=valid_token,
-    )
-
-    assert result['status'] == 'success'
-    assert result['fresh'] is False
-    assert 'retrieved' in result['message'].lower()
-    assert 'access_key' in result
-    assert 'secret_key' in result
-
-
-@pytest.mark.asyncio
 async def test_delete_key_success_exact_format(
     mock_diaspora_service: DiasporaService,
     valid_subject: str,
@@ -599,20 +567,6 @@ async def test_create_key_authentication_failure(
 
 
 @pytest.mark.integration
-@pytest.mark.asyncio
-async def test_get_key_authentication_failure(
-    diaspora_service: DiasporaService,
-    valid_subject: str,
-) -> None:
-    """Test get_key with invalid token."""
-    result = await diaspora_service.get_key(
-        subject=valid_subject,
-        token='Bearer invalid-token',
-    )
-
-    assert result['status'] == 'error'
-
-
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_delete_key_authentication_failure(

@@ -130,9 +130,6 @@ class DiasporaService:
         self.app.post('/api/v3/key', tags=['Authentication'])(
             self.create_key,
         )
-        self.app.get('/api/v3/key', tags=['Authentication'])(
-            self.get_key,
-        )
         self.app.delete('/api/v3/key', tags=['Authentication'])(
             self.delete_key,
         )
@@ -180,16 +177,6 @@ class DiasporaService:
         if err := self.auth.validate_access_token(subject, token):
             return err
         return self.web_service.create_key(subject)
-
-    async def get_key(
-        self,
-        subject: str = Depends(extract_val('subject')),
-        token: str = Depends(extract_val('authorization')),
-    ) -> dict[str, Any]:
-        """Get access key for a user, creating one if it doesn't exist."""
-        if err := self.auth.validate_access_token(subject, token):
-            return err
-        return self.web_service.get_key(subject)
 
     async def delete_key(
         self,

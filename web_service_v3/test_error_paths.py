@@ -1094,6 +1094,8 @@ def test_create_key_iam_fails() -> None:
 
     mock_namespace = MagicMock(spec=NamespaceService)
     mock_namespace.dynamodb = MagicMock()
+    # Mock get_key to return None (no existing key)
+    mock_namespace.dynamodb.get_key.return_value = None
 
     web_service = WebService(
         iam_service=mock_iam,
@@ -1127,6 +1129,8 @@ def test_create_key_dynamodb_storage_fails() -> None:
 
     mock_namespace = MagicMock(spec=NamespaceService)
     mock_namespace.dynamodb = MagicMock()
+    # Mock get_key to return None (no existing key)
+    mock_namespace.dynamodb.get_key.return_value = None
     # Mock store_key to raise exception
     mock_namespace.dynamodb.store_key.side_effect = Exception(
         'DynamoDB write failed',
@@ -1147,27 +1151,6 @@ def test_create_key_dynamodb_storage_fails() -> None:
         # Should raise exception (not caught in create_key)
         with pytest.raises(Exception, match='DynamoDB write failed'):
             web_service.create_key('test-subject')
-
-
-def test_get_key_dynamodb_read_fails() -> None:
-    """Test get_key handles DynamoDB read failure."""
-    mock_iam = MagicMock()
-    mock_namespace = MagicMock(spec=NamespaceService)
-    mock_namespace.dynamodb = MagicMock()
-    # Mock get_key to raise exception
-    mock_namespace.dynamodb.get_key.side_effect = Exception(
-        'DynamoDB read failed',
-    )
-
-    web_service = WebService(
-        iam_service=mock_iam,
-        kafka_service=MagicMock(),
-        namespace_service=mock_namespace,
-    )
-
-    # Should raise exception (not caught in get_key)
-    with pytest.raises(Exception, match='DynamoDB read failed'):
-        web_service.get_key('test-subject')
 
 
 def test_create_topic_kafka_succeeds_dynamodb_fails() -> None:

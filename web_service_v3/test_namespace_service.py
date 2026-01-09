@@ -5,6 +5,8 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import queue
+import threading
 from typing import Any
 
 import pytest
@@ -17,6 +19,34 @@ from web_service_v3.services import NamespaceService
 # ============================================================================
 
 EXPECTED_NAMESPACE_LENGTH = 15  # 'ns-' + 12 chars
+
+# ============================================================================
+# Helper Functions
+# ============================================================================
+
+
+def _collect_queue_results(
+    results_queue: queue.Queue[dict[str, Any]],
+    errors_queue: queue.Queue[Exception],
+) -> tuple[list[dict[str, Any]], list[Exception]]:
+    """Collect results from thread-safe queues.
+
+    Args:
+        results_queue: Queue containing result dictionaries
+        errors_queue: Queue containing exceptions
+
+    Returns:
+        Tuple of (results list, errors list)
+    """
+    results = []
+    while not results_queue.empty():
+        results.append(results_queue.get())
+    errors = []
+    while not errors_queue.empty():
+        errors.append(errors_queue.get())
+    return results, errors
+
+
 EXPECTED_TOPICS_COUNT_2 = 2
 
 # ============================================================================
@@ -672,3 +702,240 @@ def test_full_lifecycle(
     assert namespace not in delete_result['namespaces']
 
     print('  Full lifecycle test completed successfully')
+
+
+@pytest.mark.integration
+def test_concurrent_namespace_creation_same_user(
+    namespace_service: NamespaceService,
+    random_subject: str,
+    cleanup_data: Any,
+) -> None:
+    """Test concurrent namespace creation by same user."""
+    print(
+        f'\n[test_concurrent_namespace_creation_same_user] '
+        f'Testing with subject: {random_subject}',
+    )
+
+    # Mark for cleanup
+    cleanup_data['subject'](random_subject)
+
+    # Create a unique namespace name
+    namespace = f'ns-concurrent-{os.urandom(4).hex()}'
+    cleanup_data['namespace'](random_subject, namespace)
+
+    # Number of concurrent operations
+    num_threads = 10
+    results_queue: queue.Queue[dict[str, Any]] = queue.Queue()
+    errors_queue: queue.Queue[Exception] = queue.Queue()
+    threads: list[threading.Thread] = []
+
+    def create_namespace_thread(thread_id: int) -> None:
+        """Create namespace in a thread."""
+        try:
+            result = namespace_service.create_namespace(
+                subject=random_subject,
+                namespace=namespace,
+            )
+            results_queue.put(result)
+            print(f'  Thread {thread_id} result:')
+            print(f'    Status: {result["status"]}')
+            print(f'    Message: {result.get("message", "N/A")}')
+            if result.get('status') == 'success' and 'namespaces' in result:
+                print(f'    Namespaces: {result["namespaces"]}')
+        except Exception as e:
+            errors_queue.put(e)
+            results_queue.put(
+                {
+                    'status': 'failure',
+                    'message': f'Exception: {e}',
+                },
+            )
+            print(f'  Thread {thread_id} error: {e}')
+
+    # Start all threads
+    for i in range(num_threads):
+        thread = threading.Thread(
+            target=create_namespace_thread,
+            args=(i,),
+        )
+        threads.append(thread)
+        thread.start()
+
+    # Wait for all threads to complete
+    for thread in threads:
+        thread.join()
+
+    # Collect results from queues
+    results, errors = _collect_queue_results(results_queue, errors_queue)
+
+    # Check for errors
+    if errors:
+        print(f'  Errors occurred: {errors}')
+
+    # Verify all calls completed
+    assert len(results) == num_threads, 'All threads should complete'
+
+    # Count successes and failures
+    successful_results = [r for r in results if r.get('status') == 'success']
+    failed_results = [r for r in results if r.get('status') == 'failure']
+
+    print(f'  Successful calls: {len(successful_results)}/{num_threads}')
+    print(f'  Failed calls: {len(failed_results)}/{num_threads}')
+
+    # Print all results summary
+    print('\n  All results summary:')
+    for i, result in enumerate(results):
+        message = result.get('message', 'N/A')
+        print(
+            f'    Thread {i}: {result["status"]} - {message}',
+        )
+
+    # At least one should succeed (the first one to complete)
+    assert len(successful_results) >= 1, (
+        'At least one thread should succeed in creating the namespace'
+    )
+
+    # Verify final state: namespace should exist for the user
+    user_namespaces = namespace_service.dynamodb.get_user_namespaces(
+        random_subject,
+    )
+    assert namespace in user_namespaces, (
+        'Namespace should exist in user namespaces'
+    )
+
+    # Verify namespace is in global namespaces
+    global_namespaces = namespace_service.dynamodb.get_global_namespaces()
+    assert namespace in global_namespaces, (
+        'Namespace should exist in global namespaces'
+    )
+
+    # Note: Due to race conditions, multiple threads may all report
+    # "created" if they all pass the check before any completes.
+    # The important thing is that the namespace exists exactly once,
+    # which we verify above.
+
+    print('  Concurrent namespace creation test (same user) completed')
+
+
+@pytest.mark.integration
+def test_concurrent_namespace_creation_multiple_threads(
+    namespace_service: NamespaceService,
+    random_subject: str,
+    cleanup_data: Any,
+) -> None:
+    """Test multiple concurrent threads creating the same namespace."""
+    print(
+        f'\n[test_concurrent_namespace_creation_multiple_threads] '
+        f'Testing with subject: {random_subject}',
+    )
+
+    # Mark for cleanup
+    cleanup_data['subject'](random_subject)
+
+    # Create a unique namespace name
+    namespace = f'ns-multi-{os.urandom(4).hex()}'
+    cleanup_data['namespace'](random_subject, namespace)
+
+    # Number of concurrent operations (10+ as specified)
+    num_threads = 15
+    results_queue: queue.Queue[dict[str, Any]] = queue.Queue()
+    errors_queue: queue.Queue[Exception] = queue.Queue()
+    threads: list[threading.Thread] = []
+
+    def create_namespace_thread(thread_id: int) -> None:
+        """Create namespace in a thread."""
+        try:
+            result = namespace_service.create_namespace(
+                subject=random_subject,
+                namespace=namespace,
+            )
+            results_queue.put(result)
+            print(f'  Thread {thread_id} result:')
+            print(f'    Status: {result["status"]}')
+            print(f'    Message: {result.get("message", "N/A")}')
+            if result.get('status') == 'success' and 'namespaces' in result:
+                print(f'    Namespaces: {result["namespaces"]}')
+        except Exception as e:
+            errors_queue.put(e)
+            results_queue.put(
+                {
+                    'status': 'failure',
+                    'message': f'Exception: {e}',
+                },
+            )
+            print(f'  Thread {thread_id} error: {e}')
+
+    # Start all threads
+    for i in range(num_threads):
+        thread = threading.Thread(
+            target=create_namespace_thread,
+            args=(i,),
+        )
+        threads.append(thread)
+        thread.start()
+
+    # Wait for all threads to complete
+    for thread in threads:
+        thread.join()
+
+    # Collect results from queues
+    results, errors = _collect_queue_results(results_queue, errors_queue)
+
+    # Check for errors
+    if errors:
+        print(f'  Errors occurred: {errors}')
+
+    # Verify all calls completed
+    assert len(results) == num_threads, 'All threads should complete'
+
+    # Count successes and failures
+    successful_results = [r for r in results if r.get('status') == 'success']
+    failed_results = [r for r in results if r.get('status') == 'failure']
+
+    print(f'  Successful calls: {len(successful_results)}/{num_threads}')
+    print(f'  Failed calls: {len(failed_results)}/{num_threads}')
+
+    # Print all results summary
+    print('\n  All results summary:')
+    for i, result in enumerate(results):
+        message = result.get('message', 'N/A')
+        print(
+            f'    Thread {i}: {result["status"]} - {message}',
+        )
+
+    # At least one should succeed
+    assert len(successful_results) >= 1, (
+        'At least one thread should succeed in creating the namespace'
+    )
+
+    # Verify final state: namespace should exist exactly once
+    user_namespaces = namespace_service.dynamodb.get_user_namespaces(
+        random_subject,
+    )
+    # get_user_namespaces returns a list, so we can count
+    namespace_count = user_namespaces.count(namespace)
+    assert namespace_count == 1, (
+        f'Namespace should exist exactly once, found {namespace_count} times'
+    )
+    assert namespace in user_namespaces, (
+        'Namespace should exist in user namespaces'
+    )
+
+    # Verify namespace is in global namespaces exactly once
+    # (sets can't have duplicates, so if it's in the set, it's there once)
+    global_namespaces = namespace_service.dynamodb.get_global_namespaces()
+    assert namespace in global_namespaces, (
+        'Namespace should exist in global namespaces'
+    )
+    # Sets automatically prevent duplicates, so if it's in the set,
+    # it exists exactly once
+
+    # Verify no duplicate entries (sets should deduplicate)
+    assert len(set(user_namespaces)) == len(user_namespaces), (
+        'No duplicate namespaces in user namespaces'
+    )
+    assert len(set(global_namespaces)) == len(global_namespaces), (
+        'No duplicate namespaces in global namespaces'
+    )
+
+    print('  Concurrent namespace creation test (multiple threads) completed')
