@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import queue
 import threading
 from typing import Any
 
@@ -18,6 +19,34 @@ from web_service_v3.services import NamespaceService
 # ============================================================================
 
 EXPECTED_NAMESPACE_LENGTH = 15  # 'ns-' + 12 chars
+
+# ============================================================================
+# Helper Functions
+# ============================================================================
+
+
+def _collect_queue_results(
+    results_queue: queue.Queue[dict[str, Any]],
+    errors_queue: queue.Queue[Exception],
+) -> tuple[list[dict[str, Any]], list[Exception]]:
+    """Collect results from thread-safe queues.
+
+    Args:
+        results_queue: Queue containing result dictionaries
+        errors_queue: Queue containing exceptions
+
+    Returns:
+        Tuple of (results list, errors list)
+    """
+    results = []
+    while not results_queue.empty():
+        results.append(results_queue.get())
+    errors = []
+    while not errors_queue.empty():
+        errors.append(errors_queue.get())
+    return results, errors
+
+
 EXPECTED_TOPICS_COUNT_2 = 2
 
 # ============================================================================
@@ -696,8 +725,8 @@ def test_concurrent_namespace_creation_same_user(
 
     # Number of concurrent operations
     num_threads = 10
-    results: list[dict[str, Any]] = []
-    errors: list[Exception] = []
+    results_queue: queue.Queue[dict[str, Any]] = queue.Queue()
+    errors_queue: queue.Queue[Exception] = queue.Queue()
     threads: list[threading.Thread] = []
 
     def create_namespace_thread(thread_id: int) -> None:
@@ -707,14 +736,20 @@ def test_concurrent_namespace_creation_same_user(
                 subject=random_subject,
                 namespace=namespace,
             )
-            results.append(result)
+            results_queue.put(result)
             print(f'  Thread {thread_id} result:')
             print(f'    Status: {result["status"]}')
             print(f'    Message: {result.get("message", "N/A")}')
             if result.get('status') == 'success' and 'namespaces' in result:
                 print(f'    Namespaces: {result["namespaces"]}')
         except Exception as e:
-            errors.append(e)
+            errors_queue.put(e)
+            results_queue.put(
+                {
+                    'status': 'failure',
+                    'message': f'Exception: {e}',
+                },
+            )
             print(f'  Thread {thread_id} error: {e}')
 
     # Start all threads
@@ -730,6 +765,9 @@ def test_concurrent_namespace_creation_same_user(
     for thread in threads:
         thread.join()
 
+    # Collect results from queues
+    results, errors = _collect_queue_results(results_queue, errors_queue)
+
     # Check for errors
     if errors:
         print(f'  Errors occurred: {errors}')
@@ -738,16 +776,12 @@ def test_concurrent_namespace_creation_same_user(
     assert len(results) == num_threads, 'All threads should complete'
 
     # Count successes and failures
-    successful_results = [
-        r for r in results if r.get('status') == 'success'
-    ]
-    failed_results = [
-        r for r in results if r.get('status') == 'failure'
-    ]
+    successful_results = [r for r in results if r.get('status') == 'success']
+    failed_results = [r for r in results if r.get('status') == 'failure']
 
     print(f'  Successful calls: {len(successful_results)}/{num_threads}')
     print(f'  Failed calls: {len(failed_results)}/{num_threads}')
-    
+
     # Print all results summary
     print('\n  All results summary:')
     for i, result in enumerate(results):
@@ -804,8 +838,8 @@ def test_concurrent_namespace_creation_multiple_threads(
 
     # Number of concurrent operations (10+ as specified)
     num_threads = 15
-    results: list[dict[str, Any]] = []
-    errors: list[Exception] = []
+    results_queue: queue.Queue[dict[str, Any]] = queue.Queue()
+    errors_queue: queue.Queue[Exception] = queue.Queue()
     threads: list[threading.Thread] = []
 
     def create_namespace_thread(thread_id: int) -> None:
@@ -815,14 +849,20 @@ def test_concurrent_namespace_creation_multiple_threads(
                 subject=random_subject,
                 namespace=namespace,
             )
-            results.append(result)
+            results_queue.put(result)
             print(f'  Thread {thread_id} result:')
             print(f'    Status: {result["status"]}')
             print(f'    Message: {result.get("message", "N/A")}')
             if result.get('status') == 'success' and 'namespaces' in result:
                 print(f'    Namespaces: {result["namespaces"]}')
         except Exception as e:
-            errors.append(e)
+            errors_queue.put(e)
+            results_queue.put(
+                {
+                    'status': 'failure',
+                    'message': f'Exception: {e}',
+                },
+            )
             print(f'  Thread {thread_id} error: {e}')
 
     # Start all threads
@@ -838,6 +878,9 @@ def test_concurrent_namespace_creation_multiple_threads(
     for thread in threads:
         thread.join()
 
+    # Collect results from queues
+    results, errors = _collect_queue_results(results_queue, errors_queue)
+
     # Check for errors
     if errors:
         print(f'  Errors occurred: {errors}')
@@ -846,16 +889,12 @@ def test_concurrent_namespace_creation_multiple_threads(
     assert len(results) == num_threads, 'All threads should complete'
 
     # Count successes and failures
-    successful_results = [
-        r for r in results if r.get('status') == 'success'
-    ]
-    failed_results = [
-        r for r in results if r.get('status') == 'failure'
-    ]
+    successful_results = [r for r in results if r.get('status') == 'success']
+    failed_results = [r for r in results if r.get('status') == 'failure']
 
     print(f'  Successful calls: {len(successful_results)}/{num_threads}')
     print(f'  Failed calls: {len(failed_results)}/{num_threads}')
-    
+
     # Print all results summary
     print('\n  All results summary:')
     for i, result in enumerate(results):

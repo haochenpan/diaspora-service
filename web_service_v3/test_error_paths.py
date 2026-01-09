@@ -1094,6 +1094,8 @@ def test_create_key_iam_fails() -> None:
 
     mock_namespace = MagicMock(spec=NamespaceService)
     mock_namespace.dynamodb = MagicMock()
+    # Mock get_key to return None (no existing key)
+    mock_namespace.dynamodb.get_key.return_value = None
 
     web_service = WebService(
         iam_service=mock_iam,
@@ -1127,6 +1129,8 @@ def test_create_key_dynamodb_storage_fails() -> None:
 
     mock_namespace = MagicMock(spec=NamespaceService)
     mock_namespace.dynamodb = MagicMock()
+    # Mock get_key to return None (no existing key)
+    mock_namespace.dynamodb.get_key.return_value = None
     # Mock store_key to raise exception
     mock_namespace.dynamodb.store_key.side_effect = Exception(
         'DynamoDB write failed',

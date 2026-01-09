@@ -6,6 +6,7 @@ import contextlib
 import json
 import logging
 import os
+import queue
 import threading
 import time
 import warnings
@@ -37,6 +38,142 @@ warnings.filterwarnings(
 # ============================================================================
 
 EXPECTED_TOPICS_COUNT = 2
+
+# ============================================================================
+# Helper Functions
+# ============================================================================
+
+
+def _collect_queue_results(
+    results_queue: queue.Queue[dict[str, Any]],
+    errors_queue: queue.Queue[Exception],
+) -> tuple[list[dict[str, Any]], list[Exception]]:
+    """Collect results from thread-safe queues.
+
+    Args:
+        results_queue: Queue containing result dictionaries
+        errors_queue: Queue containing exceptions
+
+    Returns:
+        Tuple of (results list, errors list)
+    """
+    results = []
+    while not results_queue.empty():
+        results.append(results_queue.get())
+    errors = []
+    while not errors_queue.empty():
+        errors.append(errors_queue.get())
+    return results, errors
+
+
+def _verify_user_deletion_cleanup(
+    web_service: WebService,
+    iam_service: IAMService,
+    subject: str,
+    namespace: str,
+    topic: str,
+) -> None:
+    """Verify all user resources are cleaned up after deletion."""
+    stored_key_after = web_service.namespace_service.dynamodb.get_key(
+        subject,
+    )
+    assert stored_key_after is None, 'Key should be deleted from DynamoDB'
+    topics_after = web_service.namespace_service.dynamodb.get_namespace_topics(
+        namespace,
+    )
+    assert topic not in topics_after, 'Topic should be deleted'
+    user_namespaces = (
+        web_service.namespace_service.dynamodb.get_user_namespaces(subject)
+    )
+    assert namespace not in user_namespaces, (
+        'Namespace should be deleted from user namespaces'
+    )
+    try:
+        iam_service.iam.get_user(UserName=subject)
+        iam_user_exists = True
+    except iam_service.iam.exceptions.NoSuchEntityException:
+        iam_user_exists = False
+    assert not iam_user_exists, 'IAM user should be deleted'
+
+
+def _verify_existing_key_results(
+    successful_results: list[dict[str, Any]],
+    initial_access_key: str,
+    initial_secret_key: str,
+) -> None:
+    """Verify all results return the same existing key."""
+    for result in successful_results:
+        assert result['status'] == 'success'
+        assert result['access_key'] == initial_access_key
+        assert result['secret_key'] == initial_secret_key
+        assert result.get('fresh') is False
+        assert 'already exists' in result['message'].lower()
+
+
+def _verify_key_unchanged(
+    web_service: WebService,
+    iam_service: IAMService,
+    subject: str,
+    initial_keys: dict[str, Any],
+    initial_iam_key_count: int,
+) -> None:
+    """Verify no new IAM keys were created and DynamoDB key unchanged."""
+    try:
+        final_iam_keys = iam_service.iam.list_access_keys(
+            UserName=subject,
+        )['AccessKeyMetadata']
+        final_iam_key_count = len(final_iam_keys)
+        print(
+            f'  IAM keys count: {final_iam_key_count} '
+            f'(initial: {initial_iam_key_count})',
+        )
+        assert final_iam_key_count == initial_iam_key_count
+    except iam_service.iam.exceptions.NoSuchEntityException:
+        pass
+    stored_key = web_service.namespace_service.dynamodb.get_key(subject)
+    assert stored_key is not None
+    assert stored_key['access_key'] == initial_keys['access_key']
+    assert stored_key['secret_key'] == initial_keys['secret_key']
+
+
+def _verify_concurrent_key_creation_results(
+    results: list[dict[str, Any]],
+    num_threads: int,
+    web_service: WebService,
+    iam_service: IAMService,
+    subject: str,
+) -> None:
+    """Verify results from concurrent key creation."""
+    successful_results = [r for r in results if r.get('status') == 'success']
+    print(f'  Successful calls: {len(successful_results)}/{num_threads}')
+    stored_key = web_service.namespace_service.dynamodb.get_key(subject)
+    assert stored_key is not None, 'Key should exist in DynamoDB'
+    stored_access_key = stored_key['access_key']
+    print(f'  DynamoDB key: {stored_access_key}')
+    if successful_results:
+        result_access_keys = [r['access_key'] for r in successful_results]
+        print(f'  Result access keys: {result_access_keys}')
+        for result in successful_results:
+            assert result['access_key'] == stored_access_key, (
+                'All results should have the same access key '
+                '(atomic operation)'
+            )
+            assert 'access_key' in result
+            assert len(result['access_key']) > 0
+            assert result['status'] == 'success'
+    try:
+        iam_keys = iam_service.iam.list_access_keys(UserName=subject)
+        iam_key_count = len(iam_keys['AccessKeyMetadata'])
+        assert iam_key_count == 1, (
+            f'Should have exactly 1 IAM key, got {iam_key_count}'
+        )
+        assert stored_key['access_key'] in [
+            k['AccessKeyId'] for k in iam_keys['AccessKeyMetadata']
+        ], 'DynamoDB key should exist in IAM'
+    except iam_service.iam.exceptions.NoSuchEntityException:
+        # User might not exist yet, which is fine
+        pass
+
 
 # ============================================================================
 # Test Fixtures
@@ -523,18 +660,24 @@ def test_concurrent_user_deletion(
 
     # Number of concurrent operations
     num_threads = 10
-    results: list[dict[str, Any]] = []
-    errors: list[Exception] = []
+    results_queue: queue.Queue[dict[str, Any]] = queue.Queue()
+    errors_queue: queue.Queue[Exception] = queue.Queue()
     threads: list[threading.Thread] = []
 
     def delete_user_thread(thread_id: int) -> None:
         """Delete user in a thread."""
         try:
             result = web_service.delete_user(random_subject)
-            results.append(result)
+            results_queue.put(result)
             print(f'  Thread {thread_id} result: {result["status"]}')
         except Exception as e:
-            errors.append(e)
+            errors_queue.put(e)
+            results_queue.put(
+                {
+                    'status': 'failure',
+                    'message': f'Exception: {e}',
+                },
+            )
             print(f'  Thread {thread_id} error: {e}')
 
     # Start all threads
@@ -546,6 +689,9 @@ def test_concurrent_user_deletion(
     # Wait for all threads to complete
     for thread in threads:
         thread.join()
+
+    # Collect results from queues
+    results, errors = _collect_queue_results(results_queue, errors_queue)
 
     # Check for errors
     if errors:
@@ -561,48 +707,19 @@ def test_concurrent_user_deletion(
 
     # Assertions
     assert len(results) == num_threads, 'All threads should complete'
-    successful_results = [
-        r for r in results if r.get('status') == 'success'
-    ]
+    successful_results = [r for r in results if r.get('status') == 'success']
     # All deletions should succeed (idempotent behavior)
     # At least one should succeed, others may succeed or fail gracefully
-    assert len(successful_results) >= 1, (
-        'At least one deletion should succeed'
-    )
+    assert len(successful_results) >= 1, 'At least one deletion should succeed'
 
     # Verify all resources are cleaned up
-    stored_key_after = web_service.namespace_service.dynamodb.get_key(
+    _verify_user_deletion_cleanup(
+        web_service,
+        iam_service,
         random_subject,
+        namespace,
+        topic,
     )
-    assert stored_key_after is None, 'Key should be deleted from DynamoDB'
-
-    topics_after = (
-        web_service.namespace_service.dynamodb.get_namespace_topics(
-            namespace,
-        )
-    )
-    assert topic not in topics_after, 'Topic should be deleted'
-
-    # Verify user namespaces are cleaned up
-    user_namespaces = (
-        web_service.namespace_service.dynamodb.get_user_namespaces(
-            random_subject,
-        )
-    )
-    assert namespace not in user_namespaces, (
-        'Namespace should be deleted from user namespaces'
-    )
-
-    # Verify IAM user is deleted (or at least attempted)
-    # Note: IAM deletion might fail if user doesn't exist (idempotent)
-    try:
-        iam_service.iam.get_user(UserName=random_subject)
-        iam_user_exists = True
-    except iam_service.iam.exceptions.NoSuchEntityException:
-        iam_user_exists = False
-
-    # IAM user should be deleted (or already deleted by previous thread)
-    assert not iam_user_exists, 'IAM user should be deleted'
 
 
 @pytest.mark.integration
@@ -612,7 +729,7 @@ def test_user_deletion_during_resource_creation(
     random_subject: str,
     cleanup_user: Any,
 ) -> None:
-    """Test user deletion while creating topics/namespaces (lock prevents race)."""
+    """Test user deletion while creating topics/namespaces."""
     print(
         f'\n[test_user_deletion_during_resource_creation] '
         f'Testing with subject: {random_subject}',
@@ -631,9 +748,9 @@ def test_user_deletion_during_resource_creation(
     assert create_key_result['status'] == 'success'
 
     deletion_complete = threading.Event()
-    creation_results: list[dict[str, Any]] = []
+    creation_results_queue: queue.Queue[dict[str, Any]] = queue.Queue()
     deletion_result: dict[str, Any] | None = None
-    creation_errors: list[Exception] = []
+    creation_errors_queue: queue.Queue[Exception] = queue.Queue()
 
     def create_resources_thread() -> None:
         """Create resources in a thread."""
@@ -645,10 +762,10 @@ def test_user_deletion_during_resource_creation(
                 namespace,
                 topic,
             )
-            creation_results.append(result)
+            creation_results_queue.put(result)
             print(f'  Creation thread result: {result["status"]}')
         except Exception as e:
-            creation_errors.append(e)
+            creation_errors_queue.put(e)
             print(f'  Creation thread error: {e}')
 
     def delete_user_thread() -> None:
@@ -679,11 +796,15 @@ def test_user_deletion_during_resource_creation(
     deletion_thread.join()
     creation_thread.join()
 
+    # Collect creation results from queue
+    creation_results, _ = _collect_queue_results(
+        creation_results_queue,
+        creation_errors_queue,
+    )
+
     # Assertions
     assert deletion_result is not None, 'Deletion should complete'
-    assert deletion_result['status'] == 'success', (
-        'Deletion should succeed'
-    )
+    assert deletion_result['status'] == 'success', 'Deletion should succeed'
 
     # Verify resources are cleaned up
     stored_key_after = web_service.namespace_service.dynamodb.get_key(
@@ -720,7 +841,6 @@ def test_user_deletion_partial_failures(
     # Create user first
     create_result = web_service.create_user(random_subject)
     assert create_result['status'] == 'success'
-    namespace = create_result['namespace']
 
     # Create a key
     create_key_result = web_service.create_key(random_subject)
@@ -744,11 +864,9 @@ def test_user_deletion_partial_failures(
         assert len(result['message']) > 0
     else:
         # If it succeeds, verify resources are cleaned up
-        stored_key_after = web_service.namespace_service.dynamodb.get_key(
-            random_subject,
-        )
         # Key might be deleted or might not exist
         # The important thing is that the operation completed
+        _ = web_service.namespace_service.dynamodb.get_key(random_subject)
 
 
 @pytest.mark.integration
@@ -777,8 +895,8 @@ def test_concurrent_topic_creation(
 
     # Number of concurrent operations
     num_threads = 10
-    results: list[dict[str, Any]] = []
-    errors: list[Exception] = []
+    results_queue: queue.Queue[dict[str, Any]] = queue.Queue()
+    errors_queue: queue.Queue[Exception] = queue.Queue()
     threads: list[threading.Thread] = []
 
     def create_topic_thread(thread_id: int) -> None:
@@ -789,10 +907,16 @@ def test_concurrent_topic_creation(
                 namespace,
                 topic,
             )
-            results.append(result)
+            results_queue.put(result)
             print(f'  Thread {thread_id} result: {result["status"]}')
         except Exception as e:
-            errors.append(e)
+            errors_queue.put(e)
+            results_queue.put(
+                {
+                    'status': 'failure',
+                    'message': f'Exception: {e}',
+                },
+            )
             print(f'  Thread {thread_id} error: {e}')
 
     # Start all threads
@@ -804,6 +928,9 @@ def test_concurrent_topic_creation(
     # Wait for all threads to complete
     for thread in threads:
         thread.join()
+
+    # Collect results from queues
+    results, errors = _collect_queue_results(results_queue, errors_queue)
 
     # Check for errors
     if errors:
@@ -819,24 +946,24 @@ def test_concurrent_topic_creation(
 
     # Assertions
     assert len(results) == num_threads, 'All threads should complete'
-    successful_results = [
-        r for r in results if r.get('status') == 'success'
-    ]
+    successful_results = [r for r in results if r.get('status') == 'success']
     # All creations should succeed (idempotent behavior)
     assert len(successful_results) == num_threads, (
         'All topic creations should succeed (idempotent)'
     )
 
     # Verify topic exists exactly once in DynamoDB
-    topics_after = (
-        web_service.namespace_service.dynamodb.get_namespace_topics(
-            namespace,
-        )
+    topics_after = web_service.namespace_service.dynamodb.get_namespace_topics(
+        namespace,
     )
-    topic_count = topics_after.count(topic) if isinstance(
-        topics_after,
-        list,
-    ) else (1 if topic in topics_after else 0)
+    topic_count = (
+        topics_after.count(topic)
+        if isinstance(
+            topics_after,
+            list,
+        )
+        else (1 if topic in topics_after else 0)
+    )
     assert topic_count == 1, (
         f'Topic should exist exactly once, found {topic_count} times'
     )
@@ -844,7 +971,6 @@ def test_concurrent_topic_creation(
 
     # Verify all results have the same topic list (atomic operation)
     if successful_results:
-        first_topics = successful_results[0].get('topics', [])
         for result in successful_results:
             result_topics = result.get('topics', [])
             assert topic in result_topics, (
@@ -884,8 +1010,8 @@ def test_concurrent_topic_creation_existing_topic(
 
     # Number of concurrent operations
     num_threads = 10
-    results: list[dict[str, Any]] = []
-    errors: list[Exception] = []
+    results_queue: queue.Queue[dict[str, Any]] = queue.Queue()
+    errors_queue: queue.Queue[Exception] = queue.Queue()
     threads: list[threading.Thread] = []
 
     def create_topic_thread(thread_id: int) -> None:
@@ -896,10 +1022,16 @@ def test_concurrent_topic_creation_existing_topic(
                 namespace,
                 topic,
             )
-            results.append(result)
+            results_queue.put(result)
             print(f'  Thread {thread_id} result: {result["status"]}')
         except Exception as e:
-            errors.append(e)
+            errors_queue.put(e)
+            results_queue.put(
+                {
+                    'status': 'failure',
+                    'message': f'Exception: {e}',
+                },
+            )
             print(f'  Thread {thread_id} error: {e}')
 
     # Start all threads
@@ -911,6 +1043,9 @@ def test_concurrent_topic_creation_existing_topic(
     # Wait for all threads to complete
     for thread in threads:
         thread.join()
+
+    # Collect results from queues
+    results, errors = _collect_queue_results(results_queue, errors_queue)
 
     # Check for errors
     if errors:
@@ -926,9 +1061,7 @@ def test_concurrent_topic_creation_existing_topic(
 
     # Assertions
     assert len(results) == num_threads, 'All threads should complete'
-    successful_results = [
-        r for r in results if r.get('status') == 'success'
-    ]
+    successful_results = [r for r in results if r.get('status') == 'success']
     # All should succeed (idempotent behavior)
     assert len(successful_results) == num_threads, (
         'All topic creations should succeed (idempotent)'
@@ -941,15 +1074,17 @@ def test_concurrent_topic_creation_existing_topic(
         ), 'All results should indicate topic already exists'
 
     # Verify topic still exists exactly once
-    topics_after = (
-        web_service.namespace_service.dynamodb.get_namespace_topics(
-            namespace,
-        )
+    topics_after = web_service.namespace_service.dynamodb.get_namespace_topics(
+        namespace,
     )
-    topic_count = topics_after.count(topic) if isinstance(
-        topics_after,
-        list,
-    ) else (1 if topic in topics_after else 0)
+    topic_count = (
+        topics_after.count(topic)
+        if isinstance(
+            topics_after,
+            list,
+        )
+        else (1 if topic in topics_after else 0)
+    )
     assert topic_count == 1, (
         f'Topic should exist exactly once, found {topic_count} times'
     )
@@ -994,8 +1129,8 @@ def test_concurrent_topic_deletion(
 
     # Number of concurrent operations
     num_threads = 10
-    results: list[dict[str, Any]] = []
-    errors: list[Exception] = []
+    results_queue: queue.Queue[dict[str, Any]] = queue.Queue()
+    errors_queue: queue.Queue[Exception] = queue.Queue()
     threads: list[threading.Thread] = []
 
     def delete_topic_thread(thread_id: int) -> None:
@@ -1006,10 +1141,17 @@ def test_concurrent_topic_deletion(
                 namespace,
                 topic,
             )
-            results.append(result)
+            results_queue.put(result)
             print(f'  Thread {thread_id} result: {result["status"]}')
         except Exception as e:
-            errors.append(e)
+            errors_queue.put(e)
+            # Put error result to maintain count
+            results_queue.put(
+                {
+                    'status': 'failure',
+                    'message': f'Exception: {e}',
+                },
+            )
             print(f'  Thread {thread_id} error: {e}')
 
     # Start all threads
@@ -1021,6 +1163,9 @@ def test_concurrent_topic_deletion(
     # Wait for all threads to complete
     for thread in threads:
         thread.join()
+
+    # Collect results from queues
+    results, errors = _collect_queue_results(results_queue, errors_queue)
 
     # Check for errors
     if errors:
@@ -1035,24 +1180,26 @@ def test_concurrent_topic_deletion(
         )
 
     # Assertions
-    assert len(results) == num_threads, 'All threads should complete'
-    successful_results = [
-        r for r in results if r.get('status') == 'success'
-    ]
+    assert len(results) == num_threads, (
+        f'All threads should complete (got {len(results)}/{num_threads})'
+    )
+    successful_results = [r for r in results if r.get('status') == 'success']
     # All deletions should succeed (idempotent behavior)
     assert len(successful_results) == num_threads, (
-        'All topic deletions should succeed (idempotent)'
+        f'All {num_threads} topic deletions should succeed '
+        f'(got {len(successful_results)} successful, '
+        f'{len(errors)} errors)'
     )
 
-    # Verify topic is deleted from DynamoDB
-    topics_after = (
-        web_service.namespace_service.dynamodb.get_namespace_topics(
-            namespace,
-        )
+    # Verify topic is deleted from DynamoDB (most important assertion)
+    # This is what matters - the topic should be deleted regardless of
+    # how many threads succeeded
+    topics_after = web_service.namespace_service.dynamodb.get_namespace_topics(
+        namespace,
     )
     assert topic not in topics_after, 'Topic should be deleted from namespace'
 
-    # Verify all results indicate topic was deleted
+    # Verify all successful results indicate topic was deleted
     for result in successful_results:
         assert topic not in result.get('topics', []), (
             'All results should indicate topic was deleted'
@@ -1081,9 +1228,9 @@ def test_topic_deletion_during_creation(
     topic = 'test-topic-delete-during-create'
 
     deletion_complete = threading.Event()
-    creation_results: list[dict[str, Any]] = []
+    creation_results_queue: queue.Queue[dict[str, Any]] = queue.Queue()
     deletion_result: dict[str, Any] | None = None
-    creation_errors: list[Exception] = []
+    creation_errors_queue: queue.Queue[Exception] = queue.Queue()
 
     def create_topic_thread() -> None:
         """Create topic in a thread."""
@@ -1093,10 +1240,10 @@ def test_topic_deletion_during_creation(
                 namespace,
                 topic,
             )
-            creation_results.append(result)
+            creation_results_queue.put(result)
             print(f'  Creation thread result: {result["status"]}')
         except Exception as e:
-            creation_errors.append(e)
+            creation_errors_queue.put(e)
             print(f'  Creation thread error: {e}')
 
     def delete_topic_thread() -> None:
@@ -1131,6 +1278,12 @@ def test_topic_deletion_during_creation(
     deletion_thread.join()
     creation_thread.join()
 
+    # Collect creation results from queue
+    creation_results, _ = _collect_queue_results(
+        creation_results_queue,
+        creation_errors_queue,
+    )
+
     # Assertions
     assert deletion_result is not None, 'Deletion should complete'
     # Deletion might succeed or fail depending on whether topic exists
@@ -1138,14 +1291,8 @@ def test_topic_deletion_during_creation(
         'Deletion should complete with a status'
     )
 
-    # Verify final state - topic should not exist
-    topics_after = (
-        web_service.namespace_service.dynamodb.get_namespace_topics(
-            namespace,
-        )
-    )
-    # Topic might not exist if deletion succeeded, or might exist if
-    # creation happened first - the lock ensures atomicity
+    # Verify final state - topic might not exist if deletion succeeded,
+    # or might exist if creation happened first - the lock ensures atomicity
     if creation_results:
         print(
             f'  Creation result: {creation_results[0]["status"]} - '
@@ -1405,18 +1552,24 @@ def test_concurrent_key_creation_no_existing_key(
 
     # Number of concurrent operations
     num_threads = 20
-    results: list[dict[str, Any]] = []
-    errors: list[Exception] = []
+    results_queue: queue.Queue[dict[str, Any]] = queue.Queue()
+    errors_queue: queue.Queue[Exception] = queue.Queue()
     threads: list[threading.Thread] = []
 
     def create_key_thread(thread_id: int) -> None:
         """Create key in a thread."""
         try:
             result = web_service.create_key(random_subject)
-            results.append(result)
+            results_queue.put(result)
             print(f'  Thread {thread_id} result: {result["status"]}')
         except Exception as e:
-            errors.append(e)
+            errors_queue.put(e)
+            results_queue.put(
+                {
+                    'status': 'failure',
+                    'message': f'Exception: {e}',
+                },
+            )
             print(f'  Thread {thread_id} error: {e}')
 
     # Start all threads
@@ -1429,59 +1582,22 @@ def test_concurrent_key_creation_no_existing_key(
     for thread in threads:
         thread.join()
 
+    # Collect results from queues
+    results, errors = _collect_queue_results(results_queue, errors_queue)
+
     # Check for errors
     if errors:
         print(f'  Errors occurred: {errors}')
         # Some errors might be expected (e.g., IAM key limit)
 
-    # Verify all calls succeeded
-    successful_results = [r for r in results if r.get('status') == 'success']
-    print(f'  Successful calls: {len(successful_results)}/{num_threads}')
-
-    # Verify final state has exactly 1 key in DynamoDB
-    stored_key = web_service.namespace_service.dynamodb.get_key(random_subject)
-    assert stored_key is not None, 'Key should exist in DynamoDB'
-    stored_access_key = stored_key['access_key']
-    print(f'  DynamoDB key: {stored_access_key}')
-
-    # With atomic locking, all successful results should have the same key
-    if successful_results:
-        result_access_keys = [r['access_key'] for r in successful_results]
-        print(f'  Result access keys: {result_access_keys}')
-
-        # All results should have the same access key (atomic operation)
-        for result in successful_results:
-            assert result['access_key'] == stored_access_key, (
-                'All results should have the same access key '
-                '(atomic operation)'
-            )
-            assert 'access_key' in result
-            assert len(result['access_key']) > 0
-            assert result['status'] == 'success'
-
-    # Check IAM keys
-    # With atomic locking, should have exactly 1 IAM key
-    try:
-        iam_keys = iam_service.iam.list_access_keys(
-            UserName=random_subject,
-        )['AccessKeyMetadata']
-        iam_key_count = len(iam_keys)
-        print(f'  IAM keys count: {iam_key_count}')
-        
-        # Should have exactly 1 key (atomic operation prevents duplicates)
-        assert iam_key_count == 1, (
-            f'Should have exactly 1 IAM key with atomic locking, '
-            f'got {iam_key_count}'
-        )
-        
-        # The key should match what's in DynamoDB
-        iam_access_keys = [k['AccessKeyId'] for k in iam_keys]
-        assert stored_key['access_key'] in iam_access_keys, (
-            'DynamoDB key should exist in IAM'
-        )
-    except iam_service.iam.exceptions.NoSuchEntityException:
-        # User might not exist yet, which is fine
-        pass
+    # Verify all calls succeeded and results are consistent
+    _verify_concurrent_key_creation_results(
+        results,
+        num_threads,
+        web_service,
+        iam_service,
+        random_subject,
+    )
 
     print('  Concurrent key creation test (no existing key) completed')
 
@@ -1520,18 +1636,24 @@ def test_concurrent_key_creation_existing_key(
 
     # Number of concurrent operations
     num_threads = 20
-    results: list[dict[str, Any]] = []
-    errors: list[Exception] = []
+    results_queue: queue.Queue[dict[str, Any]] = queue.Queue()
+    errors_queue: queue.Queue[Exception] = queue.Queue()
     threads: list[threading.Thread] = []
 
     def create_key_thread(thread_id: int) -> None:
         """Create key in a thread."""
         try:
             result = web_service.create_key(random_subject)
-            results.append(result)
+            results_queue.put(result)
             print(f'  Thread {thread_id} result: {result["status"]}')
         except Exception as e:
-            errors.append(e)
+            errors_queue.put(e)
+            results_queue.put(
+                {
+                    'status': 'failure',
+                    'message': f'Exception: {e}',
+                },
+            )
             print(f'  Thread {thread_id} error: {e}')
 
     # Start all threads
@@ -1544,6 +1666,9 @@ def test_concurrent_key_creation_existing_key(
     for thread in threads:
         thread.join()
 
+    # Collect results from queues
+    results, errors = _collect_queue_results(results_queue, errors_queue)
+
     # Check for errors
     if errors:
         raise Exception(f'Errors occurred: {errors}')
@@ -1551,51 +1676,22 @@ def test_concurrent_key_creation_existing_key(
     # Verify all calls succeeded
     assert len(results) == num_threads, 'All threads should complete'
     successful_results = [r for r in results if r.get('status') == 'success']
-    assert len(successful_results) == num_threads, (
-        'All calls should succeed'
-    )
+    assert len(successful_results) == num_threads, 'All calls should succeed'
 
     # All results should return the same existing key (fresh=False)
-    for result in successful_results:
-        assert result['status'] == 'success'
-        assert result['access_key'] == initial_access_key, (
-            'All results should return the same existing key'
-        )
-        assert result['secret_key'] == initial_secret_key, (
-            'All results should return the same existing secret key'
-        )
-        assert result.get('fresh') is False, (
-            'All results should have fresh=False (key existed)'
-        )
-        assert 'already exists' in result['message'].lower(), (
-            'Message should indicate key already exists'
-        )
-
-    # Verify no new IAM keys were created
-    try:
-        final_iam_keys = iam_service.iam.list_access_keys(
-            UserName=random_subject,
-        )['AccessKeyMetadata']
-        final_iam_key_count = len(final_iam_keys)
-        print(
-            f'  IAM keys count: {final_iam_key_count} '
-            f'(initial: {initial_iam_key_count})',
-        )
-        assert final_iam_key_count == initial_iam_key_count, (
-            'No new IAM keys should be created when key exists'
-        )
-    except iam_service.iam.exceptions.NoSuchEntityException:
-        # Should not happen if initial key was created
-        pass
-
-    # Verify DynamoDB still has the same key
-    stored_key = web_service.namespace_service.dynamodb.get_key(random_subject)
-    assert stored_key is not None, 'Key should exist in DynamoDB'
-    assert stored_key['access_key'] == initial_access_key, (
-        'DynamoDB key should be unchanged'
+    _verify_existing_key_results(
+        successful_results,
+        initial_access_key,
+        initial_secret_key,
     )
-    assert stored_key['secret_key'] == initial_secret_key, (
-        'DynamoDB secret key should be unchanged'
+
+    # Verify no new IAM keys were created and DynamoDB unchanged
+    _verify_key_unchanged(
+        web_service,
+        iam_service,
+        random_subject,
+        {'access_key': initial_access_key, 'secret_key': initial_secret_key},
+        initial_iam_key_count,
     )
 
     print('  Concurrent key creation test (existing key) completed')

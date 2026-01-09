@@ -954,7 +954,6 @@ class NamespaceService:
         """
         return f'ns-{subject.replace("-", "")[-12:]}'
 
-
     def create_namespace(
         self,
         subject: str,
@@ -1351,8 +1350,7 @@ class WebService:
                 return {
                     'status': 'failure',
                     'message': (
-                        f'Failed to delete IAM user: '
-                        f'{iam_result["message"]}'
+                        f'Failed to delete IAM user: {iam_result["message"]}'
                     ),
                 }
 
@@ -1360,7 +1358,6 @@ class WebService:
                 'status': 'success',
                 'message': f'User {subject} deleted',
             }
-
 
     def create_key(self, subject: str) -> dict[str, Any]:
         """Create an access key for a user.
