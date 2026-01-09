@@ -399,8 +399,7 @@ def test_delete_user_deletes_cached_key(
         random_subject,
     )
     assert stored_key_after is None, (
-        'Cached key should be deleted from DynamoDB '
-        'when user is deleted'
+        'Cached key should be deleted from DynamoDB when user is deleted'
     )
 
 
