@@ -8,7 +8,6 @@ error conditions, input validation, and edge cases.
 from __future__ import annotations
 
 import os
-
 from unittest.mock import MagicMock
 from unittest.mock import patch
 
@@ -20,6 +19,7 @@ from web_service_v3.main import extract_val
 # ============================================================================
 # Test Fixtures
 # ============================================================================
+
 
 @pytest.fixture
 def mock_auth_manager() -> MagicMock:
@@ -60,7 +60,6 @@ def mock_diaspora_service(
         service.auth = mock_auth_manager
         service.web_service = mock_web_service
         return service
-
 
 
 @pytest.fixture
@@ -181,7 +180,6 @@ async def test_extract_val_prefers_header_over_body(
     )
 
     assert result == header_subject
-
 
 
 # ============================================================================

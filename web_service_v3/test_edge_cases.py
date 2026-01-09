@@ -248,3 +248,61 @@ def test_generate_default_boundary_subjects(
     assert len(namespace3) == EXPECTED_NAMESPACE_LENGTH_STANDARD
     # Should use last 12 characters
     assert namespace3[3:] == long_subject[-12:]
+
+
+# ============================================================================
+# Topic Name Length Boundary Tests
+# ============================================================================
+
+
+def test_validate_name_topic_length_boundaries(
+    namespace_service: NamespaceService,
+) -> None:
+    """Test validate_name with topic name length boundaries (3-32 chars)."""
+    # Too short: 2 chars
+    result = namespace_service.validate_name('ab')
+    assert result is not None
+    assert result['status'] == 'failure'
+    assert 'between' in result['message'].lower()
+
+    # Minimum: 3 chars
+    result = namespace_service.validate_name('abc')
+    assert result is None  # Valid
+
+    # Maximum: 32 chars
+    max_name = 'a' * 32
+    result = namespace_service.validate_name(max_name)
+    assert result is None  # Valid
+
+    # Too long: 33 chars
+    too_long = 'a' * 33
+    result = namespace_service.validate_name(too_long)
+    assert result is not None
+    assert result['status'] == 'failure'
+    assert 'between' in result['message'].lower()
+
+
+def test_validate_name_very_long_string(
+    namespace_service: NamespaceService,
+) -> None:
+    """Test validate_name with very long strings beyond max length."""
+    # Test with extremely long string (1000 chars)
+    very_long = 'a' * 1000
+    result = namespace_service.validate_name(very_long)
+    assert result is not None
+    assert result['status'] == 'failure'
+    assert 'between' in result['message'].lower()
+    assert '32' in result['message']  # Should mention max length
+
+
+def test_validate_name_none_value(
+    namespace_service: NamespaceService,
+) -> None:
+    """Test validate_name with None value (where applicable).
+
+    Note: validate_name expects a string, so None would cause TypeError.
+    This test verifies the behavior when None is passed.
+    """
+    # validate_name expects a string, so None should raise TypeError
+    with pytest.raises((TypeError, AttributeError)):
+        namespace_service.validate_name(None)  # type: ignore[arg-type]

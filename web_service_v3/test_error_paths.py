@@ -19,6 +19,7 @@ from unittest.mock import patch
 import pytest
 from botocore.exceptions import ClientError
 from kafka.errors import KafkaError
+from kafka.errors import KafkaTimeoutError
 
 from web_service_v3.services import DynamoDBService
 from web_service_v3.services import IAMService
@@ -370,6 +371,38 @@ def test_create_topic_all_retries_fail() -> None:
         assert 'after 3 attempts' in result['message']
 
 
+def test_create_topic_timeout_error() -> None:
+    """Test create_topic handles specific KafkaTimeoutError."""
+    kafka_service = KafkaService(
+        bootstrap_servers='test-servers',
+        region='us-east-1',
+    )
+
+    # Mock KafkaAdminClient to raise KafkaTimeoutError
+    with patch(
+        'web_service_v3.services.KafkaAdminClient',
+    ) as mock_admin_class:
+        mock_admin = MagicMock()
+        mock_admin_class.return_value = mock_admin
+
+        # Simulate timeout on all attempts
+        mock_admin.create_topics.side_effect = KafkaTimeoutError(
+            'Request timed out',
+        )
+
+        result = kafka_service.create_topic('test-namespace', 'test-topic')
+
+        assert result is not None
+        assert result['status'] == 'failure'
+        assert 'Failed to create Kafka topic' in result['message']
+        assert 'after 3 attempts' in result['message']
+        # Verify timeout error is included in message
+        assert (
+            'timed out' in result['message'].lower()
+            or 'timeout' in result['message'].lower()
+        )
+
+
 def test_create_topic_bootstrap_servers_none() -> None:
     """Test create_topic returns None when bootstrap_servers is None."""
     kafka_service = KafkaService(
@@ -428,6 +461,47 @@ def test_recreate_topic_delete_fails() -> None:
         assert result is not None
         assert result['status'] == 'failure'
         assert 'Failed to delete topic' in result['message']
+
+
+def test_recreate_topic_delete_fails_create_succeeds() -> None:
+    """Test recreate_topic handles delete failure but create succeeds.
+
+    This edge case tests the scenario where delete fails but create
+    succeeds (unlikely but possible in practice).
+    """
+    kafka_service = KafkaService(
+        bootstrap_servers='test-servers',
+        region='us-east-1',
+    )
+
+    # Mock delete_topic to fail, but create_topic to succeed
+    with (
+        patch.object(
+            kafka_service,
+            'delete_topic',
+        ) as mock_delete,
+        patch.object(
+            kafka_service,
+            'create_topic',
+        ) as mock_create,
+    ):
+        mock_delete.return_value = {
+            'status': 'failure',
+            'message': 'Failed to delete topic',
+        }
+        mock_create.return_value = {
+            'status': 'success',
+            'message': 'Topic created',
+        }
+
+        result = kafka_service.recreate_topic('test-namespace', 'test-topic')
+
+        # Should return failure because delete failed
+        assert result is not None
+        assert result['status'] == 'failure'
+        assert 'Failed to delete topic' in result['message']
+        # Create should not be called if delete fails
+        mock_create.assert_not_called()
 
 
 def test_recreate_topic_create_fails() -> None:
@@ -1201,7 +1275,9 @@ def test_generate_user_policy_edge_cases() -> None:
     assert 'Statement' in policy_short
 
     # Test with subject without dashes
-    subject_no_dashes = '123e4567e89b12d3a456426614174000'
+    subject_no_dashes = (
+        '123e4567e89b12d3a456426614174000'  # pragma: allowlist secret
+    )
     policy_no_dashes = iam_service.generate_user_policy(subject_no_dashes)
     assert 'Version' in policy_no_dashes
     # Should use last 12 chars
