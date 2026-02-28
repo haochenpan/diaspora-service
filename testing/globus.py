@@ -6,7 +6,7 @@ import os
 
 from globus_sdk import ConfidentialAppAuthClient
 
-from common.utils import EnvironmentChecker
+from web_service.utils import EnvironmentChecker
 
 
 def get_access_token() -> str:

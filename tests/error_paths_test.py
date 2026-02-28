@@ -1,4 +1,4 @@
-"""Error path tests for web_service_v3 services.
+"""Error path tests for web_service services.
 
 Most tests use mocks to simulate specific error conditions that are difficult
 to reproduce with real AWS services (e.g., IAM exceptions, network failures).
@@ -6,9 +6,9 @@ Some tests have integration variants that use real AWS services where the
 error conditions can be naturally tested.
 
 To run only unit tests (mocked):
-    pytest web_service_v3/test_error_paths.py
+    pytest web_service/test_error_paths.py
 To run only integration tests:
-    pytest web_service_v3/test_error_paths.py -m integration
+    pytest web_service/test_error_paths.py -m integration
 """
 
 from __future__ import annotations
@@ -21,11 +21,11 @@ from botocore.exceptions import ClientError
 from kafka.errors import KafkaError
 from kafka.errors import KafkaTimeoutError
 
-from web_service_v3.services import DynamoDBService
-from web_service_v3.services import IAMService
-from web_service_v3.services import KafkaService
-from web_service_v3.services import NamespaceService
-from web_service_v3.services import WebService
+from web_service.services import DynamoDBService
+from web_service.services import IAMService
+from web_service.services import KafkaService
+from web_service.services import NamespaceService
+from web_service.services import WebService
 
 # Test constants
 EXPECTED_RETRY_COUNT = 2
@@ -356,7 +356,7 @@ def test_create_topic_all_retries_fail() -> None:
 
     # Mock KafkaAdminClient to fail all attempts
     with patch(
-        'web_service_v3.services.KafkaAdminClient',
+        'web_service.services.KafkaAdminClient',
     ) as mock_admin_class:
         mock_admin = MagicMock()
         mock_admin_class.return_value = mock_admin
@@ -380,7 +380,7 @@ def test_create_topic_timeout_error() -> None:
 
     # Mock KafkaAdminClient to raise KafkaTimeoutError
     with patch(
-        'web_service_v3.services.KafkaAdminClient',
+        'web_service.services.KafkaAdminClient',
     ) as mock_admin_class:
         mock_admin = MagicMock()
         mock_admin_class.return_value = mock_admin
@@ -424,7 +424,7 @@ def test_delete_topic_all_retries_fail() -> None:
 
     # Mock KafkaAdminClient to fail all attempts
     with patch(
-        'web_service_v3.services.KafkaAdminClient',
+        'web_service.services.KafkaAdminClient',
     ) as mock_admin_class:
         mock_admin = MagicMock()
         mock_admin_class.return_value = mock_admin

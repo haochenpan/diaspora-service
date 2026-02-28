@@ -1,4 +1,4 @@
-"""Unit and integration tests for web_service_v3 FastAPI routes (main.py).
+"""Unit and integration tests for web_service FastAPI routes (main.py).
 
 Unit tests use mocks to validate exact response formats.
 Integration tests use real AWS services to verify
@@ -13,8 +13,7 @@ from unittest.mock import patch
 
 import pytest
 
-from web_service_v3.main import DiasporaService
-from web_service_v3.main import extract_val
+from web_service.main import DiasporaService
 
 # ============================================================================
 # Test Fixtures
@@ -44,15 +43,15 @@ def mock_diaspora_service(
     """Create DiasporaService with mocked deps for unit tests."""
     with (
         patch(
-            'web_service_v3.main.AuthManager',
+            'web_service.main.AuthManager',
             return_value=mock_auth_manager,
         ),
-        patch('web_service_v3.main.IAMService'),
-        patch('web_service_v3.main.KafkaService'),
-        patch('web_service_v3.main.DynamoDBService'),
-        patch('web_service_v3.main.NamespaceService'),
+        patch('web_service.main.IAMService'),
+        patch('web_service.main.KafkaService'),
+        patch('web_service.main.DynamoDBService'),
+        patch('web_service.main.NamespaceService'),
         patch(
-            'web_service_v3.main.WebService',
+            'web_service.main.WebService',
             return_value=mock_web_service,
         ),
     ):
@@ -101,85 +100,6 @@ def valid_token() -> str:
     # Note: For real authentication, this would need a valid Globus token
     # For testing, we'll test both authenticated and unauthenticated paths
     return 'Bearer ' + 'a' * 50
-
-
-# ============================================================================
-# Tests for extract_val()
-# ============================================================================
-
-
-@pytest.mark.asyncio
-async def test_extract_val_from_header(
-    valid_subject: str,
-) -> None:
-    """Test extract_val extracts value from header."""
-    extract_func = extract_val('subject')
-
-    # Simulate header value
-    result = await extract_func(
-        header=valid_subject,
-        body=None,
-    )
-
-    assert result == valid_subject
-
-
-@pytest.mark.asyncio
-async def test_extract_val_from_body(
-    valid_subject: str,
-) -> None:
-    """Test extract_val extracts value from body."""
-    extract_func = extract_val('subject')
-
-    # Simulate body value (no header)
-    result = await extract_func(
-        header=None,
-        body=valid_subject,
-    )
-
-    assert result == valid_subject
-
-
-@pytest.mark.asyncio
-async def test_extract_val_missing_value() -> None:
-    """Test extract_val raises error when value is missing."""
-    extract_func = extract_val('subject')
-
-    # Both header and body are None
-    # HTTPException is from fastapi, avoid importing it to prevent
-    # Pydantic dependency issues. Catch Exception and check attributes.
-    with pytest.raises(Exception) as exc_info:  # noqa: PT011
-        await extract_func(
-            header=None,
-            body=None,
-        )
-
-    # Check it's an HTTPException-like exception with status_code 400
-    # The exception should have status_code and detail attributes
-    assert hasattr(exc_info.value, 'status_code')
-    http_400_bad_request = 400
-    assert exc_info.value.status_code == http_400_bad_request
-    assert hasattr(exc_info.value, 'detail')
-    assert 'subject' in str(exc_info.value.detail).lower()
-
-
-@pytest.mark.asyncio
-async def test_extract_val_prefers_header_over_body(
-    valid_subject: str,
-) -> None:
-    """Test extract_val prefers header over body."""
-    extract_func = extract_val('subject')
-
-    header_subject = valid_subject
-    body_subject = 'different-subject'
-
-    # Should use header value
-    result = await extract_func(
-        header=header_subject,
-        body=body_subject,
-    )
-
-    assert result == header_subject
 
 
 # ============================================================================

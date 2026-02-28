@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "diaspora-service"
-version = "0.4.2"
+version = "0.4.6"
 dependencies = [
     "aws-msk-iam-sasl-signer-python",
     "boto3",
@@ -98,8 +98,6 @@ markers = [
 plugins = ["covdefaults"]
 source = ["."]
 omit = [
-    "lambda/*",
-    "web_service/*",
     "tests/*",
     "testing/*",
     "*.pyc",
@@ -129,11 +127,6 @@ no_implicit_optional = true
 warn_redundant_casts = true
 warn_unused_configs = true
 warn_unused_ignores = true
-
-[[tool.mypy.overrides]]
-module = "web_service.*"
-disallow_incomplete_defs = false
-disallow_untyped_defs = false
 
 [[tool.mypy.overrides]]
 module = "testing.*"
@@ -213,7 +206,9 @@ required-imports = ["from __future__ import annotations"]
 
 [tool.ruff.lint.per-file-ignores]
 "*/__init__.py" = ["F401"]
-"*/*_test.py" = ["D10"]
+"*/*_test.py" = ["D10", "PLR0913"]
+"web_service/main.py" = ["B008", "PLR0913"]
+"web_service/consumer_service.py" = ["PLR0913"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
@@ -224,4 +219,3 @@ exclude = ["tests*", "testing*"]
 namespaces = false
 
 [tool.setuptools.package-data]
-'action_provider' = ['*.json']

@@ -1,4 +1,4 @@
-"""Edge case tests for web_service_v3 services.
+"""Edge case tests for web_service services.
 
 These tests use real AWS services (DynamoDB) to verify edge case handling
 in actual service interactions.
@@ -11,8 +11,8 @@ import os
 import pytest
 from botocore.exceptions import ClientError
 
-from web_service_v3.services import DynamoDBService
-from web_service_v3.services import NamespaceService
+from web_service.services import DynamoDBService
+from web_service.services import NamespaceService
 
 # Test constants
 EXPECTED_NAMESPACE_LENGTH_SHORT = 6  # 'ns-' + 3 chars

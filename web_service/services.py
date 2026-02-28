@@ -1526,14 +1526,8 @@ class WebService:
         # Note: kafka_result can be None if Kafka is not configured,
         # which is acceptable
 
-        # Delete topic from NamespaceService (DynamoDB)
-        namespace_result = self.namespace_service.delete_topic(
-            subject,
-            namespace,
-            topic,
-        )
-
-        # If Kafka deletion failed and Kafka is configured, return failure
+        # If Kafka deletion failed, return failure WITHOUT deleting
+        # from DynamoDB to avoid orphaning the Kafka topic
         if (
             kafka_result is not None
             and kafka_result.get('status') == 'failure'
@@ -1546,7 +1540,13 @@ class WebService:
                 ),
             }
 
-        # Return namespace result (includes remaining topics list)
+        # Kafka succeeded (or not configured) — safe to delete from DynamoDB
+        namespace_result = self.namespace_service.delete_topic(
+            subject,
+            namespace,
+            topic,
+        )
+
         return namespace_result
 
     def recreate_topic(

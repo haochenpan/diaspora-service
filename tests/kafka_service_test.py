@@ -1,4 +1,4 @@
-"""Unit tests for web_service_v3 KafkaService."""
+"""Unit tests for web_service KafkaService."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from web_service_v3.services import KafkaService
+from web_service.services import KafkaService
 
 # Suppress verbose logging from external libraries
 logging.getLogger('kafka').setLevel(logging.WARNING)
