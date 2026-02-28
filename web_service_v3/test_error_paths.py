@@ -204,9 +204,9 @@ def test_store_key_table_not_found() -> None:
     """Test store_key handles table not found and creates table."""
     db_service = DynamoDBService(
         region='us-east-1',
-        keys_table_name='test-keys-table',
-        users_table_name='test-users-table',
-        namespace_table_name='test-namespace-table',
+        keys_table_name='test-diaspora-keys-table',
+        users_table_name='test-diaspora-users-table',
+        namespace_table_name='test-diaspora-namespace-table',
     )
 
     # Mock DynamoDB client with exceptions attribute
@@ -259,9 +259,9 @@ def test_get_key_table_not_found() -> None:
     """Test get_key handles table not found gracefully."""
     db_service = DynamoDBService(
         region='us-east-1',
-        keys_table_name='test-keys-table',
-        users_table_name='test-users-table',
-        namespace_table_name='test-namespace-table',
+        keys_table_name='test-diaspora-keys-table',
+        users_table_name='test-diaspora-users-table',
+        namespace_table_name='test-diaspora-namespace-table',
     )
 
     # Mock DynamoDB client with exceptions attribute
@@ -297,9 +297,9 @@ def test_add_user_namespace_table_creation_retry() -> None:
     """Test add_user_namespace handles table creation and retry."""
     db_service = DynamoDBService(
         region='us-east-1',
-        keys_table_name='test-keys-table',
-        users_table_name='test-users-table',
-        namespace_table_name='test-namespace-table',
+        keys_table_name='test-diaspora-keys-table',
+        users_table_name='test-diaspora-users-table',
+        namespace_table_name='test-diaspora-namespace-table',
     )
 
     # Mock DynamoDB client with exceptions attribute
@@ -547,9 +547,9 @@ def test_create_namespace_validation_failure() -> None:
     """Test create_namespace handles validation failure."""
     db_service = DynamoDBService(
         region='us-east-1',
-        keys_table_name='test-keys-table',
-        users_table_name='test-users-table',
-        namespace_table_name='test-namespace-table',
+        keys_table_name='test-diaspora-keys-table',
+        users_table_name='test-diaspora-users-table',
+        namespace_table_name='test-diaspora-namespace-table',
     )
     namespace_service = NamespaceService(dynamodb_service=db_service)
 
@@ -564,9 +564,9 @@ def test_create_namespace_already_taken() -> None:
     """Test create_namespace handles namespace taken by another user."""
     db_service = DynamoDBService(
         region='us-east-1',
-        keys_table_name='test-keys-table',
-        users_table_name='test-users-table',
-        namespace_table_name='test-namespace-table',
+        keys_table_name='test-diaspora-keys-table',
+        users_table_name='test-diaspora-users-table',
+        namespace_table_name='test-diaspora-namespace-table',
     )
     namespace_service = NamespaceService(dynamodb_service=db_service)
 
@@ -597,9 +597,9 @@ def test_create_topic_namespace_not_found() -> None:
     """Test create_topic handles namespace not found."""
     db_service = DynamoDBService(
         region='us-east-1',
-        keys_table_name='test-keys-table',
-        users_table_name='test-users-table',
-        namespace_table_name='test-namespace-table',
+        keys_table_name='test-diaspora-keys-table',
+        users_table_name='test-diaspora-users-table',
+        namespace_table_name='test-diaspora-namespace-table',
     )
     namespace_service = NamespaceService(dynamodb_service=db_service)
 
@@ -798,9 +798,9 @@ def test_create_keys_table_already_exists() -> None:
     """Test _create_keys_table handles table already exists gracefully."""
     db_service = DynamoDBService(
         region='us-east-1',
-        keys_table_name='test-keys-table',
-        users_table_name='test-users-table',
-        namespace_table_name='test-namespace-table',
+        keys_table_name='test-diaspora-keys-table',
+        users_table_name='test-diaspora-users-table',
+        namespace_table_name='test-diaspora-namespace-table',
     )
 
     mock_dynamodb = MagicMock()
@@ -839,9 +839,9 @@ def test_create_users_table_already_exists() -> None:
     """Test _create_users_table handles table already exists gracefully."""
     db_service = DynamoDBService(
         region='us-east-1',
-        keys_table_name='test-keys-table',
-        users_table_name='test-users-table',
-        namespace_table_name='test-namespace-table',
+        keys_table_name='test-diaspora-keys-table',
+        users_table_name='test-diaspora-users-table',
+        namespace_table_name='test-diaspora-namespace-table',
     )
 
     mock_dynamodb = MagicMock()
@@ -877,9 +877,9 @@ def test_create_namespace_table_already_exists() -> None:
     """Test _create_namespace_table handles table already exists gracefully."""
     db_service = DynamoDBService(
         region='us-east-1',
-        keys_table_name='test-keys-table',
-        users_table_name='test-users-table',
-        namespace_table_name='test-namespace-table',
+        keys_table_name='test-diaspora-keys-table',
+        users_table_name='test-diaspora-users-table',
+        namespace_table_name='test-diaspora-namespace-table',
     )
 
     mock_dynamodb = MagicMock()
@@ -915,9 +915,9 @@ def test_add_namespace_topic_table_creation_retry() -> None:
     """Test add_namespace_topic handles table creation and retry."""
     db_service = DynamoDBService(
         region='us-east-1',
-        keys_table_name='test-keys-table',
-        users_table_name='test-users-table',
-        namespace_table_name='test-namespace-table',
+        keys_table_name='test-diaspora-keys-table',
+        users_table_name='test-diaspora-users-table',
+        namespace_table_name='test-diaspora-namespace-table',
     )
 
     mock_dynamodb = MagicMock()

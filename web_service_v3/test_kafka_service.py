@@ -57,9 +57,18 @@ def random_topic() -> str:
 
 
 @pytest.fixture
-def cleanup_topics(kafka_service: KafkaService) -> Any:
-    """Fixture that provides cleanup function for test topics."""
+def cleanup_topics(
+    kafka_service: KafkaService,
+    request: pytest.FixtureRequest,
+) -> Any:
+    """Fixture that provides cleanup function for test topics.
+
+    Uses both yield and addfinalizer to ensure cleanup happens even if
+    tests fail. The addfinalizer ensures cleanup runs even if there's an
+    exception during fixture teardown.
+    """
     created_topics: list[tuple[str, str]] = []
+    cleanup_done = False
 
     def _cleanup(namespace: str, topic: str) -> None:
         """Mark a topic for cleanup."""
@@ -67,12 +76,24 @@ def cleanup_topics(kafka_service: KafkaService) -> Any:
         if topic_key not in created_topics:
             created_topics.append(topic_key)
 
+    def _finalize() -> None:
+        """Cleanup all created topics."""
+        nonlocal cleanup_done
+        if cleanup_done:
+            return
+        cleanup_done = True
+        for namespace, topic in created_topics:
+            with contextlib.suppress(Exception):
+                kafka_service.delete_topic(namespace, topic)
+
+    # Register finalizer to ensure cleanup happens even if test fails
+    request.addfinalizer(_finalize)  # noqa: PT021
+
     yield _cleanup
 
-    # Cleanup all created topics
-    for namespace, topic in created_topics:
-        with contextlib.suppress(Exception):
-            kafka_service.delete_topic(namespace, topic)
+    # Also run cleanup on normal completion
+    # (flag prevents double cleanup if addfinalizer also runs)
+    _finalize()
 
 
 # ============================================================================

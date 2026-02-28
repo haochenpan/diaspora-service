@@ -277,27 +277,64 @@ def cleanup_user(
     web_service: WebService,
     iam_service: IAMService,
     namespace_service: NamespaceService,
+    request: pytest.FixtureRequest,
 ) -> Any:
-    """Fixture that provides cleanup function for test users."""
+    """Fixture that provides cleanup function for test users.
+
+    Uses both yield and addfinalizer to ensure cleanup happens even if
+    tests fail. The addfinalizer ensures cleanup runs even if there's an
+    exception during fixture teardown.
+    """
     created_users: list[str] = []
+    cleanup_done = False
 
     def _cleanup(subject: str) -> None:
         """Mark a user for cleanup."""
         if subject not in created_users:
             created_users.append(subject)
 
+    def _finalize() -> None:
+        """Cleanup all created users and their Kafka topics."""
+        nonlocal cleanup_done
+        if cleanup_done:
+            return
+        cleanup_done = True
+        for subject in created_users:
+            # First, explicitly clean up any Kafka topics for this user
+            # This ensures topics are deleted even if delete_user fails
+            try:
+                default_namespace = namespace_service.generate_default(subject)
+                topics = namespace_service.dynamodb.get_namespace_topics(
+                    default_namespace,
+                )
+                for topic in topics:
+                    with contextlib.suppress(Exception):
+                        # Delete Kafka topic directly
+                        web_service.kafka_service.delete_topic(
+                            default_namespace,
+                            topic,
+                        )
+            except Exception:
+                pass  # Ignore errors during topic enumeration
+
+            with contextlib.suppress(Exception):
+                # Try to delete via web_service first (includes topic cleanup)
+                web_service.delete_user(subject)
+            with contextlib.suppress(Exception):
+                # Fallback: manual cleanup
+                namespace = namespace_service.generate_default(subject)
+                namespace_service.delete_namespace(subject, namespace)
+                iam_service.delete_user_and_policy(subject)
+
+    # Register finalizer to ensure cleanup happens even if test fails
+    # This is more reliable than yield-based cleanup alone
+    request.addfinalizer(_finalize)  # noqa: PT021
+
     yield _cleanup
 
-    # Cleanup all created users
-    for subject in created_users:
-        with contextlib.suppress(Exception):
-            # Try to delete via web_service first
-            web_service.delete_user(subject)
-        with contextlib.suppress(Exception):
-            # Fallback: manual cleanup
-            namespace = namespace_service.generate_default(subject)
-            namespace_service.delete_namespace(subject, namespace)
-            iam_service.delete_user_and_policy(subject)
+    # Also run cleanup on normal completion
+    # (flag prevents double cleanup if addfinalizer also runs)
+    _finalize()
 
 
 # ============================================================================
@@ -1298,6 +1335,10 @@ def test_topic_deletion_during_creation(
             f'  Creation result: {creation_results[0]["status"]} - '
             f'{creation_results[0].get("message", "N/A")}',
         )
+
+    # Explicit cleanup: ensure topic is deleted regardless of race condition
+    with contextlib.suppress(Exception):
+        web_service.delete_topic(random_subject, namespace, topic)
 
 
 @pytest.mark.integration
