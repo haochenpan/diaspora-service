@@ -9,21 +9,6 @@ from typing import Any
 
 from globus_sdk import ConfidentialAppAuthClient
 
-WEB_SERVICE_DESC = (
-    '[Docs and Demo](https://haochenpan.github.io/diaspora-service/)'
-)
-
-WEB_SERVICE_TAGS_METADATA = [
-    {
-        'name': 'Authentication',
-        'description': 'Cluster authentication and authorization',
-    },
-    {'name': 'Topic', 'description': 'Topic namespace management'},
-    {'name': 'Trigger', 'description': 'Trigger management'},
-    {'name': 'Legacy', 'description': 'Legacy APIs'},
-    {'name': 'Proposed', 'description': 'Volatile APIs'},
-]
-
 
 class EnvironmentChecker:
     """Check if environment variables are set."""
@@ -55,8 +40,7 @@ class AuthManager:
             server_secret,
         )
         self.action_scope = (
-            f'https://auth.globus.org/scopes/'
-            f'{server_client_id}/action_all'
+            f'https://auth.globus.org/scopes/{server_client_id}/action_all'
         )
         self.scopes = f'openid email profile {self.action_scope}'
         self.client_id = client_id  # SDK's internal_auth_client

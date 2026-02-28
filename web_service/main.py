@@ -16,8 +16,6 @@ from fastapi import HTTPException
 
 from web_service.utils import AuthManager
 from web_service.utils import EnvironmentChecker
-from web_service.utils import WEB_SERVICE_DESC
-from web_service.utils import WEB_SERVICE_TAGS_METADATA
 
 from .services import DynamoDBService
 from .services import IAMService
@@ -112,8 +110,6 @@ class DiasporaService:
             title='Diaspora Web Service V3',
             docs_url='/',
             version=importlib_metadata.version('diaspora_service'),
-            description=WEB_SERVICE_DESC,
-            openapi_tags=WEB_SERVICE_TAGS_METADATA,
         )
         self.add_routes()
 
