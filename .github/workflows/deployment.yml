@@ -9,15 +9,15 @@ on:
       service_names:
         description: "Comma-separated names of Lightsail services"
         required: true
-        default: "diaspora-web-service,diaspora-action-provider"
+        default: "diaspora-web-service"
       container_names:
         description: "Comma-separated names of Docker containers"
         required: true
-        default: "docker,docker"
+        default: "docker"
       dockerfile_paths:
         description: "Comma-separated paths to Dockerfiles"
         required: true
-        default: "web_service/Dockerfile,action_provider/Dockerfile"
+        default: "web_service/Dockerfile"
   schedule:
     - cron: "0 9 * * *" # 3 am CST
 
@@ -30,10 +30,7 @@ jobs:
         include:
           - service_name: diaspora-web-service
             container_name: docker
-            dockerfile_path: web_service_v3/Dockerfile
-          # - service_name: diaspora-action-provider
-          #   container_name: docker
-          #   dockerfile_path: action_provider/Dockerfile
+            dockerfile_path: web_service/Dockerfile
 
     steps:
       - name: Configure AWS credentials

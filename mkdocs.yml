@@ -62,8 +62,6 @@ watch:
   - mkdocs.yml
   - README.md
   - docs/
-  - action_provider/
-  - common/
   - web_service/
 
 extra:
@@ -110,9 +108,6 @@ nav:
       - Deployment: 3-deploying.md
       - Monitoring: 4-monitoring.md
       - Acknowledgments: acknowledgments.md
-  - Action Provider:
-      - Documentation: ap/api.md
-      - Examples: ap/examples.md
   - Web Service:
       - Documentation: web/api.md
       - Examples: web/examples.md

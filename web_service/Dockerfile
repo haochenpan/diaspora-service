@@ -5,7 +5,6 @@ EXPOSE 8000/tcp
 WORKDIR /diaspora-web-service
 
 COPY web_service web_service
-COPY common common
 COPY pyproject.toml .
 
 RUN pip install .

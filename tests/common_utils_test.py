@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from common.utils import EnvironmentChecker
+from web_service.utils import EnvironmentChecker
 
 
 def test_check_env_variables_all_set(monkeypatch):

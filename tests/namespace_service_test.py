@@ -1,4 +1,4 @@
-"""Unit tests for web_service_v3 NamespaceService."""
+"""Unit tests for web_service NamespaceService."""
 
 from __future__ import annotations
 
@@ -11,8 +11,8 @@ from typing import Any
 
 import pytest
 
-from web_service_v3.services import DynamoDBService
-from web_service_v3.services import NamespaceService
+from web_service.services import DynamoDBService
+from web_service.services import NamespaceService
 
 # ============================================================================
 # Test Constants

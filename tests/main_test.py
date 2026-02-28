@@ -1,4 +1,4 @@
-"""Unit and integration tests for web_service_v3 FastAPI routes (main.py).
+"""Unit and integration tests for web_service FastAPI routes (main.py).
 
 Unit tests use mocks to validate exact response formats.
 Integration tests use real AWS services to verify
@@ -13,8 +13,8 @@ from unittest.mock import patch
 
 import pytest
 
-from web_service_v3.main import DiasporaService
-from web_service_v3.main import extract_val
+from web_service.main import DiasporaService
+from web_service.main import extract_val
 
 # ============================================================================
 # Test Fixtures
@@ -44,15 +44,15 @@ def mock_diaspora_service(
     """Create DiasporaService with mocked deps for unit tests."""
     with (
         patch(
-            'web_service_v3.main.AuthManager',
+            'web_service.main.AuthManager',
             return_value=mock_auth_manager,
         ),
-        patch('web_service_v3.main.IAMService'),
-        patch('web_service_v3.main.KafkaService'),
-        patch('web_service_v3.main.DynamoDBService'),
-        patch('web_service_v3.main.NamespaceService'),
+        patch('web_service.main.IAMService'),
+        patch('web_service.main.KafkaService'),
+        patch('web_service.main.DynamoDBService'),
+        patch('web_service.main.NamespaceService'),
         patch(
-            'web_service_v3.main.WebService',
+            'web_service.main.WebService',
             return_value=mock_web_service,
         ),
     ):

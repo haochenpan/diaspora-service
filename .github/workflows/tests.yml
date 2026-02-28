@@ -61,4 +61,4 @@ jobs:
           python -m pip install -e ".[dev]"
 
       - name: Run Tests
-        run: pytest web_service_v3/  -vv -s
+        run: pytest tests/  -vv -s

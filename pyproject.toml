@@ -98,8 +98,6 @@ markers = [
 plugins = ["covdefaults"]
 source = ["."]
 omit = [
-    "lambda/*",
-    "web_service/*",
     "tests/*",
     "testing/*",
     "*.pyc",
@@ -129,11 +127,6 @@ no_implicit_optional = true
 warn_redundant_casts = true
 warn_unused_configs = true
 warn_unused_ignores = true
-
-[[tool.mypy.overrides]]
-module = "web_service.*"
-disallow_incomplete_defs = false
-disallow_untyped_defs = false
 
 [[tool.mypy.overrides]]
 module = "testing.*"
@@ -224,4 +217,3 @@ exclude = ["tests*", "testing*"]
 namespaces = false
 
 [tool.setuptools.package-data]
-'action_provider' = ['*.json']

@@ -14,7 +14,6 @@ Welcome to the Diaspora Event Fabric Service documentation! Our goal in the Dias
 
 - **[Project Description](https://diaspora-project.github.io/)**: Learn more about the Diaspora project.
 - **[Docs and Demo](https://haochenpan.github.io/diaspora-service/)**: Access detailed documentation and code demonstrations.
-  - New: Web Service v3 API: https://github.com/haochenpan/diaspora-service/pull/65
 - **[Diaspora SDK](https://github.com/globus-labs/diaspora-event-sdk)**: Explore the Python SDK for integrating with the Diaspora Event Fabric.
 
     [![PyPI Version](https://img.shields.io/pypi/v/diaspora-event-sdk?color=teal)](https://pypi.org/project/diaspora-event-sdk/)
