@@ -1339,6 +1339,10 @@ def test_topic_deletion_during_creation(
     # Explicit cleanup: ensure topic is deleted regardless of race condition
     with contextlib.suppress(Exception):
         web_service.delete_topic(random_subject, namespace, topic)
+    # Fallback: delete directly from Kafka in case DynamoDB was cleaned
+    # but Kafka topic persists
+    with contextlib.suppress(Exception):
+        web_service.kafka_service.delete_topic(namespace, topic)
 
 
 @pytest.mark.integration
