@@ -206,7 +206,9 @@ required-imports = ["from __future__ import annotations"]
 
 [tool.ruff.lint.per-file-ignores]
 "*/__init__.py" = ["F401"]
-"*/*_test.py" = ["D10"]
+"*/*_test.py" = ["D10", "PLR0913"]
+"web_service/main.py" = ["B008", "PLR0913"]
+"web_service/consumer_service.py" = ["PLR0913"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"

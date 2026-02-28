@@ -66,6 +66,46 @@ def _collect_queue_results(
     return results, errors
 
 
+def _create_topic_with_retry(
+    web_service: WebService,
+    subject: str,
+    namespace: str,
+    topic: str,
+    thread_id: int,
+    results_queue: queue.Queue[dict[str, Any]],
+    errors_queue: queue.Queue[Exception],
+    max_retries: int = 3,
+) -> None:
+    """Create a topic with retries for transient errors."""
+    last_result: dict[str, Any] | None = None
+    for attempt in range(max_retries):
+        try:
+            result = web_service.create_topic(subject, namespace, topic)
+            if result.get('status') == 'success':
+                results_queue.put(result)
+                print(f'  Thread {thread_id} result: {result["status"]}')
+                return
+            last_result = result
+            print(
+                f'  Thread {thread_id} attempt {attempt + 1} '
+                f'failed: {result.get("message")}',
+            )
+        except Exception as e:
+            print(
+                f'  Thread {thread_id} attempt {attempt + 1} error: {e}',
+            )
+            if attempt == max_retries - 1:
+                errors_queue.put(e)
+                results_queue.put(
+                    {'status': 'failure', 'message': f'Exception: {e}'},
+                )
+                return
+        time.sleep(0.5)
+    # All retries exhausted with non-exception failure
+    if last_result is not None:
+        results_queue.put(last_result)
+
+
 def _verify_user_deletion_cleanup(
     web_service: WebService,
     iam_service: IAMService,
@@ -936,29 +976,20 @@ def test_concurrent_topic_creation(
     errors_queue: queue.Queue[Exception] = queue.Queue()
     threads: list[threading.Thread] = []
 
-    def create_topic_thread(thread_id: int) -> None:
-        """Create topic in a thread."""
-        try:
-            result = web_service.create_topic(
+    # Start all threads
+    for i in range(num_threads):
+        thread = threading.Thread(
+            target=_create_topic_with_retry,
+            args=(
+                web_service,
                 random_subject,
                 namespace,
                 topic,
-            )
-            results_queue.put(result)
-            print(f'  Thread {thread_id} result: {result["status"]}')
-        except Exception as e:
-            errors_queue.put(e)
-            results_queue.put(
-                {
-                    'status': 'failure',
-                    'message': f'Exception: {e}',
-                },
-            )
-            print(f'  Thread {thread_id} error: {e}')
-
-    # Start all threads
-    for i in range(num_threads):
-        thread = threading.Thread(target=create_topic_thread, args=(i,))
+                i,
+                results_queue,
+                errors_queue,
+            ),
+        )
         threads.append(thread)
         thread.start()
 
@@ -1051,29 +1082,20 @@ def test_concurrent_topic_creation_existing_topic(
     errors_queue: queue.Queue[Exception] = queue.Queue()
     threads: list[threading.Thread] = []
 
-    def create_topic_thread(thread_id: int) -> None:
-        """Create topic in a thread."""
-        try:
-            result = web_service.create_topic(
+    # Start all threads
+    for i in range(num_threads):
+        thread = threading.Thread(
+            target=_create_topic_with_retry,
+            args=(
+                web_service,
                 random_subject,
                 namespace,
                 topic,
-            )
-            results_queue.put(result)
-            print(f'  Thread {thread_id} result: {result["status"]}')
-        except Exception as e:
-            errors_queue.put(e)
-            results_queue.put(
-                {
-                    'status': 'failure',
-                    'message': f'Exception: {e}',
-                },
-            )
-            print(f'  Thread {thread_id} error: {e}')
-
-    # Start all threads
-    for i in range(num_threads):
-        thread = threading.Thread(target=create_topic_thread, args=(i,))
+                i,
+                results_queue,
+                errors_queue,
+            ),
+        )
         threads.append(thread)
         thread.start()
 

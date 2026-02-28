@@ -14,7 +14,6 @@ from unittest.mock import patch
 import pytest
 
 from web_service.main import DiasporaService
-from web_service.main import extract_val
 
 # ============================================================================
 # Test Fixtures
@@ -101,85 +100,6 @@ def valid_token() -> str:
     # Note: For real authentication, this would need a valid Globus token
     # For testing, we'll test both authenticated and unauthenticated paths
     return 'Bearer ' + 'a' * 50
-
-
-# ============================================================================
-# Tests for extract_val()
-# ============================================================================
-
-
-@pytest.mark.asyncio
-async def test_extract_val_from_header(
-    valid_subject: str,
-) -> None:
-    """Test extract_val extracts value from header."""
-    extract_func = extract_val('subject')
-
-    # Simulate header value
-    result = await extract_func(
-        header=valid_subject,
-        body=None,
-    )
-
-    assert result == valid_subject
-
-
-@pytest.mark.asyncio
-async def test_extract_val_from_body(
-    valid_subject: str,
-) -> None:
-    """Test extract_val extracts value from body."""
-    extract_func = extract_val('subject')
-
-    # Simulate body value (no header)
-    result = await extract_func(
-        header=None,
-        body=valid_subject,
-    )
-
-    assert result == valid_subject
-
-
-@pytest.mark.asyncio
-async def test_extract_val_missing_value() -> None:
-    """Test extract_val raises error when value is missing."""
-    extract_func = extract_val('subject')
-
-    # Both header and body are None
-    # HTTPException is from fastapi, avoid importing it to prevent
-    # Pydantic dependency issues. Catch Exception and check attributes.
-    with pytest.raises(Exception) as exc_info:  # noqa: PT011
-        await extract_func(
-            header=None,
-            body=None,
-        )
-
-    # Check it's an HTTPException-like exception with status_code 400
-    # The exception should have status_code and detail attributes
-    assert hasattr(exc_info.value, 'status_code')
-    http_400_bad_request = 400
-    assert exc_info.value.status_code == http_400_bad_request
-    assert hasattr(exc_info.value, 'detail')
-    assert 'subject' in str(exc_info.value.detail).lower()
-
-
-@pytest.mark.asyncio
-async def test_extract_val_prefers_header_over_body(
-    valid_subject: str,
-) -> None:
-    """Test extract_val prefers header over body."""
-    extract_func = extract_val('subject')
-
-    header_subject = valid_subject
-    body_subject = 'different-subject'
-
-    # Should use header value
-    result = await extract_func(
-        header=header_subject,
-        body=body_subject,
-    )
-
-    assert result == header_subject
 
 
 # ============================================================================
