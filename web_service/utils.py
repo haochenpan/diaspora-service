@@ -672,7 +672,7 @@ class AWSManager:
         )
         result, _ = self.admin.describe_acls(acl_filter)
 
-        p_ops = defaultdict(lambda: set())
+        p_ops = defaultdict(set)
         for acl in result:
             principal, operation = (
                 str(acl.principal)[len('User:') :],
@@ -1339,7 +1339,7 @@ class AWSManager:
             ),
         )
 
-        acls = defaultdict(lambda: set())  # topic:user
+        acls = defaultdict(set)  # topic:user
         for acl in sorted_result:
             if acl.resource_pattern.resource_type == ResourceType.TOPIC:
                 acls[acl.resource_pattern.resource_name].add(acl.principal)
