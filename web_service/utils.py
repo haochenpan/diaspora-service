@@ -25,8 +25,6 @@ class AuthManager:
 
     TOKEN_MIN = 32
     TOKEN_MAX = 255
-    NAME_MIN = 2
-    NAME_MAX = 55
 
     def __init__(
         self,
@@ -79,11 +77,9 @@ class AuthManager:
 
         if self.server_client_id not in introspection_response.get('aud'):
             return self.error_response(
-                (
-                    'Not in the audience set. ',
-                    f'introspected = {introspection_response.get("aud")}',
-                    f'server_client_id = {self.server_client_id}',
-                ),
+                f'Not in the audience set. '
+                f'introspected = {introspection_response.get("aud")} '
+                f'server_client_id = {self.server_client_id}',
             )
 
         if self.action_scope not in introspection_response.get(
@@ -118,23 +114,3 @@ class AuthManager:
             and len(token) < AuthManager.TOKEN_MAX
             and re.match(r'^[\w]+$', token) is not None
         )
-
-    @staticmethod
-    def validate_name(
-        name: str,
-        type_name: str = 'topic',
-    ) -> dict[str, Any] | None:
-        """Validate the given name for the specified type."""
-        if not (
-            AuthManager.NAME_MIN < len(name) < AuthManager.NAME_MAX
-            and re.match(r'^[^\W_\-][\w\-]*$', name)
-        ):
-            return {
-                'status': 'error',
-                'reason': (
-                    f'Invalid {type_name} name. Must be 3-64 characters, '
-                    'including letters, digits, underscores, and hyphens, '
-                    'and must not start with a hyphen or underscore.'
-                ),
-            }
-        return None
