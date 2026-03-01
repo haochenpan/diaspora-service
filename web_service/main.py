@@ -109,8 +109,8 @@ class DiasporaService:
             version=importlib_metadata.version('diaspora_service'),
             lifespan=self._lifespan,
         )
-        self.add_consumer_routes()
         self.add_routes()
+        self.add_consumer_routes()
 
     def add_routes(self) -> None:
         """Add routes to the FastAPI app."""
@@ -128,6 +128,10 @@ class DiasporaService:
         self.app.delete('/api/v3/key', tags=['Authentication'])(
             self.delete_key,
         )
+        # List namespaces and topics
+        self.app.get('/api/v3/namespace', tags=['Namespace'])(
+            self.list_namespace_and_topics,
+        )
         # Topic management routes
         self.app.post('/api/v3/{namespace}/{topic}', tags=['Topic'])(
             self.create_topic,
@@ -137,10 +141,6 @@ class DiasporaService:
         )
         self.app.put('/api/v3/{namespace}/{topic}/recreate', tags=['Topic'])(
             self.recreate_topic,
-        )
-        # List namespaces and topics
-        self.app.get('/api/v3/namespace', tags=['Namespace'])(
-            self.list_namespace_and_topics,
         )
 
     async def create_user(
