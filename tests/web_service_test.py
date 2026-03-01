@@ -368,7 +368,7 @@ def cleanup_user(
 
     # Register finalizer to ensure cleanup happens even if test fails
     # This is more reliable than yield-based cleanup alone
-    request.addfinalizer(_finalize)  # noqa: PT021
+    request.addfinalizer(_finalize)
 
     yield _cleanup
 

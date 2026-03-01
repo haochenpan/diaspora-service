@@ -305,4 +305,4 @@ def test_validate_name_none_value(
     """
     # validate_name expects a string, so None should raise TypeError
     with pytest.raises((TypeError, AttributeError)):
-        namespace_service.validate_name(None)  # type: ignore[arg-type]
+        namespace_service.validate_name(None)

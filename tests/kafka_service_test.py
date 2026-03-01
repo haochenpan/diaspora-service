@@ -87,7 +87,7 @@ def cleanup_topics(
                 kafka_service.delete_topic(namespace, topic)
 
     # Register finalizer to ensure cleanup happens even if test fails
-    request.addfinalizer(_finalize)  # noqa: PT021
+    request.addfinalizer(_finalize)
 
     yield _cleanup
 

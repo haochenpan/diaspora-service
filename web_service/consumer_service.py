@@ -570,6 +570,7 @@ class ConsumerService:
                         kafka_offsets[tp] = OffsetAndMetadata(
                             o['offset'],
                             None,
+                            None,
                         )
                     managed.consumer.commit(offsets=kafka_offsets)
                 else:
