@@ -5,9 +5,9 @@ EXPOSE 8000/tcp
 WORKDIR /diaspora-web-service
 
 COPY web_service web_service
-COPY pyproject.toml .
+COPY pyproject.toml requirements.lock ./
 
-RUN pip install .
+RUN pip install -r requirements.lock && pip install --no-deps .
 
 # CMD [ "uvicorn", "web_service.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload" ]
 CMD ["gunicorn", "--bind", "0.0.0.0:8000", "-k", "uvicorn.workers.UvicornWorker", "web_service.main:app"]
