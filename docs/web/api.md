@@ -18,7 +18,7 @@ c = GlobusClient()  # triggers Globus login flow on first use
 
 subject = c.subject_openid
 authorization = c.web_client.authorizer.get_authorization_header()
-namespace = f"ns-{subject.replace('-', '')[-12:]}"
+namespace = f'ns-{subject.replace("-", "")[-12:]}'
 
 print(f'export SUBJECT="{subject}"')
 print(f'export AUTHORIZATION="{authorization}"')
