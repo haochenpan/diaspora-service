@@ -37,6 +37,7 @@ class ManagedConsumer:
         namespace: str,
         group_name: str,
         instance_id: str,
+        *,
         format_type: str,
     ) -> None:
         """Initialize a managed consumer.
@@ -187,6 +188,7 @@ class ConsumerService:
         subject: str,
         namespace: str,
         group_name: str,
+        *,
         name: str | None = None,
         format_type: str = 'binary',
         auto_offset_reset: str = 'latest',
@@ -327,6 +329,7 @@ class ConsumerService:
         namespace: str,
         group_name: str,
         instance_id: str,
+        *,
         topics: list[str] | None = None,
         topic_pattern: str | None = None,
     ) -> tuple[dict[str, Any] | None, int]:
@@ -464,6 +467,7 @@ class ConsumerService:
         namespace: str,
         group_name: str,
         instance_id: str,
+        *,
         timeout_ms: int = 1000,
         max_bytes: int | None = None,
     ) -> tuple[list[dict[str, Any]] | dict[str, Any], int]:

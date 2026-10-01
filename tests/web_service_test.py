@@ -71,6 +71,7 @@ def _create_topic_with_retry(
     subject: str,
     namespace: str,
     topic: str,
+    *,
     thread_id: int,
     results_queue: queue.Queue[dict[str, Any]],
     errors_queue: queue.Queue[Exception],
@@ -980,15 +981,12 @@ def test_concurrent_topic_creation(
     for i in range(num_threads):
         thread = threading.Thread(
             target=_create_topic_with_retry,
-            args=(
-                web_service,
-                random_subject,
-                namespace,
-                topic,
-                i,
-                results_queue,
-                errors_queue,
-            ),
+            args=(web_service, random_subject, namespace, topic),
+            kwargs={
+                'thread_id': i,
+                'results_queue': results_queue,
+                'errors_queue': errors_queue,
+            },
         )
         threads.append(thread)
         thread.start()
@@ -1086,15 +1084,12 @@ def test_concurrent_topic_creation_existing_topic(
     for i in range(num_threads):
         thread = threading.Thread(
             target=_create_topic_with_retry,
-            args=(
-                web_service,
-                random_subject,
-                namespace,
-                topic,
-                i,
-                results_queue,
-                errors_queue,
-            ),
+            args=(web_service, random_subject, namespace, topic),
+            kwargs={
+                'thread_id': i,
+                'results_queue': results_queue,
+                'errors_queue': errors_queue,
+            },
         )
         threads.append(thread)
         thread.start()
