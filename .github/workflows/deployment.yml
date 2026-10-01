@@ -146,3 +146,44 @@ jobs:
               --service-name $SERVICE_NAME \
               --containers "$containers" \
               --public-endpoint "$public_endpoint"
+
+      - name: Wait for the deployment to become active
+        env:
+          SERVICE_NAME: ${{ matrix.service_name }}
+        timeout-minutes: 25
+        run: |
+          version=$(aws lightsail get-container-services --region us-east-1 \
+              --service-name "$SERVICE_NAME" \
+              --query 'containerServices[0].nextDeployment.version' --output text)
+          if [ -z "$version" ] || [ "$version" = "None" ]; then
+            echo "::error::No pending deployment found for $SERVICE_NAME"
+            exit 1
+          fi
+          echo "Waiting for deployment version $version"
+
+          deadline=$((SECONDS + 20 * 60))
+          while [ "$SECONDS" -lt "$deadline" ]; do
+            states=$(aws lightsail get-container-services --region us-east-1 \
+                --service-name "$SERVICE_NAME" \
+                --query 'containerServices[0].[currentDeployment.version, currentDeployment.state, nextDeployment.version, nextDeployment.state]' \
+                --output text)
+            read -r current_version current_state next_version next_state <<< "$states"
+            echo "current: $current_version $current_state, next: $next_version $next_state"
+
+            if [ "$current_version" = "$version" ] && [ "$current_state" = "ACTIVE" ]; then
+              echo "Deployment $version is active"
+              exit 0
+            fi
+            if [ "$next_version" = "$version" ] && [ "$next_state" = "FAILED" ]; then
+              echo "::error::Deployment $version failed; check the container logs"
+              exit 1
+            fi
+            if [ "$current_version" != "$version" ] && [ "$next_version" != "$version" ]; then
+              echo "::error::Deployment $version is no longer pending and did not become active"
+              exit 1
+            fi
+            sleep 30
+          done
+
+          echo "::error::Deployment $version is not active after 20 minutes"
+          exit 1

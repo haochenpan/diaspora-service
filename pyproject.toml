@@ -15,7 +15,7 @@ dependencies = [
     "globus_sdk",
     "gunicorn",
     "jinja2",
-    "kafka-python",
+    "kafka-python>=2.1,<3",
     "pydantic",
     "requests",
     "uvicorn",
