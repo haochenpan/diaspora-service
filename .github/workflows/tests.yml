@@ -60,5 +60,12 @@ jobs:
           python -m pip install --upgrade pip setuptools
           python -m pip install -e ".[dev]"
 
+      # Runs without the repository's secrets (Dependabot's, forks') can't
+      # reach the live cluster, so they stop after the install.
       - name: Run Tests
+        if: env.CLIENT_ID != ''
         run: pytest tests/  -vv -s
+
+      - name: Skip Tests
+        if: env.CLIENT_ID == ''
+        run: echo "::notice::No secrets in this run, so the tests were skipped."
