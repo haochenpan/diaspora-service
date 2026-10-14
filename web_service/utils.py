@@ -50,10 +50,6 @@ class AuthManager:
         token: str,
     ) -> dict[str, Any] | None:
         """Validate the access token for the given user ID."""
-        print('validate_access_token')
-        print(user_id)
-        print(token)
-
         if not self.is_uuid(user_id):
             return self.error_response('Invalid user ID; expected UUID.')
 
