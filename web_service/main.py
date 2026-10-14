@@ -14,6 +14,7 @@ from fastapi import FastAPI
 from fastapi import Header
 from fastapi import Query
 from fastapi import Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 from fastapi.responses import Response
 
@@ -190,10 +191,24 @@ class DiasporaService:
         subject: str = Header(..., alias='subject'),
         token: str = Header(..., alias='authorization'),
     ) -> dict[str, Any]:
-        """Create a topic under a namespace."""
-        if err := self.auth.validate_access_token(subject, token):
+        """Create a topic under a namespace.
+
+        The Kafka admin call blocks, so it runs in the threadpool: on the
+        event loop it would stall every other request and the worker's
+        heartbeat to gunicorn.
+        """
+        if err := await run_in_threadpool(
+            self.auth.validate_access_token,
+            subject,
+            token,
+        ):
             return err
-        return self.web_service.create_topic(subject, namespace, topic)
+        return await run_in_threadpool(
+            self.web_service.create_topic,
+            subject,
+            namespace,
+            topic,
+        )
 
     async def delete_topic(
         self,
@@ -202,10 +217,24 @@ class DiasporaService:
         subject: str = Header(..., alias='subject'),
         token: str = Header(..., alias='authorization'),
     ) -> dict[str, Any]:
-        """Delete a topic from a namespace."""
-        if err := self.auth.validate_access_token(subject, token):
+        """Delete a topic from a namespace.
+
+        The Kafka admin call blocks, so it runs in the threadpool: on the
+        event loop it would stall every other request and the worker's
+        heartbeat to gunicorn.
+        """
+        if err := await run_in_threadpool(
+            self.auth.validate_access_token,
+            subject,
+            token,
+        ):
             return err
-        return self.web_service.delete_topic(subject, namespace, topic)
+        return await run_in_threadpool(
+            self.web_service.delete_topic,
+            subject,
+            namespace,
+            topic,
+        )
 
     async def recreate_topic(
         self,
@@ -222,9 +251,18 @@ class DiasporaService:
         3. Waits 5 seconds
         4. Recreates the Kafka topic and DynamoDB entry
         """
-        if err := self.auth.validate_access_token(subject, token):
+        if err := await run_in_threadpool(
+            self.auth.validate_access_token,
+            subject,
+            token,
+        ):
             return err
-        return self.web_service.recreate_topic(subject, namespace, topic)
+        return await run_in_threadpool(
+            self.web_service.recreate_topic,
+            subject,
+            namespace,
+            topic,
+        )
 
     async def list_namespace_and_topics(
         self,

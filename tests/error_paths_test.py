@@ -21,6 +21,8 @@ from botocore.exceptions import ClientError
 from kafka.errors import KafkaError
 from kafka.errors import KafkaTimeoutError
 
+from web_service.services import ADMIN_OPERATION_TIMEOUT_MS
+from web_service.services import ADMIN_REQUEST_TIMEOUT_MS
 from web_service.services import DynamoDBService
 from web_service.services import IAMService
 from web_service.services import KafkaService
@@ -369,6 +371,50 @@ def test_create_topic_all_retries_fail() -> None:
         assert result['status'] == 'failure'
         assert 'Failed to create Kafka topic' in result['message']
         assert 'after 3 attempts' in result['message']
+
+
+def test_create_topic_closes_admin_client_after_each_attempt() -> None:
+    """Test create_topic closes the admin client of every failed attempt."""
+    kafka_service = KafkaService(
+        bootstrap_servers='test-servers',
+        region='us-east-1',
+    )
+
+    with patch(
+        'web_service.services.KafkaAdminClient',
+    ) as mock_admin_class:
+        mock_admin = MagicMock()
+        mock_admin_class.return_value = mock_admin
+        mock_admin.create_topics.side_effect = KafkaError('Connection failed')
+
+        kafka_service.create_topic('test-namespace', 'test-topic')
+
+        assert mock_admin.close.call_count == mock_admin_class.call_count == 3
+        _, kwargs = mock_admin_class.call_args
+        assert kwargs['request_timeout_ms'] == ADMIN_REQUEST_TIMEOUT_MS
+        _, kwargs = mock_admin.create_topics.call_args
+        assert kwargs['timeout_ms'] == ADMIN_OPERATION_TIMEOUT_MS
+
+
+def test_delete_topic_closes_admin_client_on_success() -> None:
+    """Test delete_topic closes the admin client when the delete succeeds."""
+    kafka_service = KafkaService(
+        bootstrap_servers='test-servers',
+        region='us-east-1',
+    )
+
+    with patch(
+        'web_service.services.KafkaAdminClient',
+    ) as mock_admin_class:
+        mock_admin = MagicMock()
+        mock_admin_class.return_value = mock_admin
+
+        result = kafka_service.delete_topic('test-namespace', 'test-topic')
+
+        assert result == {'status': 'success', 'message': 'Topic deleted'}
+        mock_admin.close.assert_called_once()
+        _, kwargs = mock_admin.delete_topics.call_args
+        assert kwargs['timeout_ms'] == ADMIN_OPERATION_TIMEOUT_MS
 
 
 def test_create_topic_timeout_error() -> None:

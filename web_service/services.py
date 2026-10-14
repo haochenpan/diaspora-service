@@ -20,6 +20,12 @@ from kafka.sasl.oauth import AbstractTokenProvider
 
 from web_service.utils import EnvironmentChecker
 
+# The admin client's own request timeout, and the time the controller may
+# take to finish a topic creation or deletion before it answers. The second
+# is shorter so the controller answers before the client gives up.
+ADMIN_REQUEST_TIMEOUT_MS = 15_000
+ADMIN_OPERATION_TIMEOUT_MS = 10_000
+
 
 class IAMService:
     """Service for managing IAM users and policies."""
@@ -712,6 +718,16 @@ class KafkaService:
         self.bootstrap_servers = bootstrap_servers
         self.region = region
 
+    def _admin_client(self) -> KafkaAdminClient:
+        """Build an admin client whose requests end within a bound."""
+        return KafkaAdminClient(
+            bootstrap_servers=self.bootstrap_servers,
+            security_protocol='SASL_SSL',
+            sasl_mechanism='OAUTHBEARER',
+            sasl_oauth_token_provider=MSKTokenProvider(self.region),
+            request_timeout_ms=ADMIN_REQUEST_TIMEOUT_MS,
+        )
+
     def create_topic(
         self,
         namespace: str,
@@ -737,13 +753,9 @@ class KafkaService:
         last_exception: Exception | None = None
 
         for attempt in range(max_retries):
+            admin: KafkaAdminClient | None = None
             try:
-                admin = KafkaAdminClient(
-                    bootstrap_servers=self.bootstrap_servers,
-                    security_protocol='SASL_SSL',
-                    sasl_mechanism='OAUTHBEARER',
-                    sasl_oauth_token_provider=MSKTokenProvider(self.region),
-                )
+                admin = self._admin_client()
                 topic_list = [
                     NewTopic(
                         name=kafka_topic_name,
@@ -751,7 +763,10 @@ class KafkaService:
                         replication_factor=2,
                     ),
                 ]
-                admin.create_topics(new_topics=topic_list)
+                admin.create_topics(
+                    new_topics=topic_list,
+                    timeout_ms=ADMIN_OPERATION_TIMEOUT_MS,
+                )
                 return {
                     'status': 'success',
                     'message': 'Topic created',
@@ -773,6 +788,10 @@ class KafkaService:
                         ),
                     }
                 continue
+            finally:
+                if admin is not None:
+                    with contextlib.suppress(Exception):
+                        admin.close()
 
         return {
             'status': 'failure',
@@ -807,14 +826,13 @@ class KafkaService:
         last_exception: Exception | None = None
 
         for attempt in range(max_retries):
+            admin: KafkaAdminClient | None = None
             try:
-                admin = KafkaAdminClient(
-                    bootstrap_servers=self.bootstrap_servers,
-                    security_protocol='SASL_SSL',
-                    sasl_mechanism='OAUTHBEARER',
-                    sasl_oauth_token_provider=MSKTokenProvider(self.region),
+                admin = self._admin_client()
+                admin.delete_topics(
+                    topics=[kafka_topic_name],
+                    timeout_ms=ADMIN_OPERATION_TIMEOUT_MS,
                 )
-                admin.delete_topics(topics=[kafka_topic_name])
                 return {
                     'status': 'success',
                     'message': 'Topic deleted',
@@ -836,6 +854,10 @@ class KafkaService:
                         ),
                     }
                 continue
+            finally:
+                if admin is not None:
+                    with contextlib.suppress(Exception):
+                        admin.close()
 
         return {
             'status': 'failure',
