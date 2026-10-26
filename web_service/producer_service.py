@@ -388,7 +388,7 @@ def _busy(reason: str) -> RecordError:
 # --- Parsing ---
 
 
-def _char_width(raw: bytes | bytearray) -> int:
+def char_width(raw: bytes | bytearray) -> int:
     r"""Bytes per character of the widest str that raw can decode to.
 
     CPython stores a str in 1, 2 or 4 bytes per character, by its widest
@@ -417,7 +417,7 @@ def estimate_parse_cost(raw: bytes | bytearray) -> int:
     (1e15 becomes 1000000000000000.0). The counts run at memchr speed and
     include bytes inside strings, so the bound is loose for text.
     """
-    width = _char_width(raw)
+    width = char_width(raw)
     length = len(raw)
     commas = raw.count(b',')
     # Each number ends at a comma or a closing bracket, so there are no

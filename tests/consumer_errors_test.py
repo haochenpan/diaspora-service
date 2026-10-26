@@ -51,6 +51,7 @@ from web_service.consumer_records import EncodedField
 from web_service.consumer_records import EncodedRecord
 from web_service.consumer_records import FetchReply
 from web_service.consumer_routes import MAX_BODY_BYTES
+from web_service.consumer_routes import negotiate_records
 from web_service.consumer_service import FETCH_MAX_BYTES
 from web_service.consumer_service import InstanceLock
 from web_service.consumer_service import kafka_failure
@@ -66,6 +67,10 @@ NAMESPACE = 'ns-test123'
 TOPICS = ['t1', 't2']
 GROUP = 'g'
 BASE = f'/api/v3/{NAMESPACE}/consumers'
+# The v2 routes take the caller's default namespace
+V2 = '/api/v2/consumers'
+V2_NAMESPACE = 'ns-426614174000'
+JSON_RECORDS = 'application/vnd.kafka.json.v2+json'
 TOKEN_INACTIVE = {'status': 'error', 'reason': 'Token is inactive.'}
 
 
@@ -94,14 +99,15 @@ def built() -> Iterator[list[dict[str, Any]]]:
 def service(built: list[dict[str, Any]]) -> Iterator[DiasporaService]:
     """A DiasporaService with a real ConsumerService and mocked AWS.
 
-    The token check passes, and the subject owns NAMESPACE, which holds
-    TOPICS. The reaper thread never starts.
+    The token check passes, and the subject owns NAMESPACE and its
+    default namespace, V2_NAMESPACE, which hold TOPICS. The reaper thread
+    never starts.
     """
     auth = MagicMock()
     auth.validate_access_token.return_value = None
     web_service = MagicMock()
     ns_db = web_service.namespace_service.dynamodb
-    ns_db.get_user_namespaces.return_value = [NAMESPACE]
+    ns_db.get_user_namespaces.return_value = [NAMESPACE, V2_NAMESPACE]
     ns_db.get_namespace_topics.return_value = TOPICS
     with (
         patch('web_service.main.AuthManager', return_value=auth),
@@ -1225,13 +1231,14 @@ async def test_a_fetch_whose_client_left_does_not_poll(
 ) -> None:
     _instances(service, subjects=1)
     request = MagicMock()
+    request.headers = {}
     request.is_disconnected = AsyncMock(return_value=True)
     with patch.object(service.consumer_service, 'fetch_records') as fetch:
         response = await service.fetch_consumer_records(
-            NAMESPACE,
             GROUP,
             'a',
             request=request,
+            namespace=NAMESPACE,
             subject=_subject(0),
             token=HEADERS['authorization'],
             timeout=None,
@@ -1247,21 +1254,21 @@ async def test_a_fetch_whose_client_left_does_not_poll(
 
 
 @pytest.mark.parametrize(
-    ('query', 'created', 'wait_ms', 'max_records'),
+    ('query', 'created', 'wait_ms'),
     (
-        ('', {}, 5000, None),
-        ('?timeout=-1', {}, 5000, None),
-        ('?timeout=0', {}, 5000, None),
-        ('?timeout=-1', {'consumer.request.timeout.ms': 1200}, 1200, None),
-        ('', {'consumer.request.timeout.ms': '90000'}, 30000, None),
+        ('', {}, 5000),
+        ('?timeout=-1', {}, 5000),
+        ('?timeout=0', {}, 5000),
+        ('?timeout=-1', {'consumer.request.timeout.ms': 1200}, 1200),
+        ('', {'consumer.request.timeout.ms': '90000'}, 30000),
         # The instance's wait does not cap a fetch's own timeout
-        ('?timeout=4000', {'consumer.request.timeout.ms': 1200}, 4000, None),
-        ('?max_bytes=0', {}, 5000, None),
-        ('?max_bytes=-1', {}, 5000, None),
-        ('?max_bytes=7', {}, 5000, 7),
+        ('?timeout=4000', {'consumer.request.timeout.ms': 1200}, 4000),
+        ('?max_bytes=0', {}, 5000),
+        ('?max_bytes=-1', {}, 5000),
+        ('?max_bytes=7', {}, 5000),
     ),
 )
-def test_fetch_waits_and_record_counts(
+def test_fetch_waits_and_byte_limits(
     service: DiasporaService,
     client: TestClient,
     long_slices: None,
@@ -1269,7 +1276,6 @@ def test_fetch_waits_and_record_counts(
     query: str,
     created: dict[str, Any],
     wait_ms: int,
-    max_records: int | None,
 ) -> None:
     """Values Confluent takes as its defaults do here too, rather than 500."""
     assert _create(client, **created).status_code == 200
@@ -1289,7 +1295,8 @@ def test_fetch_waits_and_record_counts(
     assert len(response.json()) == 1
     kwargs = poll.call_args.kwargs
     assert wait_ms - 500 < kwargs['timeout_ms'] <= wait_ms
-    assert kwargs['max_records'] == max_records
+    # max_bytes limits the reply, not the poll
+    assert 'max_records' not in kwargs
 
 
 async def test_requests_waiting_for_an_instance_hold_no_thread(
@@ -1364,15 +1371,14 @@ def _fetched(
     *values: bytes | None,
     topic: str = 't1',
 ) -> dict[TopicPartition, list[Any]]:
-    record = MagicMock
     return {
         _kafka_tp(topic): [
-            record(key=None, value=v, offset=i) for i, v in enumerate(values)
+            SimpleNamespace(key=None, value=v, offset=i, headers=[])
+            for i, v in enumerate(values)
         ],
     }
 
 
-@pytest.mark.parametrize('fmt', ('binary', 'json'))
 @pytest.mark.parametrize(
     'value',
     (
@@ -1389,11 +1395,10 @@ def _fetched(
 def test_reply_is_what_jsonresponse_writes(
     service: DiasporaService,
     client: TestClient,
-    fmt: str,
     value: bytes | None,
 ) -> None:
     """The reply's bytes and size match JSONResponse for the same records."""
-    _create(client, format=fmt)
+    _create(client, format='binary')
     managed = service.consumer_service._consumers[
         (SUBJECT, NAMESPACE, GROUP, 'i1')
     ]
@@ -1406,6 +1411,44 @@ def test_reply_is_what_jsonresponse_writes(
     assert reply.body() == expected
     assert reply.size == len(expected)
     assert b''.join(reply.chunks()) == expected
+
+
+@pytest.mark.parametrize(
+    'value',
+    (
+        b'{"msg": "h\xc3\xa9llo", "n": [1, 2.5e3, null, true]}',
+        b' "quotes \\" and \\u0000" \n',
+        b'[{"a": {}}, [], -0]',
+        b'12345678901234567890123',
+        '"\u2028 \U0001f600"'.encode(),
+        None,
+    ),
+)
+def test_a_json_reply_holds_each_value_as_produced(
+    service: DiasporaService,
+    client: TestClient,
+    value: bytes | None,
+) -> None:
+    """A json instance's reply holds each value's JSON as it was produced."""
+    _create(client, format='json')
+    managed = service.consumer_service._consumers[
+        (SUBJECT, NAMESPACE, GROUP, 'i1')
+    ]
+    reply = service.consumer_service._reply(
+        NAMESPACE,
+        managed,
+        _fetched(value, b'"second"', topic='t1'),
+    )
+    body = reply.body()
+    if value is not None:
+        assert value in body
+    assert json.loads(body) == [r.as_dict() for r in reply.records]
+    assert [r['value'] for r in json.loads(body)] == [
+        None if value is None else json.loads(value),
+        'second',
+    ]
+    assert reply.size == len(body)
+    assert b''.join(reply.chunks()) == body
 
 
 def test_reply_stops_at_its_cap_and_rewinds(
@@ -1456,14 +1499,17 @@ def test_a_large_first_record_is_returned_alone(
         f'{_inst()}/assignments',
         {'partitions': [{'topic': 't1', 'partition': 0}]},
     )
-    # Control characters take six bytes each as JSON
-    value = b'\x00' * (1024 * 1024)
-    raw = _fetched(value, b'next')
+    # A JSON string of escaped control characters, six bytes each
+    value = b'"' + b'\\u0000' * 360_000 + b'"'
+    raw = _fetched(value, b'"next"')
     with (
         patch.object(_consumer(service), 'poll', return_value=raw),
         patch.object(_consumer(service), 'seek') as seek,
     ):
-        response = client.get(f'{_inst()}/records', headers=HEADERS)
+        response = client.get(
+            f'{_inst()}/records',
+            headers={**HEADERS, 'accept': JSON_RECORDS},
+        )
     assert response.status_code == 200
     # Written a piece at a time, so it has no length
     assert 'content-length' not in response.headers
@@ -1471,9 +1517,10 @@ def test_a_large_first_record_is_returned_alone(
         {
             'topic': 't1',
             'key': None,
-            'value': '\x00' * (1024 * 1024),
+            'value': '\x00' * 360_000,
             'partition': 0,
             'offset': 0,
+            'headers': [],
         },
     ]
     assert len(response.content) > REPLY_MAX_BYTES
@@ -1519,7 +1566,12 @@ class _Log:
             values = log[start : start + most]
             if values:
                 taken[tp] = [
-                    SimpleNamespace(key=None, value=v, offset=start + i)
+                    SimpleNamespace(
+                        key=None,
+                        value=v,
+                        offset=start + i,
+                        headers=[],
+                    )
                     for i, v in enumerate(values)
                 ]
                 self.pos[tp] += len(values)
@@ -1574,6 +1626,7 @@ def _assert_released(service: DiasporaService, name: str = 'i1') -> None:
 
 def _connected() -> MagicMock:
     request = MagicMock()
+    request.headers = {}
     request.is_disconnected = AsyncMock(return_value=False)
     return request
 
@@ -1585,10 +1638,10 @@ async def _fetch(
 ) -> Any:
     """Call the fetch route as FastAPI would, returning its response."""
     return await service.fetch_consumer_records(
-        NAMESPACE,
         GROUP,
         name,
         request=request,
+        namespace=NAMESPACE,
         subject=SUBJECT,
         token=HEADERS['authorization'],
         timeout=1000,
@@ -1692,6 +1745,7 @@ async def test_records_polled_for_a_client_that_left_are_fetched_again(
     """A client that leaves while its fetch polls loses no records."""
     log = _log(service, 'i1', b'r0', b'r1')
     request = MagicMock()
+    request.headers = {}
     # Connected before the poll, gone after it
     request.is_disconnected = AsyncMock(side_effect=[False, True])
     response = await _fetch(service, request)
@@ -2003,7 +2057,8 @@ def test_commit_of_everything_commits_the_positions(
     )
     with _commits(service) as sent:
         response = client.post(f'{_inst()}/offsets', headers=HEADERS)
-    assert response.status_code == 200
+    # As in Confluent's REST Proxy, an empty list of offsets
+    assert (response.status_code, response.json()) == (200, [])
     (request,) = sent
     assert request.topics == [(f'{NAMESPACE}.t1', [(0, 6, -1, '')])]
 
@@ -2033,3 +2088,504 @@ def test_committed_offset_is_the_next_record(
 def test_unsupported_version_is_400(client: TestClient) -> None:
     body, status = kafka_failure(UnsupportedVersionError(), 'commit offsets')
     assert (status, body['error_code']) == (400, 40002)
+
+
+# ============================================================================
+# The v2 paths and their deprecated aliases
+# ============================================================================
+
+
+def _v2_inst(name: str = 'i1') -> str:
+    return f'{V2}/{GROUP}/instances/{name}'
+
+
+def _alias_inst(name: str = 'i1') -> str:
+    return f'/api/v3/{V2_NAMESPACE}/consumers/{GROUP}/instances/{name}'
+
+
+def test_a_v2_create_returns_the_v2_url(client: TestClient) -> None:
+    response = client.post(
+        f'{V2}/{GROUP}',
+        json={'name': 'i1', 'format': 'binary'},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    assert response.headers['content-type'] == 'application/vnd.kafka.v2+json'
+    assert 'deprecation' not in response.headers
+    assert response.json() == {
+        'instance_id': 'i1',
+        'base_uri': f'http://testserver{_v2_inst()}',
+    }
+
+
+def test_an_alias_create_returns_the_alias_url(client: TestClient) -> None:
+    response = client.post(
+        f'/api/v3/{V2_NAMESPACE}/consumers/{GROUP}',
+        json={'name': 'i1'},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    assert response.headers['deprecation'] == '@1792972800'
+    assert response.json()['base_uri'] == f'http://testserver{_alias_inst()}'
+
+
+def test_an_instance_is_the_same_through_either_prefix(
+    service: DiasporaService,
+    client: TestClient,
+) -> None:
+    """An instance made through v2 is used through the alias, and back."""
+    created = client.post(
+        f'{V2}/{GROUP}',
+        json={'name': 'i1'},
+        headers=HEADERS,
+    )
+    assert created.status_code == 200
+    subscribed = _send(
+        client,
+        'POST',
+        f'{_alias_inst()}/subscription',
+        {'topics': ['t1']},
+    )
+    assert subscribed.status_code == 204
+    assert subscribed.headers['deprecation'] == '@1792972800'
+    got = client.get(f'{_v2_inst()}/subscription', headers=HEADERS)
+    assert got.json() == {'topics': ['t1']}
+    assert list(service.consumer_service._consumers) == [
+        (SUBJECT, V2_NAMESPACE, GROUP, 'i1'),
+    ]
+    assert client.delete(_alias_inst(), headers=HEADERS).status_code == 204
+    gone = client.get(f'{_v2_inst()}/subscription', headers=HEADERS)
+    assert (gone.status_code, gone.json()['error_code']) == (404, 40403)
+
+
+def test_v2_takes_the_callers_default_namespace(
+    service: DiasporaService,
+    client: TestClient,
+) -> None:
+    """A subject without its default namespace cannot use the v2 paths."""
+    ns_db = service.web_service.namespace_service.dynamodb
+    ns_db.get_user_namespaces.return_value = [NAMESPACE]
+    response = client.post(
+        f'{V2}/{GROUP}',
+        json={'name': 'i1'},
+        headers=HEADERS,
+    )
+    assert response.status_code == 404
+    assert response.json() == {
+        'error_code': 40401,
+        'message': f'Namespace {V2_NAMESPACE} not found for user',
+    }
+    assert service.consumer_service._consumers == {}
+
+
+def test_openapi_marks_the_aliases_deprecated(client: TestClient) -> None:
+    paths = client.get('/openapi.json').json()['paths']
+    v2 = {p: ops for p, ops in paths.items() if p.startswith(V2)}
+    aliases = {
+        p: ops
+        for p, ops in paths.items()
+        if p.startswith('/api/v3/{namespace}/consumers')
+    }
+    assert sum(len(ops) for ops in v2.values()) == 13
+    assert sum(len(ops) for ops in aliases.values()) == 13
+    for ops in v2.values():
+        assert not any(op.get('deprecated') for op in ops.values())
+    for ops in aliases.values():
+        assert all(op.get('deprecated') for op in ops.values())
+
+
+@pytest.mark.parametrize(
+    ('headers', 'base'),
+    (
+        ({'x-forwarded-proto': 'https'}, 'https://testserver'),
+        (
+            {
+                'x-forwarded-proto': 'https, http',
+                'x-forwarded-host': 'api.example.org',
+            },
+            'https://api.example.org',
+        ),
+        (
+            {'x-forwarded-host': 'api.example.org:8443'},
+            'http://api.example.org:8443',
+        ),
+        ({'x-forwarded-proto': 'javascript'}, 'http://testserver'),
+        ({'x-forwarded-host': 'evil.example/path'}, 'http://testserver'),
+        ({'x-forwarded-host': 'user@evil.example'}, 'http://testserver'),
+        ({'x-forwarded-host': ''}, 'http://testserver'),
+        ({'host': 'service.example'}, 'http://service.example'),
+    ),
+)
+def test_base_uri_honours_valid_forwarded_headers(
+    client: TestClient,
+    headers: dict[str, str],
+    base: str,
+) -> None:
+    response = client.post(
+        f'{V2}/{GROUP}',
+        json={'name': 'i1'},
+        headers={**HEADERS, **headers},
+    )
+    assert response.json()['base_uri'] == f'{base}{_v2_inst()}'
+
+
+def test_a_create_without_a_body_takes_the_defaults(
+    service: DiasporaService,
+    client: TestClient,
+    built: list[dict[str, Any]],
+) -> None:
+    response = client.post(f'{V2}/{GROUP}', headers=HEADERS)
+    assert response.status_code == 200
+    (managed,) = service.consumer_service._consumers.values()
+    assert response.json()['instance_id'] == managed.instance_id
+    assert managed.format_type == 'binary'
+    assert built[0]['auto_offset_reset'] == 'latest'
+
+
+def test_a_create_takes_the_deprecated_id_as_its_name(
+    client: TestClient,
+) -> None:
+    response = client.post(
+        f'{V2}/{GROUP}',
+        json={'id': 'by-id', 'name': 'by-name'},
+        headers=HEADERS,
+    )
+    assert response.json()['instance_id'] == 'by-id'
+
+
+def test_an_invalid_name_is_refused(client: TestClient) -> None:
+    response = client.post(
+        f'{V2}/{GROUP}',
+        json={'name': 'a/b'},
+        headers=HEADERS,
+    )
+    assert response.status_code == 422
+    assert response.json()['error_code'] == 42204
+
+
+@pytest.mark.parametrize(
+    'content_type',
+    (
+        'application/vnd.kafka.v2+json',
+        'application/vnd.kafka.json.v2+json; charset=utf-8',
+        'application/json',
+    ),
+)
+def test_requests_of_the_v2_types_are_accepted(
+    client: TestClient,
+    content_type: str,
+) -> None:
+    response = client.post(
+        f'{V2}/{GROUP}',
+        content=json.dumps({'name': 'i1'}),
+        headers={**HEADERS, 'content-type': content_type},
+    )
+    assert response.status_code == 200
+
+
+@pytest.mark.parametrize(
+    'content_type',
+    ('text/plain', 'application/x-www-form-urlencoded', 'application/xml'),
+)
+def test_requests_of_other_types_are_refused_with_415(
+    service: DiasporaService,
+    client: TestClient,
+    content_type: str,
+) -> None:
+    response = client.post(
+        f'{V2}/{GROUP}',
+        content=json.dumps({'name': 'i1'}),
+        headers={**HEADERS, 'content-type': content_type},
+    )
+    assert response.status_code == 415
+    assert response.headers['content-type'] == 'application/vnd.kafka.v2+json'
+    assert response.json() == {
+        'error_code': 415,
+        'message': 'HTTP 415 Unsupported Media Type',
+    }
+    assert service.consumer_service._consumers == {}
+
+
+def test_errors_have_the_v2_type(client: TestClient) -> None:
+    response = client.get(f'{_v2_inst("none")}/subscription', headers=HEADERS)
+    assert response.status_code == 404
+    assert response.headers['content-type'] == 'application/vnd.kafka.v2+json'
+
+
+@pytest.mark.parametrize(
+    ('accept', 'chosen'),
+    (
+        (None, ('binary', 'application/vnd.kafka.binary.v2+json')),
+        ('*/*', ('binary', 'application/vnd.kafka.binary.v2+json')),
+        ('application/*', ('binary', 'application/vnd.kafka.binary.v2+json')),
+        (
+            'application/vnd.kafka.v2+json',
+            ('binary', 'application/vnd.kafka.v2+json'),
+        ),
+        (
+            'application/vnd.kafka.json.v2+json',
+            ('json', 'application/vnd.kafka.json.v2+json'),
+        ),
+        (
+            (
+                'application/vnd.kafka.binary.v2+json;q=0.5, '
+                'application/vnd.kafka.json.v2+json'
+            ),
+            ('json', 'application/vnd.kafka.json.v2+json'),
+        ),
+        (
+            'application/vnd.kafka.json.v2+json, */*',
+            ('binary', 'application/vnd.kafka.binary.v2+json'),
+        ),
+        (
+            'application/vnd.kafka.binary.v2+json;q=0, */*',
+            ('binary', 'application/vnd.kafka.v2+json'),
+        ),
+        (
+            'application/vnd.kafka.avro.v2+json',
+            ('avro', 'application/vnd.kafka.avro.v2+json'),
+        ),
+        ('application/json', None),
+        ('text/html', None),
+        ('application/vnd.kafka.json.v2+json;q=0', None),
+    ),
+)
+def test_records_negotiate_as_jersey_does(
+    accept: str | None,
+    chosen: tuple[str, str] | None,
+) -> None:
+    assert negotiate_records(accept) == chosen
+
+
+def _assigned_v2(client: TestClient, fmt: str, *partitions: str) -> None:
+    created = client.post(
+        f'{V2}/{GROUP}',
+        json={'name': 'i1', 'format': fmt},
+        headers=HEADERS,
+    )
+    assert created.status_code == 200
+    _send(
+        client,
+        'POST',
+        f'{_v2_inst()}/assignments',
+        {'partitions': [{'topic': t, 'partition': 0} for t in partitions]},
+    )
+
+
+def _v2_fetched(
+    *values: bytes | None,
+    topic: str = 't1',
+    headers: list[tuple[str, bytes | None]] | None = None,
+) -> dict[TopicPartition, list[Any]]:
+    return {
+        TopicPartition(f'{V2_NAMESPACE}.{topic}', 0): [
+            SimpleNamespace(key=None, value=v, offset=i, headers=headers or [])
+            for i, v in enumerate(values)
+        ],
+    }
+
+
+def _v2_consumer(service: DiasporaService) -> KafkaConsumer:
+    key = (SUBJECT, V2_NAMESPACE, GROUP, 'i1')
+    return service.consumer_service._consumers[key].consumer
+
+
+@pytest.mark.parametrize(
+    ('fmt', 'accept', 'status', 'code'),
+    (
+        ('json', None, 406, 40601),
+        ('json', '*/*', 406, 40601),
+        ('binary', JSON_RECORDS, 406, 40601),
+        ('json', 'application/json', 406, 406),
+        ('binary', 'application/json', 406, 406),
+    ),
+)
+def test_a_fetch_in_another_format_is_refused(
+    service: DiasporaService,
+    client: TestClient,
+    *,
+    fmt: str,
+    accept: str | None,
+    status: int,
+    code: int,
+) -> None:
+    _assigned_v2(client, fmt, 't1')
+    with patch.object(_v2_consumer(service), 'poll') as poll:
+        response = client.get(
+            f'{_v2_inst()}/records',
+            headers=HEADERS
+            if accept is None
+            else {**HEADERS, 'accept': accept},
+        )
+    poll.assert_not_called()
+    assert response.status_code == status
+    assert response.json()['error_code'] == code
+    # The instance is free again
+    again = client.get(f'{_v2_inst()}/subscription', headers=HEADERS)
+    assert again.status_code == 200
+
+
+def test_a_json_fetch_has_the_json_type(
+    service: DiasporaService,
+    client: TestClient,
+) -> None:
+    _assigned_v2(client, 'json', 't1')
+    with patch.object(
+        _v2_consumer(service),
+        'poll',
+        return_value=_v2_fetched(b'{"a": 1}'),
+    ):
+        response = client.get(
+            f'{_v2_inst()}/records',
+            headers={**HEADERS, 'accept': JSON_RECORDS},
+        )
+    assert response.status_code == 200
+    assert response.headers['content-type'] == JSON_RECORDS
+    assert response.json() == [
+        {
+            'topic': 't1',
+            'key': None,
+            'value': {'a': 1},
+            'partition': 0,
+            'offset': 0,
+            'headers': [],
+        },
+    ]
+
+
+def test_records_carry_their_headers(
+    service: DiasporaService,
+    client: TestClient,
+) -> None:
+    _assigned_v2(client, 'binary', 't1')
+    raw = _v2_fetched(b'v', headers=[('trace', b'\x00\x01'), ('empty', None)])
+    with patch.object(_v2_consumer(service), 'poll', return_value=raw):
+        response = client.get(f'{_v2_inst()}/records', headers=HEADERS)
+    assert response.headers['content-type'] == (
+        'application/vnd.kafka.binary.v2+json'
+    )
+    assert response.json()[0]['headers'] == [
+        {'name': 'trace', 'value': 'AAE='},
+        {'name': 'empty', 'value': None},
+    ]
+
+
+@pytest.mark.parametrize(
+    ('max_bytes', 'returned'),
+    (
+        # As in Confluent's REST Proxy, the keys and values stay under it
+        (25, [0, 1]),
+        (21, [0, 1]),
+        (20, [0]),
+        # The first record is returned however large
+        (5, [0]),
+        (0, [0, 1, 2, 3]),
+        (-1, [0, 1, 2, 3]),
+    ),
+)
+def test_max_bytes_counts_the_bytes_of_keys_and_values(
+    service: DiasporaService,
+    client: TestClient,
+    max_bytes: int,
+    returned: list[int],
+) -> None:
+    _assigned_v2(client, 'binary', 't1')
+    consumer = _v2_consumer(service)
+    with (
+        patch.object(
+            consumer,
+            'poll',
+            return_value=_v2_fetched(*[b'x' * 10] * 4),
+        ),
+        patch.object(consumer, 'seek') as seek,
+    ):
+        response = client.get(
+            f'{_v2_inst()}/records',
+            params={'max_bytes': max_bytes},
+            headers=HEADERS,
+        )
+    assert [r['offset'] for r in response.json()] == returned
+    if len(returned) < 4:
+        seek.assert_called_once_with(
+            TopicPartition(f'{V2_NAMESPACE}.t1', 0),
+            len(returned),
+        )
+    else:
+        seek.assert_not_called()
+
+
+def test_a_first_record_that_is_not_json_is_408(
+    service: DiasporaService,
+    client: TestClient,
+) -> None:
+    _assigned_v2(client, 'json', 't1')
+    consumer = _v2_consumer(service)
+    with (
+        patch.object(
+            consumer,
+            'poll',
+            return_value=_v2_fetched(b'not json', b'{}'),
+        ),
+        patch.object(consumer, 'seek') as seek,
+    ):
+        response = client.get(
+            f'{_v2_inst()}/records',
+            headers={**HEADERS, 'accept': JSON_RECORDS},
+        )
+    assert response.status_code == 408
+    assert response.json() == {
+        'error_code': 40801,
+        'message': (
+            'The key or value of the record at offset 0 of topic t1, '
+            'partition 0, is not one JSON value in UTF-8. A json instance '
+            'returns only JSON: seek past the record, or read it with a '
+            'binary instance.'
+        ),
+    }
+    # The next fetch meets it again rather than losing it
+    seek.assert_called_once_with(TopicPartition(f'{V2_NAMESPACE}.t1', 0), 0)
+
+
+def test_a_record_that_is_not_json_ends_only_its_partition(
+    service: DiasporaService,
+    client: TestClient,
+) -> None:
+    """Records before it, and other partitions' records, are returned."""
+    _assigned_v2(client, 'json', 't1', 't2')
+    consumer = _v2_consumer(service)
+    raw = {
+        **_v2_fetched(b'1', b'\xff', b'3', topic='t1'),
+        **_v2_fetched(b'"a"', b'"b"', topic='t2'),
+    }
+    with (
+        patch.object(consumer, 'poll', return_value=raw),
+        patch.object(consumer, 'seek') as seek,
+    ):
+        response = client.get(
+            f'{_v2_inst()}/records',
+            headers={**HEADERS, 'accept': JSON_RECORDS},
+        )
+    assert response.status_code == 200
+    assert sorted((r['topic'], r['value']) for r in response.json()) == [
+        ('t1', 1),
+        ('t2', 'a'),
+        ('t2', 'b'),
+    ]
+    seek.assert_called_once_with(TopicPartition(f'{V2_NAMESPACE}.t1', 0), 1)
+
+
+def test_get_offsets_without_partitions_is_40402(client: TestClient) -> None:
+    """As in Confluent's REST Proxy, no partitions is none found."""
+    client.post(f'{V2}/{GROUP}', json={'name': 'i1'}, headers=HEADERS)
+    for body in (None, 'null'):
+        response = client.request(
+            'GET',
+            f'{_v2_inst()}/offsets',
+            content=body,
+            headers=HEADERS,
+        )
+        assert response.status_code == 404
+        assert response.json() == {
+            'error_code': 40402,
+            'message': 'Partition not found.',
+        }

@@ -1,18 +1,20 @@
 """The fetch route's reply: records encoded as JSON, measured before.
 
-A record's key and value are encoded as the consumer instance's format
-says: binary as base64, json as the UTF-8 text itself, or base64 when it is
-not valid UTF-8. The reply is the JSON array Starlette's JSONResponse would
-write for the records as dictionaries, byte for byte, but it is measured
-before it is written and written a piece at a time: a value of 8 MiB can
-take 48 MiB as JSON text, since each control character takes six bytes.
+Each record is Confluent REST Proxy v2's record, `topic`, `key`, `value`,
+`partition` and `offset`, plus `headers` in the produce routes' form, a
+list of `{"name": ..., "value": <base64>}`. A key or value is encoded as
+the consumer instance's format says: binary as base64, json as the JSON
+value it holds, written as it was produced. The reply is measured before
+it is written and written a piece at a time, so a record of 8 MiB is never
+held whole as JSON.
 """
 
 from __future__ import annotations
 
 import base64
-import codecs
 import json
+import re
+import threading
 from collections.abc import Iterator
 from dataclasses import dataclass
 from dataclasses import field
@@ -20,32 +22,95 @@ from typing import Any
 
 from kafka.structs import TopicPartition
 
+from web_service.producer_service import char_width
+
 # Bytes of a key or value encoded at a time; a multiple of 3, so that the
 # base64 of each piece joins into the base64 of the whole
 PIECE_BYTES = 3 * 21_846
 # Encoded bytes gathered before a piece of the reply is yielded
 CHUNK_BYTES = 256 * 1024
+# Most memory one check that a key or value is JSON may take, by
+# json_check_cost; one check runs at a time. A JSON string of ASCII text
+# passes up to 15 MiB, more than any record a broker returns, and an array
+# of small objects (`[{"a":1},...]`) up to about 1.5 MiB.
+JSON_CHECK_MAX_COST = 32 * 1024 * 1024
+_JSON_CHECK = threading.Lock()
+# Bytes of memory the check holds per byte that opens a list, separates
+# two values, delimits a string or follows a key: an upper bound of
+# CPython's objects (an empty list is 72 bytes, a short string about 50,
+# a list's pointer 8 and its growth), with the decoder's hooks dropping
+# each object and number as soon as it is made
+_LIST_COST = 80
+_COMMA_COST = 16
+_QUOTE_COST = 32
+_COLON_COST = 64
+# Memory any check can take beyond what the counts predict: the decoder's
+# own state and the over-allocation of a growing list
+_FIXED_COST = 1024 * 1024
 _NULL = b'null'
+_WHITESPACE = re.compile(r'[ \t\n\r]*')
 
 
-def _json_text_pieces(value: bytes) -> Iterator[bytes]:
-    """The JSON string of value's UTF-8 text, without its quotes.
+class NotJSON(ValueError):  # noqa: N818
+    """A key or value that a json consumer instance cannot return."""
 
-    Escapes as json.dumps(ensure_ascii=False) does, one character at a
-    time, so the pieces join into the escape of the whole text.
+
+def json_check_cost(raw: bytes) -> int:
+    """An upper bound of the memory that checking raw is JSON costs.
+
+    Counts the decoded text and the strings parsing makes, at the widest
+    character raw can decode to, and the lists, strings and keys parsing
+    holds, from the bytes that open a list, separate two values, delimit
+    a string or follow a key. The counts run at memchr speed.
+    """
+    return (
+        _FIXED_COST
+        + 2 * char_width(raw) * len(raw)
+        + _LIST_COST * raw.count(b'[')
+        + _COMMA_COST * raw.count(b',')
+        + _QUOTE_COST * raw.count(b'"')
+        + _COLON_COST * raw.count(b':')
+    )
+
+
+def _drop(_: Any) -> None:
+    return None
+
+
+def _no_constant(name: str) -> None:
+    raise ValueError(f'{name} is not valid JSON')
+
+
+def check_json(raw: bytes) -> None:
+    """Check that raw is one JSON value in UTF-8, one check at a time.
 
     Raises:
-        UnicodeDecodeError: If value is not valid UTF-8
+        NotJSON: If raw is not, or checking it would cost more than
+            JSON_CHECK_MAX_COST
     """
-    decoder = codecs.getincrementaldecoder('utf-8')()
+    if json_check_cost(raw) > JSON_CHECK_MAX_COST:
+        raise NotJSON('is too large to check as JSON in the memory allowed')
+    decoder = json.JSONDecoder(
+        object_hook=_drop,
+        parse_float=_drop,
+        parse_int=_drop,
+        parse_constant=_no_constant,
+    )
+    with _JSON_CHECK:
+        try:
+            text = raw.decode('utf-8')
+            start = _WHITESPACE.match(text).end()  # type: ignore[union-attr]
+            _, end = decoder.raw_decode(text, start)
+        except ValueError, RecursionError:
+            raise NotJSON('is not one JSON value in UTF-8') from None
+        if _WHITESPACE.match(text, end).end() < len(text):  # type: ignore[union-attr]
+            raise NotJSON('is not one JSON value in UTF-8')
+
+
+def _pieces(value: bytes) -> Iterator[bytes]:
     view = memoryview(value)
     for start in range(0, len(value), PIECE_BYTES):
-        text = decoder.decode(view[start : start + PIECE_BYTES])
-        if text:
-            yield json.dumps(text, ensure_ascii=False)[1:-1].encode()
-    text = decoder.decode(b'', final=True)
-    if text:
-        yield json.dumps(text, ensure_ascii=False)[1:-1].encode()
+        yield bytes(view[start : start + PIECE_BYTES])
 
 
 def _base64_pieces(value: bytes) -> Iterator[bytes]:
@@ -54,46 +119,50 @@ def _base64_pieces(value: bytes) -> Iterator[bytes]:
         yield base64.b64encode(view[start : start + PIECE_BYTES])
 
 
+def _json_text(text: str) -> bytes:
+    return json.dumps(text, ensure_ascii=False).encode()
+
+
 @dataclass(frozen=True)
 class EncodedField:
     """A record's key or value, with the size of its JSON encoding."""
 
     raw: bytes | None
-    as_text: bool
+    as_json: bool
     size: int
 
     @classmethod
     def of(cls, raw: bytes | None, format_type: str) -> EncodedField:
-        """Measure raw as the format encodes it."""
+        """Measure raw as the format encodes it.
+
+        Raises:
+            NotJSON: In the json format, if raw is not one JSON value
+        """
         if raw is None:
-            return cls(None, as_text=False, size=len(_NULL))
+            return cls(None, as_json=False, size=len(_NULL))
         if format_type == 'json':
-            try:
-                size = sum(len(p) for p in _json_text_pieces(raw))
-            except UnicodeDecodeError:
-                pass
-            else:
-                return cls(raw, as_text=True, size=size + 2)
-        return cls(raw, as_text=False, size=4 * -(-len(raw) // 3) + 2)
+            check_json(raw)
+            return cls(raw, as_json=True, size=len(raw))
+        return cls(raw, as_json=False, size=4 * -(-len(raw) // 3) + 2)
 
     def pieces(self) -> Iterator[bytes]:
         """The field's JSON encoding, a piece at a time."""
         if self.raw is None:
             yield _NULL
             return
+        if self.as_json:
+            yield from _pieces(self.raw)
+            return
         yield b'"'
-        if self.as_text:
-            yield from _json_text_pieces(self.raw)
-        else:
-            yield from _base64_pieces(self.raw)
+        yield from _base64_pieces(self.raw)
         yield b'"'
 
-    def decoded(self) -> str | None:
-        """The field as the reply's JSON holds it, as a Python string."""
+    def decoded(self) -> Any:
+        """The field as the reply's JSON holds it, as a Python value."""
         if self.raw is None:
             return None
-        if self.as_text:
-            return self.raw.decode()
+        if self.as_json:
+            return json.loads(self.raw)
         return base64.b64encode(self.raw).decode('ascii')
 
 
@@ -106,13 +175,34 @@ class EncodedRecord:
     value: EncodedField
     partition: int
     offset: int
+    headers: tuple[tuple[str, bytes | None], ...] = ()
+
+    @property
+    def payload_size(self) -> int:
+        """Bytes of the record's key and value, as Confluent counts them."""
+        return sum(len(f.raw) for f in (self.key, self.value) if f.raw)
 
     def _head(self) -> bytes:
-        topic = json.dumps(self.topic, ensure_ascii=False).encode()
-        return b'{"topic":' + topic + b',"key":'
+        return b'{"topic":' + _json_text(self.topic) + b',"key":'
 
     def _tail(self) -> bytes:
-        return b',"partition":%d,"offset":%d}' % (self.partition, self.offset)
+        headers = b','.join(
+            b'{"name":'
+            + _json_text(name)
+            + b',"value":'
+            + (
+                _NULL
+                if value is None
+                else b'"' + base64.b64encode(value) + b'"'
+            )
+            + b'}'
+            for name, value in self.headers
+        )
+        return b',"partition":%d,"offset":%d,"headers":[%s]}' % (
+            self.partition,
+            self.offset,
+            headers,
+        )
 
     @property
     def size(self) -> int:
@@ -141,6 +231,17 @@ class EncodedRecord:
             'value': self.value.decoded(),
             'partition': self.partition,
             'offset': self.offset,
+            'headers': [
+                {
+                    'name': name,
+                    'value': (
+                        None
+                        if value is None
+                        else base64.b64encode(value).decode('ascii')
+                    ),
+                }
+                for name, value in self.headers
+            ],
         }
 
 
@@ -150,10 +251,13 @@ class FetchReply:
 
     starts holds the offset of each partition's first record in the
     reply, to seek back to if the reply does not reach the client.
+    undecodable names the first record a json instance could not return,
+    as its topic, partition, offset and the reason, if the poll found one.
     """
 
     records: list[EncodedRecord]
     starts: dict[TopicPartition, int] = field(default_factory=dict)
+    undecodable: tuple[str, int, int, str] | None = None
 
     @property
     def size(self) -> int:

@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import threading
 import time
 import uuid
@@ -48,6 +49,7 @@ from kafka.structs import TopicPartition
 from web_service.consumer_records import EncodedField
 from web_service.consumer_records import EncodedRecord
 from web_service.consumer_records import FetchReply
+from web_service.consumer_records import NotJSON
 from web_service.services import MSKTokenProvider
 
 logger = logging.getLogger(__name__)
@@ -102,6 +104,9 @@ MAX_FETCH_WAIT_MS = 30_000
 # case. kafka-python takes them in any case too, but takes a value it does
 # not know as none, with only a log line, so the service checks them.
 OFFSET_RESETS = ('earliest', 'latest', 'none')
+# Instance names: they go in URLs, so letters, digits, dots, dashes and
+# underscores, starting with a letter or digit (so never . or ..)
+INSTANCE_NAME = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}')
 
 # Error codes of the consumer routes: Confluent's, from kafka-rest's
 # Errors.java and rest-utils' KafkaExceptionMapper, except 40904.
@@ -112,6 +117,9 @@ NOT_AUTHORIZED = 40301
 NOT_FOUND = 40401
 PARTITION_NOT_FOUND = 40402
 INSTANCE_NOT_FOUND = 40403
+FORMAT_MISMATCH = 40601
+# KafkaRestExceptionMapper's code for a record that failed to deserialize
+RECORD_NOT_DECODABLE = 40801
 INSTANCE_EXISTS = 40902
 ILLEGAL_STATE = 40903
 INSTANCE_BUSY = 40904  # Octopus's own
@@ -126,7 +134,7 @@ KAFKA_RETRIABLE_ERROR = 50003
 BROKER_NOT_AVAILABLE = 50302
 
 Reply = tuple[dict[str, Any], int]
-# A reply that may have no body (204, or 200 to a commit)
+# A reply that may have no body (204)
 MaybeReply = tuple[dict[str, Any] | None, int]
 
 # The Kafka errors KafkaExceptionMapper answers with 400 and 40002
@@ -163,6 +171,23 @@ def _busy() -> Reply:
         409,
         INSTANCE_BUSY,
         'Consumer instance is busy with another request.',
+    )
+
+
+def _not_decodable(topic: str, partition: int, offset: int, why: str) -> Reply:
+    """The reply for a fetch whose first record a json instance cannot return.
+
+    Confluent's REST Proxy answers a record that fails to deserialize with
+    408 and 40801 (KafkaRestExceptionMapper). The record is not skipped,
+    so the client seeks past it or reads it with a binary instance.
+    """
+    return error_reply(
+        408,
+        RECORD_NOT_DECODABLE,
+        f'The key or value of the record at offset {offset} of topic '
+        f'{topic}, partition {partition}, {why}. A json instance returns '
+        'only JSON: seek past the record, or read it with a binary '
+        'instance.',
     )
 
 
@@ -836,12 +861,14 @@ class ConsumerService:
 
         A subject may hold MAX_INSTANCES_PER_SUBJECT instances, and the
         service MAX_INSTANCES; a create past either is refused with 429.
+        A name must match INSTANCE_NAME, and one is made if none is given.
         consumer.request.timeout.ms is, as in Confluent's REST Proxy, how
         long a fetch that names no timeout waits for records; it is not
         passed to the Kafka consumer.
 
         Returns:
-            Tuple of (response_body, http_status_code)
+            The instance's id and 200, or an error reply and its status;
+            the route adds the instance's base_uri
         """
         if not self.bootstrap_servers:
             return error_reply(
@@ -858,6 +885,12 @@ class ConsumerService:
         if isinstance(settings[0], dict):
             return settings
         auto_offset_reset, min_bytes, wait_ms = settings
+        if name is not None and not INSTANCE_NAME.fullmatch(name):
+            return _invalid_config(
+                'name',
+                'must be 1 to 128 letters, digits, dots, dashes or '
+                'underscores, starting with a letter or digit',
+            )
 
         instance_id = name or uuid.uuid4().hex[:12]
         key = self._consumer_key(
@@ -919,16 +952,7 @@ class ConsumerService:
                 self._close(managed, 'Error closing consumer %s at shutdown')
             return self._shutting_down()
 
-        return (
-            {
-                'instance_id': instance_id,
-                'base_uri': (
-                    f'/api/v3/{namespace}/consumers'
-                    f'/{group_name}/instances/{instance_id}'
-                ),
-            },
-            200,
-        )
+        return ({'instance_id': instance_id}, 200)
 
     def _build(
         self,
@@ -1120,15 +1144,16 @@ class ConsumerService:
         instance_id: str,
         *,
         timeout_ms: int,
-        max_records: int | None = None,
+        max_bytes: int | None = None,
     ) -> tuple[FetchReply | dict[str, Any], int]:
         """Fetch records, as the reply that returns them.
 
         The reply holds the records in the order kafka-python returned
-        them, up to REPLY_MAX_BYTES of JSON; the first record is always
-        held, however large. Each partition whose records are not all held
-        is sought back to the first record not held, so the next fetch
-        returns it.
+        them, up to REPLY_MAX_BYTES of JSON and, as in Confluent's REST
+        Proxy, fewer than max_bytes bytes of keys and values. The first
+        record is always held, however large. Each partition whose records
+        are not all held is sought back to the first record not held, so
+        the next fetch returns it.
 
         Args:
             subject: The instance's subject
@@ -1136,19 +1161,23 @@ class ConsumerService:
             group_name: The instance's group
             instance_id: The instance's id
             timeout_ms: How long to wait for records
-            max_records: Most records to return, or None for
-                kafka-python's default of 500
+            max_bytes: Bytes of keys and values the records must stay
+                under, or None for no limit but REPLY_MAX_BYTES
 
         Returns:
-            The reply and 200, or an error reply and its status
+            The reply and 200, or an error reply and its status: 408 if a
+            json instance's poll found records and the first it could
+            return is one whose key or value is not JSON
         """
 
-        def serve(managed: ManagedConsumer) -> tuple[FetchReply, int]:
-            raw = managed.consumer.poll(
-                timeout_ms=timeout_ms,
-                max_records=max_records,
-            )
-            return (self._reply(namespace, managed, raw), 200)
+        def serve(
+            managed: ManagedConsumer,
+        ) -> tuple[FetchReply | dict[str, Any], int]:
+            raw = managed.consumer.poll(timeout_ms=timeout_ms)
+            reply = self._reply(namespace, managed, raw, max_bytes)
+            if not reply.records and reply.undecodable:
+                return _not_decodable(*reply.undecodable)
+            return (reply, 200)
 
         return self._serve(
             (subject, namespace, group_name, instance_id),
@@ -1161,16 +1190,22 @@ class ConsumerService:
         namespace: str,
         managed: ManagedConsumer,
         raw: dict[TopicPartition, list[Any]],
+        max_bytes: int | None = None,
     ) -> FetchReply:
         """The reply of fetched records, rewinding the ones it leaves out.
 
         The partitions take turns to come first, one fetch after another,
         so a partition whose records fill every reply cannot keep the
-        others out. Within a partition the records keep their order.
+        others out. Within a partition the records keep their order. A
+        record a json instance cannot return ends its partition's part of
+        the reply, and the partition is sought back to it.
         """
         records: list[EncodedRecord] = []
         starts: dict[TopicPartition, int] = {}
         size = 2
+        payload = 0
+        full = False
+        undecodable: tuple[str, int, int, str] | None = None
         rewind: dict[TopicPartition, int] = {}
         order = sorted(
             (tp for tp in raw if self._in_namespace(namespace, tp.topic)),
@@ -1185,26 +1220,66 @@ class ConsumerService:
         for tp in order:
             topic = self._strip_namespace(namespace, tp.topic)
             for msg in raw[tp]:
-                if rewind:
+                if full:
                     rewind[tp] = msg.offset
                     break
-                record = EncodedRecord(
-                    topic=topic,
-                    key=EncodedField.of(msg.key, managed.format_type),
-                    value=EncodedField.of(msg.value, managed.format_type),
-                    partition=tp.partition,
-                    offset=msg.offset,
-                )
-                grown = size + record.size + (1 if records else 0)
-                if records and grown > REPLY_MAX_BYTES:
+                try:
+                    record = self._record(
+                        topic,
+                        tp.partition,
+                        msg,
+                        managed.format_type,
+                    )
+                except NotJSON as e:
+                    logger.warning(
+                        'Instance %s cannot return offset %d of %s, whose '
+                        'key or value %s',
+                        managed.instance_id,
+                        msg.offset,
+                        tp.topic,
+                        e,
+                    )
                     rewind[tp] = msg.offset
+                    if undecodable is None:
+                        undecodable = (topic, tp.partition, msg.offset, str(e))
+                    break
+                grown = size + record.size + (1 if records else 0)
+                taken = payload + record.payload_size
+                if records and (
+                    grown > REPLY_MAX_BYTES
+                    or (max_bytes is not None and taken >= max_bytes)
+                ):
+                    rewind[tp] = msg.offset
+                    full = True
                     break
                 records.append(record)
                 starts.setdefault(tp, msg.offset)
                 size = grown
+                payload = taken
         for tp, offset in rewind.items():
             managed.consumer.seek(tp, offset)
-        return FetchReply(records, starts)
+        return FetchReply(records, starts, undecodable)
+
+    @staticmethod
+    def _record(
+        topic: str,
+        partition: int,
+        msg: Any,
+        format_type: str,
+    ) -> EncodedRecord:
+        """A fetched record as the reply holds it.
+
+        Raises:
+            NotJSON: In the json format, if its key or value is not JSON
+        """
+        return EncodedRecord(
+            topic=topic,
+            key=EncodedField.of(msg.key, format_type),
+            value=EncodedField.of(msg.value, format_type),
+            partition=partition,
+            offset=msg.offset,
+            headers=tuple(msg.headers or ()),
+        )
 
     @staticmethod
     def unfetch(managed: ManagedConsumer, reply: FetchReply) -> None:
@@ -1245,8 +1320,8 @@ class ConsumerService:
             group_name: The instance's group
             instance_id: The instance's id
             timeout_ms: How long to wait for records
-            max_bytes: Most records to return; None or a value of 0 or
-                less takes kafka-python's default of 500
+            max_bytes: Bytes of keys and values the records must stay
+                under; None or a value of 0 or less sets no limit
 
         Returns:
             Tuple of (records_array_or_error, http_status_code)
@@ -1257,7 +1332,7 @@ class ConsumerService:
             group_name,
             instance_id,
             timeout_ms=timeout_ms,
-            max_records=max_bytes if max_bytes and max_bytes > 0 else None,
+            max_bytes=max_bytes if max_bytes and max_bytes > 0 else None,
         )
         if not isinstance(reply, FetchReply):
             return reply, status
@@ -1272,7 +1347,7 @@ class ConsumerService:
         group_name: str,
         instance_id: str,
         offsets: list[dict[str, Any]] | None = None,
-    ) -> tuple[dict[str, Any] | None, int]:
+    ) -> tuple[list[Any] | dict[str, Any], int]:
         """Commit offsets for the consumer.
 
         Offsets may be committed only for partitions assigned to the
@@ -1280,10 +1355,12 @@ class ConsumerService:
         Confluent's REST Proxy, an offset is that of the last record
         processed, so the group's committed offset, the next record to
         read, is one more; a commit of every record fetched commits the
-        positions, which are already the next records to read.
+        positions, which are already the next records to read. Each offset
+        may carry metadata, which the group stores with it.
 
         Returns:
-            Tuple of (None_or_error, http_status_code)
+            [] and 200, as Confluent's REST Proxy answers a commit, or an
+            error reply and its status
         """
         tps: list[TopicPartition] = []
         if offsets:
@@ -1292,22 +1369,28 @@ class ConsumerService:
                 return found
             tps = found
 
-        def serve(managed: ManagedConsumer) -> MaybeReply:
+        def serve(
+            managed: ManagedConsumer,
+        ) -> tuple[list[Any] | dict[str, Any], int]:
             if not offsets:
                 managed.consumer.commit(
                     timeout_ms=CONSUMER_OPERATION_TIMEOUT_MS,
                 )
-                return (None, 200)
+                return ([], 200)
             if refusal := self._unassigned(namespace, managed, tps):
                 return refusal
             managed.consumer.commit(
                 offsets={
-                    tp: OffsetAndMetadata(o['offset'] + 1, '', -1)
+                    tp: OffsetAndMetadata(
+                        o['offset'] + 1,
+                        o.get('metadata') or '',
+                        -1,
+                    )
                     for tp, o in zip(tps, offsets, strict=True)
                 },
                 timeout_ms=CONSUMER_OPERATION_TIMEOUT_MS,
             )
-            return (None, 200)
+            return ([], 200)
 
         return self._serve(
             (subject, namespace, group_name, instance_id),
@@ -1324,6 +1407,9 @@ class ConsumerService:
         partitions: list[dict[str, Any]],
     ) -> tuple[dict[str, Any], int]:
         """Get committed offsets for partitions.
+
+        As in Confluent's REST Proxy, a partition the group has never
+        committed is left out of the reply.
 
         Returns:
             Tuple of (response_body, http_status_code)
@@ -1344,14 +1430,17 @@ class ConsumerService:
                 )
                 committed = managed.consumer.committed(
                     tp,
+                    metadata=True,
                     timeout_ms=remaining_ms,
                 )
+                if committed is None:
+                    continue
                 results.append(
                     {
                         'topic': p['topic'],
                         'partition': p['partition'],
-                        'offset': committed if committed is not None else -1,
-                        'metadata': '',
+                        'offset': committed.offset,
+                        'metadata': committed.metadata or '',
                     },
                 )
             return ({'offsets': results}, 200)

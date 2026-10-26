@@ -1,12 +1,12 @@
-"""Unit and integration tests for ConsumerService."""
+"""Unit tests for ConsumerService.
+
+The live tests of the consumer routes are in consumer_live_test.py.
+"""
 
 from __future__ import annotations
 
 import base64
-import contextlib
-import json
 import logging
-import os
 import threading
 import time
 import warnings
@@ -21,9 +21,8 @@ from kafka.errors import KafkaTimeoutError
 from kafka.structs import OffsetAndMetadata
 from kafka.structs import TopicPartition
 
-from tests.live_identity import live_namespace
-from tests.live_identity import permissions_boundary_arn
 from web_service.consumer_records import EncodedField
+from web_service.consumer_records import NotJSON
 from web_service.consumer_service import CLOSE_COMMIT_TIMEOUT_MS
 from web_service.consumer_service import CLOSE_TIMEOUT_MS
 from web_service.consumer_service import CONSUMER_OPERATION_TIMEOUT_MS
@@ -145,16 +144,47 @@ def test_encode_value_binary_format() -> None:
 
 
 def test_encode_value_json_format_utf8() -> None:
-    """Test EncodedField with json format returns UTF-8 string."""
-    result = EncodedField.of(b'{"key": "value"}', 'json').decoded()
-    assert result == '{"key": "value"}'
+    """Test EncodedField with json format returns the JSON value."""
+    field = EncodedField.of(b'{"key": "value"}', 'json')
+    assert field.decoded() == {'key': 'value'}
+    # Written as it was produced, not encoded again
+    assert b''.join(field.pieces()) == b'{"key": "value"}'
+    assert field.size == len(b'{"key": "value"}')
 
 
-def test_encode_value_json_format_non_utf8_fallback() -> None:
-    """Test EncodedField with json format falls back to base64."""
-    data = b'\x80\x81\x82'
-    result = EncodedField.of(data, 'json').decoded()
-    assert result == base64.b64encode(data).decode('ascii')
+@pytest.mark.parametrize(
+    'data',
+    (
+        b'\x80\x81\x82',
+        b'plain text',
+        b'{"a": 1} {"b": 2}',
+        b'NaN',
+        b'',
+        b'[' * 100_000,
+    ),
+)
+def test_encode_value_json_format_not_json(data: bytes) -> None:
+    """Test EncodedField with json format refuses what is not JSON."""
+    with pytest.raises(NotJSON, match='not one JSON value'):
+        EncodedField.of(data, 'json')
+
+
+def test_encode_value_json_format_check_is_bounded() -> None:
+    """A value whose check would cost too much memory is not checked."""
+    data = b'[' + b'[],' * 500_000 + b'[]]'
+    with (
+        patch('web_service.consumer_records.json.JSONDecoder') as decoder,
+        pytest.raises(NotJSON, match='too large'),
+    ):
+        EncodedField.of(data, 'json')
+    decoder.assert_not_called()
+
+
+def test_encode_value_json_format_whitespace_and_scalars() -> None:
+    """Any one JSON value is returned, with surrounding whitespace."""
+    assert EncodedField.of(b' 42\n', 'json').decoded() == 42
+    assert EncodedField.of(b'"text"', 'json').decoded() == 'text'
+    assert EncodedField.of(b'null', 'json').decoded() is None
 
 
 def test_encode_value_none_binary() -> None:
@@ -288,10 +318,8 @@ def test_create_consumer_success(
             format_type='binary',
         )
     assert status == 200
-    assert body['instance_id'] == 'test-inst'
-    assert '/api/v3/' in body['base_uri']
-    assert NAMESPACE in body['base_uri']
-    assert GROUP_NAME in body['base_uri']
+    # The route adds base_uri, which depends on the request's URL
+    assert body == {'instance_id': 'test-inst'}
 
 
 def test_create_consumer_auto_generated_id(
@@ -437,22 +465,53 @@ def test_create_consumer_auto_commit_enable(
     assert call_kwargs['enable_auto_commit'] is True
 
 
-def test_create_consumer_base_uri_format(
+@pytest.mark.parametrize(
+    'name',
+    ('a', 'inst-1', 'Inst_2.b', '0' + 'x' * 127),
+)
+def test_create_consumer_accepts_valid_names(
     consumer_service: ConsumerService,
+    name: str,
 ) -> None:
-    """Test create_consumer returns correctly formatted base_uri."""
-    with patch(
-        'web_service.consumer_service.KafkaConsumer',
-    ) as mock_kc_class:
-        mock_kc_class.return_value = MagicMock()
+    """An instance name of letters, digits, dots, dashes and underscores."""
+    with patch('web_service.consumer_service.KafkaConsumer'):
         body, status = consumer_service.create_consumer(
             subject=SUBJECT,
             namespace=NAMESPACE,
             group_name=GROUP_NAME,
-            name='uri-inst',
+            name=name,
         )
-    expected = f'/api/v3/{NAMESPACE}/consumers/{GROUP_NAME}/instances/uri-inst'
-    assert body['base_uri'] == expected
+    assert status == 200
+    assert body == {'instance_id': name}
+
+
+@pytest.mark.parametrize(
+    'name',
+    ('', '-inst', '.inst', 'a/b', 'a b', 'inst%2F', 'x' * 129, 'é'),
+)
+def test_create_consumer_refuses_invalid_names(
+    consumer_service: ConsumerService,
+    name: str,
+) -> None:
+    """A name that would not survive a URL path is refused with 42204."""
+    with patch('web_service.consumer_service.KafkaConsumer') as mock_kc:
+        body, status = consumer_service.create_consumer(
+            subject=SUBJECT,
+            namespace=NAMESPACE,
+            group_name=GROUP_NAME,
+            name=name,
+        )
+    mock_kc.assert_not_called()
+    assert status == 422
+    assert body == {
+        'error_code': 42204,
+        'message': (
+            'Invalid consumer configuration: name must be 1 to 128 '
+            'letters, digits, dots, dashes or underscores, starting with '
+            'a letter or digit'
+        ),
+    }
+    assert consumer_service._consumers == {}
 
 
 # ============================================================================
@@ -748,7 +807,7 @@ def test_poll_records_success_binary(
 def test_poll_records_success_json(
     populated_service_json: ConsumerService,
 ) -> None:
-    """Test poll_records with json format returns UTF-8 string."""
+    """Test poll_records with json format returns the JSON value."""
     # Get the mock consumer from the json-format service
     key = (SUBJECT, NAMESPACE, GROUP_NAME, INSTANCE_ID)
     managed = populated_service_json._consumers[key]
@@ -768,7 +827,7 @@ def test_poll_records_success_json(
         INSTANCE_ID,
     )
     assert status == 200
-    assert body[0]['value'] == '{"msg": "hello"}'
+    assert body[0]['value'] == {'msg': 'hello'}
     assert body[0]['key'] is None
 
 
@@ -888,14 +947,39 @@ def test_commit_offsets_with_explicit_offsets(
         INSTANCE_ID,
         offsets=offsets,
     )
+    # As in Confluent's REST Proxy, an empty list of offsets
     assert status == 200
-    assert body is None
+    assert body == []
     call_kwargs = mock_kafka_consumer.commit.call_args[1]
     tp = TopicPartition(f'{NAMESPACE}.t1', 0)
     assert tp in call_kwargs['offsets']
     # As in Confluent's REST Proxy, the group's offset is the next record
     assert call_kwargs['offsets'][tp] == OffsetAndMetadata(43, '', -1)
     assert call_kwargs['timeout_ms'] == CONSUMER_OPERATION_TIMEOUT_MS
+
+
+def test_commit_offsets_stores_metadata(
+    populated_service: ConsumerService,
+    mock_kafka_consumer: MagicMock,
+) -> None:
+    """An offset's metadata is committed with it."""
+    mock_kafka_consumer.assignment.return_value = {
+        TopicPartition(f'{NAMESPACE}.t1', 0),
+    }
+    offsets = [
+        {'topic': 't1', 'partition': 0, 'offset': 9, 'metadata': 'batch 3'},
+    ]
+    body, status = populated_service.commit_offsets(
+        SUBJECT,
+        NAMESPACE,
+        GROUP_NAME,
+        INSTANCE_ID,
+        offsets=offsets,
+    )
+    assert (body, status) == ([], 200)
+    tp = TopicPartition(f'{NAMESPACE}.t1', 0)
+    committed = mock_kafka_consumer.commit.call_args.kwargs['offsets']
+    assert committed == {tp: OffsetAndMetadata(10, 'batch 3', -1)}
 
 
 def test_commit_offsets_without_offsets(
@@ -911,7 +995,7 @@ def test_commit_offsets_without_offsets(
         offsets=None,
     )
     assert status == 200
-    assert body is None
+    assert body == []
     mock_kafka_consumer.commit.assert_called_once_with(
         timeout_ms=CONSUMER_OPERATION_TIMEOUT_MS,
     )
@@ -956,12 +1040,19 @@ def test_get_committed_success(
     populated_service: ConsumerService,
     mock_kafka_consumer: MagicMock,
 ) -> None:
-    """Test get_committed returns offsets with None mapped to -1."""
-    # First call returns 42, second returns None
-    mock_kafka_consumer.committed.side_effect = [42, None]
+    """Test get_committed returns offsets and metadata, as Confluent does.
+
+    A partition the group never committed is left out.
+    """
+    mock_kafka_consumer.committed.side_effect = [
+        OffsetAndMetadata(42, 'note', -1),
+        None,
+        OffsetAndMetadata(7, None, -1),
+    ]
     partitions = [
         {'topic': 't1', 'partition': 0},
         {'topic': 't2', 'partition': 0},
+        {'topic': 't3', 'partition': 0},
     ]
     body, status = populated_service.get_committed(
         SUBJECT,
@@ -971,10 +1062,14 @@ def test_get_committed_success(
         partitions=partitions,
     )
     assert status == 200
-    assert len(body['offsets']) == 2
-    assert body['offsets'][0]['offset'] == 42
-    assert body['offsets'][0]['metadata'] == ''
-    assert body['offsets'][1]['offset'] == -1
+    assert body == {
+        'offsets': [
+            {'topic': 't1', 'partition': 0, 'offset': 42, 'metadata': 'note'},
+            {'topic': 't3', 'partition': 0, 'offset': 7, 'metadata': ''},
+        ],
+    }
+    for c in mock_kafka_consumer.committed.call_args_list:
+        assert c.kwargs['metadata'] is True
 
 
 def test_get_committed_not_found(
@@ -1619,7 +1714,7 @@ def test_get_committed_bounds_each_lookup(
     mock_kafka_consumer: MagicMock,
 ) -> None:
     """Every committed() call gets a timeout within the operation bound."""
-    mock_kafka_consumer.committed.return_value = 7
+    mock_kafka_consumer.committed.return_value = OffsetAndMetadata(7, '', -1)
     populated_service.get_committed(
         SUBJECT,
         NAMESPACE,
@@ -2105,980 +2200,3 @@ def test_close_waits_within_the_deadline(
     assert 0 <= commit_ms <= 500
     assert 0 <= close_ms <= 500
     assert managed.closed
-
-
-# ============================================================================
-# Integration Test Fixtures
-# ============================================================================
-
-
-@pytest.fixture
-def real_kafka_service() -> Any:
-    """Create a KafkaService with real AWS services."""
-    from web_service.services import KafkaService
-
-    bootstrap_servers = os.getenv('DEFAULT_SERVERS')
-    region = os.getenv('AWS_ACCOUNT_REGION')
-    if not region:
-        pytest.skip('Missing AWS_ACCOUNT_REGION')
-    return KafkaService(bootstrap_servers=bootstrap_servers, region=region)
-
-
-@pytest.fixture
-def real_web_service() -> Any:
-    """Create a WebService with real AWS services."""
-    from web_service.services import DynamoDBService
-    from web_service.services import IAMService
-    from web_service.services import KafkaService
-    from web_service.services import NamespaceService
-    from web_service.services import WebService
-
-    account_id = os.getenv('AWS_ACCOUNT_ID')
-    region = os.getenv('AWS_ACCOUNT_REGION')
-    cluster_name = os.getenv('MSK_CLUSTER_NAME')
-    if not all([account_id, region, cluster_name]):
-        pytest.skip('Missing required AWS environment variables')
-
-    iam_service = IAMService(
-        account_id=account_id or '',
-        region=region or '',
-        cluster_name=cluster_name or '',
-        permissions_boundary_arn=permissions_boundary_arn(),
-    )
-    kafka_service = KafkaService(
-        bootstrap_servers=os.getenv('DEFAULT_SERVERS'),
-        region=region or '',
-    )
-    db_service = DynamoDBService(
-        region=region or '',
-        keys_table_name=os.getenv(
-            'KEYS_TABLE_NAME',
-            'test-diaspora-keys-table',
-        ),
-        users_table_name=os.getenv(
-            'USERS_TABLE_NAME',
-            'test-diaspora-users-table',
-        ),
-        namespace_table_name=os.getenv(
-            'NAMESPACE_TABLE_NAME',
-            'test-diaspora-namespace-table',
-        ),
-    )
-    namespace_service = NamespaceService(dynamodb_service=db_service)
-    return WebService(
-        iam_service=iam_service,
-        kafka_service=kafka_service,
-        namespace_service=namespace_service,
-    )
-
-
-@pytest.fixture
-def consumer_service_real() -> ConsumerService:
-    """Create a ConsumerService with real MSK connection."""
-    bootstrap_servers = os.getenv('DEFAULT_SERVERS')
-    region = os.getenv('AWS_ACCOUNT_REGION')
-    if not bootstrap_servers or not region:
-        pytest.skip('Missing DEFAULT_SERVERS or AWS_ACCOUNT_REGION')
-    return ConsumerService(
-        bootstrap_servers=bootstrap_servers,
-        region=region,
-    )
-
-
-@pytest.fixture
-def cleanup_consumer_and_user(
-    real_web_service: Any,
-    request: pytest.FixtureRequest,
-) -> Any:
-    """Dual cleanup fixture for consumer instances and user resources.
-
-    Returns a function to register (consumer_service, subject, namespace,
-    group_name, instance_id) tuples for cleanup. Also cleans up the user.
-    """
-    consumers: list[tuple[ConsumerService, str, str, str, str]] = []
-    subjects: list[str] = []
-    cleanup_done = False
-
-    def _register(
-        cs: ConsumerService,
-        subject: str,
-        namespace: str,
-        group_name: str,
-        instance_id: str,
-    ) -> None:
-        entry = (cs, subject, namespace, group_name, instance_id)
-        if entry not in consumers:
-            consumers.append(entry)
-        if subject not in subjects:
-            subjects.append(subject)
-
-    def _register_user(subject: str) -> None:
-        if subject not in subjects:
-            subjects.append(subject)
-
-    _register.register_user = _register_user
-
-    def _finalize() -> None:
-        nonlocal cleanup_done
-        if cleanup_done:
-            return
-        cleanup_done = True
-        # Delete consumer instances
-        for cs, subject, namespace, group_name, instance_id in consumers:
-            with contextlib.suppress(Exception):
-                cs.delete_consumer(
-                    subject,
-                    namespace,
-                    group_name,
-                    instance_id,
-                )
-        # Delete user and all their resources
-        for subject in subjects:
-            with contextlib.suppress(Exception):
-                real_web_service.delete_user(subject)
-
-    request.addfinalizer(_finalize)
-    yield _register
-    _finalize()
-
-
-def _produce_messages(
-    bootstrap_servers: str,
-    region: str,
-    kafka_topic: str,
-    messages: list[bytes],
-) -> None:
-    """Produce test messages to a Kafka topic using MSK auth."""
-    from kafka import KafkaProducer
-
-    from web_service.services import MSKTokenProvider
-
-    producer = KafkaProducer(
-        bootstrap_servers=bootstrap_servers,
-        security_protocol='SASL_SSL',
-        sasl_mechanism='OAUTHBEARER',
-        sasl_oauth_token_provider=MSKTokenProvider(region),
-    )
-    try:
-        for msg in messages:
-            producer.send(kafka_topic, value=msg)
-        producer.flush()
-    finally:
-        producer.close()
-
-
-# ============================================================================
-# Integration Tests with Real AWS/MSK Services
-# ============================================================================
-
-
-@pytest.mark.integration
-def test_create_consumer_instance_real(
-    consumer_service_real: ConsumerService,
-    random_subject: str,
-    cleanup_consumer_and_user: Any,
-) -> None:
-    """Test create_consumer against real MSK."""
-    namespace = live_namespace()
-    group_name = f'grp-{os.urandom(4).hex()}'
-    instance_name = f'inst-{os.urandom(4).hex()}'
-
-    print(
-        f'\n[test_create_consumer_instance_real] '
-        f'group={group_name}, instance={instance_name}',
-    )
-
-    body, status = consumer_service_real.create_consumer(
-        subject=random_subject,
-        namespace=namespace,
-        group_name=group_name,
-        name=instance_name,
-        format_type='json',
-        auto_offset_reset='earliest',
-    )
-    print(f'  Result: status={status}')
-    print(json.dumps(body, indent=2, default=str))
-
-    # Register for cleanup
-    cleanup_consumer_and_user(
-        consumer_service_real,
-        random_subject,
-        namespace,
-        group_name,
-        instance_name,
-    )
-
-    assert status == 200
-    assert body['instance_id'] == instance_name
-    assert f'/api/v3/{namespace}/consumers/' in body['base_uri']
-
-
-@pytest.mark.integration
-def test_create_consumer_conflict_real(
-    consumer_service_real: ConsumerService,
-    random_subject: str,
-    cleanup_consumer_and_user: Any,
-) -> None:
-    """Test create_consumer conflict (duplicate name) against real MSK."""
-    namespace = live_namespace()
-    group_name = f'grp-{os.urandom(4).hex()}'
-    instance_name = f'inst-{os.urandom(4).hex()}'
-
-    print(
-        f'\n[test_create_consumer_conflict_real] '
-        f'group={group_name}, instance={instance_name}',
-    )
-
-    body1, status1 = consumer_service_real.create_consumer(
-        subject=random_subject,
-        namespace=namespace,
-        group_name=group_name,
-        name=instance_name,
-    )
-    cleanup_consumer_and_user(
-        consumer_service_real,
-        random_subject,
-        namespace,
-        group_name,
-        instance_name,
-    )
-    assert status1 == 200
-
-    body2, status2 = consumer_service_real.create_consumer(
-        subject=random_subject,
-        namespace=namespace,
-        group_name=group_name,
-        name=instance_name,
-    )
-    print(f'  Second create: status={status2}')
-    print(json.dumps(body2, indent=2, default=str))
-
-    assert status2 == 409
-    assert body2['error_code'] == 40902
-
-
-@pytest.mark.integration
-def test_delete_consumer_real(
-    consumer_service_real: ConsumerService,
-    random_subject: str,
-    cleanup_consumer_and_user: Any,
-) -> None:
-    """Test delete_consumer against real MSK."""
-    namespace = live_namespace()
-    group_name = f'grp-{os.urandom(4).hex()}'
-    instance_name = f'inst-{os.urandom(4).hex()}'
-
-    print(
-        f'\n[test_delete_consumer_real] '
-        f'group={group_name}, instance={instance_name}',
-    )
-
-    body_c, status_c = consumer_service_real.create_consumer(
-        subject=random_subject,
-        namespace=namespace,
-        group_name=group_name,
-        name=instance_name,
-    )
-    # Register for cleanup in case delete fails
-    cleanup_consumer_and_user(
-        consumer_service_real,
-        random_subject,
-        namespace,
-        group_name,
-        instance_name,
-    )
-    assert status_c == 200
-
-    body, status = consumer_service_real.delete_consumer(
-        random_subject,
-        namespace,
-        group_name,
-        instance_name,
-    )
-    print(f'  Delete: status={status}')
-    assert status == 204
-    assert body is None
-
-
-@pytest.mark.integration
-def test_delete_nonexistent_consumer_real(
-    consumer_service_real: ConsumerService,
-) -> None:
-    """Test delete_consumer returns 404 for nonexistent consumer."""
-    print('\n[test_delete_nonexistent_consumer_real]')
-    body, status = consumer_service_real.delete_consumer(
-        'no-user',
-        'no-ns',
-        'no-group',
-        'no-instance',
-    )
-    print(f'  status={status}')
-    print(json.dumps(body, indent=2, default=str))
-    assert status == 404
-    assert body['error_code'] == 40403
-
-
-@pytest.mark.integration
-def test_subscribe_and_get_subscription_real(
-    consumer_service_real: ConsumerService,
-    real_web_service: Any,
-    real_kafka_service: Any,
-    random_subject: str,
-    cleanup_consumer_and_user: Any,
-) -> None:
-    """Test subscribe and get_subscription against real MSK."""
-    print(
-        f'\n[test_subscribe_and_get_subscription_real] '
-        f'subject={random_subject}',
-    )
-
-    # Setup: create user and topic
-    create_result = real_web_service.create_user(random_subject)
-    cleanup_consumer_and_user.register_user(random_subject)
-    assert create_result['status'] == 'success'
-    namespace = create_result['namespace']
-    topic = f'test-topic-{os.urandom(4).hex()}'
-
-    topic_result = real_web_service.namespace_service.create_topic(
-        random_subject,
-        namespace,
-        topic,
-    )
-    assert topic_result['status'] == 'success'
-    print(f'  Created topic: {namespace}.{topic}')
-
-    # Create consumer
-    group_name = f'grp-{os.urandom(4).hex()}'
-    instance_name = f'inst-{os.urandom(4).hex()}'
-    body_c, status_c = consumer_service_real.create_consumer(
-        subject=random_subject,
-        namespace=namespace,
-        group_name=group_name,
-        name=instance_name,
-        format_type='json',
-        auto_offset_reset='earliest',
-    )
-    cleanup_consumer_and_user(
-        consumer_service_real,
-        random_subject,
-        namespace,
-        group_name,
-        instance_name,
-    )
-    assert status_c == 200
-
-    # Subscribe
-    body_s, status_s = consumer_service_real.subscribe(
-        random_subject,
-        namespace,
-        group_name,
-        instance_name,
-        topics=[topic],
-    )
-    assert status_s == 204
-    print(f'  Subscribed to: {topic}')
-
-    # Get subscription
-    body_g, status_g = consumer_service_real.get_subscription(
-        random_subject,
-        namespace,
-        group_name,
-        instance_name,
-    )
-    print(f'  Subscription: {json.dumps(body_g, default=str)}')
-    assert status_g == 200
-    assert topic in body_g['topics']
-
-
-@pytest.mark.integration
-def test_unsubscribe_real(
-    consumer_service_real: ConsumerService,
-    real_web_service: Any,
-    random_subject: str,
-    cleanup_consumer_and_user: Any,
-) -> None:
-    """Test unsubscribe against real MSK."""
-    print(f'\n[test_unsubscribe_real] subject={random_subject}')
-
-    # Setup: create user and topic
-    create_result = real_web_service.create_user(random_subject)
-    cleanup_consumer_and_user.register_user(random_subject)
-    assert create_result['status'] == 'success'
-    namespace = create_result['namespace']
-    topic = f'test-topic-{os.urandom(4).hex()}'
-    topic_result = real_web_service.namespace_service.create_topic(
-        random_subject,
-        namespace,
-        topic,
-    )
-    assert topic_result['status'] == 'success'
-
-    # Create and subscribe
-    group_name = f'grp-{os.urandom(4).hex()}'
-    instance_name = f'inst-{os.urandom(4).hex()}'
-    body_c, status_c = consumer_service_real.create_consumer(
-        subject=random_subject,
-        namespace=namespace,
-        group_name=group_name,
-        name=instance_name,
-    )
-    cleanup_consumer_and_user(
-        consumer_service_real,
-        random_subject,
-        namespace,
-        group_name,
-        instance_name,
-    )
-    assert status_c == 200
-
-    consumer_service_real.subscribe(
-        random_subject,
-        namespace,
-        group_name,
-        instance_name,
-        topics=[topic],
-    )
-
-    # Unsubscribe
-    body_u, status_u = consumer_service_real.unsubscribe(
-        random_subject,
-        namespace,
-        group_name,
-        instance_name,
-    )
-    assert status_u == 204
-    print('  Unsubscribed')
-
-    # Verify subscription is empty
-    body_g, status_g = consumer_service_real.get_subscription(
-        random_subject,
-        namespace,
-        group_name,
-        instance_name,
-    )
-    assert status_g == 200
-    assert body_g['topics'] == []
-
-
-@pytest.mark.integration
-def test_poll_records_empty_real(
-    consumer_service_real: ConsumerService,
-    real_web_service: Any,
-    random_subject: str,
-    cleanup_consumer_and_user: Any,
-) -> None:
-    """Test poll_records returns empty on a topic with no messages."""
-    print(f'\n[test_poll_records_empty_real] subject={random_subject}')
-
-    # Setup: create user and topic
-    create_result = real_web_service.create_user(random_subject)
-    cleanup_consumer_and_user.register_user(random_subject)
-    assert create_result['status'] == 'success'
-    namespace = create_result['namespace']
-    topic = f'test-topic-{os.urandom(4).hex()}'
-    real_web_service.namespace_service.create_topic(
-        random_subject,
-        namespace,
-        topic,
-    )
-
-    # Create consumer and subscribe
-    group_name = f'grp-{os.urandom(4).hex()}'
-    instance_name = f'inst-{os.urandom(4).hex()}'
-    consumer_service_real.create_consumer(
-        subject=random_subject,
-        namespace=namespace,
-        group_name=group_name,
-        name=instance_name,
-        auto_offset_reset='earliest',
-    )
-    cleanup_consumer_and_user(
-        consumer_service_real,
-        random_subject,
-        namespace,
-        group_name,
-        instance_name,
-    )
-    consumer_service_real.subscribe(
-        random_subject,
-        namespace,
-        group_name,
-        instance_name,
-        topics=[topic],
-    )
-
-    # First poll triggers partition assignment, second poll fetches data
-    consumer_service_real.poll_records(
-        random_subject,
-        namespace,
-        group_name,
-        instance_name,
-        timeout_ms=3000,
-    )
-    body, status = consumer_service_real.poll_records(
-        random_subject,
-        namespace,
-        group_name,
-        instance_name,
-        timeout_ms=3000,
-    )
-    print(f'  Poll result: status={status}, records={len(body)}')
-    assert status == 200
-    assert isinstance(body, list)
-    assert len(body) == 0
-
-
-@pytest.mark.integration
-def test_full_lifecycle_subscribe_poll_commit(
-    consumer_service_real: ConsumerService,
-    real_web_service: Any,
-    random_subject: str,
-    cleanup_consumer_and_user: Any,
-) -> None:
-    """Full lifecycle: create, subscribe, produce, poll, commit."""
-    bootstrap_servers = os.getenv('DEFAULT_SERVERS')
-    region = os.getenv('AWS_ACCOUNT_REGION')
-    if not bootstrap_servers or not region:
-        pytest.skip('Missing DEFAULT_SERVERS or AWS_ACCOUNT_REGION')
-
-    print(
-        f'\n[test_full_lifecycle_subscribe_poll_commit] '
-        f'subject={random_subject}',
-    )
-
-    # Setup: create user and topic
-    create_result = real_web_service.create_user(random_subject)
-    cleanup_consumer_and_user.register_user(random_subject)
-    assert create_result['status'] == 'success'
-    namespace = create_result['namespace']
-    topic = f'test-topic-{os.urandom(4).hex()}'
-    real_web_service.namespace_service.create_topic(
-        random_subject,
-        namespace,
-        topic,
-    )
-    kafka_topic = f'{namespace}.{topic}'
-
-    # Produce messages
-    messages = [b'msg-1', b'msg-2', b'msg-3']
-    _produce_messages(bootstrap_servers, region, kafka_topic, messages)
-    print(f'  Produced {len(messages)} messages to {kafka_topic}')
-
-    # Create consumer
-    group_name = f'grp-{os.urandom(4).hex()}'
-    instance_name = f'inst-{os.urandom(4).hex()}'
-    body_c, status_c = consumer_service_real.create_consumer(
-        subject=random_subject,
-        namespace=namespace,
-        group_name=group_name,
-        name=instance_name,
-        format_type='binary',
-        auto_offset_reset='earliest',
-        auto_commit_enable='false',
-    )
-    cleanup_consumer_and_user(
-        consumer_service_real,
-        random_subject,
-        namespace,
-        group_name,
-        instance_name,
-    )
-    assert status_c == 200
-
-    # Subscribe
-    consumer_service_real.subscribe(
-        random_subject,
-        namespace,
-        group_name,
-        instance_name,
-        topics=[topic],
-    )
-
-    # Poll (first poll may be empty, triggers partition assignment)
-    all_records: list[dict[str, Any]] = []
-    for _attempt in range(5):
-        body_p, status_p = consumer_service_real.poll_records(
-            random_subject,
-            namespace,
-            group_name,
-            instance_name,
-            timeout_ms=5000,
-        )
-        assert status_p == 200
-        if isinstance(body_p, list):
-            all_records.extend(body_p)
-        if len(all_records) >= len(messages):
-            break
-        print(f'  Poll attempt {_attempt + 1}: {len(all_records)} records')
-
-    print(f'  Total records polled: {len(all_records)}')
-    assert len(all_records) >= len(messages)
-
-    # Verify records contain expected fields
-    for record in all_records:
-        assert 'topic' in record
-        assert 'partition' in record
-        assert 'offset' in record
-        assert 'key' in record
-        assert 'value' in record
-        assert record['topic'] == topic
-
-    # Commit offsets (commit all)
-    body_co, status_co = consumer_service_real.commit_offsets(
-        random_subject,
-        namespace,
-        group_name,
-        instance_name,
-    )
-    print(f'  Commit: status={status_co}')
-    assert status_co == 200
-
-    # Get committed offsets
-    body_gc, status_gc = consumer_service_real.get_committed(
-        random_subject,
-        namespace,
-        group_name,
-        instance_name,
-        partitions=[{'topic': topic, 'partition': 0}],
-    )
-    print(f'  Committed offsets: {json.dumps(body_gc, default=str)}')
-    assert status_gc == 200
-    assert len(body_gc['offsets']) == 1
-    assert body_gc['offsets'][0]['offset'] >= len(messages)
-
-    # Delete consumer
-    body_d, status_d = consumer_service_real.delete_consumer(
-        random_subject,
-        namespace,
-        group_name,
-        instance_name,
-    )
-    assert status_d == 204
-    print('  Full lifecycle test completed successfully')
-
-
-@pytest.mark.integration
-def test_assign_and_get_assignments_real(
-    consumer_service_real: ConsumerService,
-    real_web_service: Any,
-    random_subject: str,
-    cleanup_consumer_and_user: Any,
-) -> None:
-    """Test manual partition assignment against real MSK."""
-    print(
-        f'\n[test_assign_and_get_assignments_real] subject={random_subject}',
-    )
-
-    # Setup: create user and topic
-    create_result = real_web_service.create_user(random_subject)
-    cleanup_consumer_and_user.register_user(random_subject)
-    assert create_result['status'] == 'success'
-    namespace = create_result['namespace']
-    topic = f'test-topic-{os.urandom(4).hex()}'
-    real_web_service.namespace_service.create_topic(
-        random_subject,
-        namespace,
-        topic,
-    )
-
-    # Create consumer
-    group_name = f'grp-{os.urandom(4).hex()}'
-    instance_name = f'inst-{os.urandom(4).hex()}'
-    consumer_service_real.create_consumer(
-        subject=random_subject,
-        namespace=namespace,
-        group_name=group_name,
-        name=instance_name,
-    )
-    cleanup_consumer_and_user(
-        consumer_service_real,
-        random_subject,
-        namespace,
-        group_name,
-        instance_name,
-    )
-
-    # Assign partitions
-    body_a, status_a = consumer_service_real.assign_partitions(
-        random_subject,
-        namespace,
-        group_name,
-        instance_name,
-        partitions=[{'topic': topic, 'partition': 0}],
-    )
-    assert status_a == 204
-    print('  Assigned partition 0')
-
-    # Get assignments
-    body_g, status_g = consumer_service_real.get_assignments(
-        random_subject,
-        namespace,
-        group_name,
-        instance_name,
-    )
-    print(f'  Assignments: {json.dumps(body_g, default=str)}')
-    assert status_g == 200
-    assert len(body_g['partitions']) == 1
-    assert body_g['partitions'][0]['topic'] == topic
-    assert body_g['partitions'][0]['partition'] == 0
-
-
-@pytest.mark.integration
-def test_seek_to_beginning_real(
-    consumer_service_real: ConsumerService,
-    real_web_service: Any,
-    random_subject: str,
-    cleanup_consumer_and_user: Any,
-) -> None:
-    """Test seek_to_beginning against real MSK with produced messages."""
-    bootstrap_servers = os.getenv('DEFAULT_SERVERS')
-    region = os.getenv('AWS_ACCOUNT_REGION')
-    if not bootstrap_servers or not region:
-        pytest.skip('Missing DEFAULT_SERVERS or AWS_ACCOUNT_REGION')
-
-    print(
-        f'\n[test_seek_to_beginning_real] subject={random_subject}',
-    )
-
-    # Setup: create user, topic, produce messages
-    create_result = real_web_service.create_user(random_subject)
-    cleanup_consumer_and_user.register_user(random_subject)
-    assert create_result['status'] == 'success'
-    namespace = create_result['namespace']
-    topic = f'test-topic-{os.urandom(4).hex()}'
-    real_web_service.namespace_service.create_topic(
-        random_subject,
-        namespace,
-        topic,
-    )
-    kafka_topic = f'{namespace}.{topic}'
-    _produce_messages(
-        bootstrap_servers,
-        region,
-        kafka_topic,
-        [b'seek-msg-1', b'seek-msg-2'],
-    )
-
-    # Create consumer and assign partition
-    group_name = f'grp-{os.urandom(4).hex()}'
-    instance_name = f'inst-{os.urandom(4).hex()}'
-    consumer_service_real.create_consumer(
-        subject=random_subject,
-        namespace=namespace,
-        group_name=group_name,
-        name=instance_name,
-        format_type='binary',
-        auto_offset_reset='latest',
-    )
-    cleanup_consumer_and_user(
-        consumer_service_real,
-        random_subject,
-        namespace,
-        group_name,
-        instance_name,
-    )
-
-    # Assign and seek to beginning
-    consumer_service_real.assign_partitions(
-        random_subject,
-        namespace,
-        group_name,
-        instance_name,
-        partitions=[{'topic': topic, 'partition': 0}],
-    )
-    body_sb, status_sb = consumer_service_real.seek_to_beginning(
-        random_subject,
-        namespace,
-        group_name,
-        instance_name,
-        partitions=[{'topic': topic, 'partition': 0}],
-    )
-    assert status_sb == 204
-
-    # Poll and verify we get records from the beginning
-    all_records: list[dict[str, Any]] = []
-    for _attempt in range(5):
-        body_p, status_p = consumer_service_real.poll_records(
-            random_subject,
-            namespace,
-            group_name,
-            instance_name,
-            timeout_ms=5000,
-        )
-        assert status_p == 200
-        if isinstance(body_p, list):
-            all_records.extend(body_p)
-        if len(all_records) >= 2:
-            break
-
-    print(f'  Records after seek_to_beginning: {len(all_records)}')
-    assert len(all_records) >= 2
-    # First record should start at offset 0
-    assert all_records[0]['offset'] == 0
-
-
-@pytest.mark.integration
-def test_seek_to_end_real(
-    consumer_service_real: ConsumerService,
-    real_web_service: Any,
-    random_subject: str,
-    cleanup_consumer_and_user: Any,
-) -> None:
-    """Test seek_to_end against real MSK."""
-    bootstrap_servers = os.getenv('DEFAULT_SERVERS')
-    region = os.getenv('AWS_ACCOUNT_REGION')
-    if not bootstrap_servers or not region:
-        pytest.skip('Missing DEFAULT_SERVERS or AWS_ACCOUNT_REGION')
-
-    print(f'\n[test_seek_to_end_real] subject={random_subject}')
-
-    # Setup: create user, topic, produce messages
-    create_result = real_web_service.create_user(random_subject)
-    cleanup_consumer_and_user.register_user(random_subject)
-    assert create_result['status'] == 'success'
-    namespace = create_result['namespace']
-    topic = f'test-topic-{os.urandom(4).hex()}'
-    real_web_service.namespace_service.create_topic(
-        random_subject,
-        namespace,
-        topic,
-    )
-    kafka_topic = f'{namespace}.{topic}'
-    _produce_messages(bootstrap_servers, region, kafka_topic, [b'end-msg'])
-
-    # Create consumer, assign, seek to end
-    group_name = f'grp-{os.urandom(4).hex()}'
-    instance_name = f'inst-{os.urandom(4).hex()}'
-    consumer_service_real.create_consumer(
-        subject=random_subject,
-        namespace=namespace,
-        group_name=group_name,
-        name=instance_name,
-    )
-    cleanup_consumer_and_user(
-        consumer_service_real,
-        random_subject,
-        namespace,
-        group_name,
-        instance_name,
-    )
-
-    consumer_service_real.assign_partitions(
-        random_subject,
-        namespace,
-        group_name,
-        instance_name,
-        partitions=[{'topic': topic, 'partition': 0}],
-    )
-    body_se, status_se = consumer_service_real.seek_to_end(
-        random_subject,
-        namespace,
-        group_name,
-        instance_name,
-        partitions=[{'topic': topic, 'partition': 0}],
-    )
-    assert status_se == 204
-
-    # Poll -- should get no records (already at end)
-    body_p, status_p = consumer_service_real.poll_records(
-        random_subject,
-        namespace,
-        group_name,
-        instance_name,
-        timeout_ms=3000,
-    )
-    print(f'  Records after seek_to_end: {len(body_p)}')
-    assert status_p == 200
-    assert isinstance(body_p, list)
-    assert len(body_p) == 0
-
-
-@pytest.mark.integration
-def test_seek_to_offset_real(
-    consumer_service_real: ConsumerService,
-    real_web_service: Any,
-    random_subject: str,
-    cleanup_consumer_and_user: Any,
-) -> None:
-    """Test seek to a specific offset against real MSK."""
-    bootstrap_servers = os.getenv('DEFAULT_SERVERS')
-    region = os.getenv('AWS_ACCOUNT_REGION')
-    if not bootstrap_servers or not region:
-        pytest.skip('Missing DEFAULT_SERVERS or AWS_ACCOUNT_REGION')
-
-    print(f'\n[test_seek_to_offset_real] subject={random_subject}')
-
-    # Setup: create user, topic, produce messages
-    create_result = real_web_service.create_user(random_subject)
-    cleanup_consumer_and_user.register_user(random_subject)
-    assert create_result['status'] == 'success'
-    namespace = create_result['namespace']
-    topic = f'test-topic-{os.urandom(4).hex()}'
-    real_web_service.namespace_service.create_topic(
-        random_subject,
-        namespace,
-        topic,
-    )
-    kafka_topic = f'{namespace}.{topic}'
-    _produce_messages(
-        bootstrap_servers,
-        region,
-        kafka_topic,
-        [b'offset-0', b'offset-1', b'offset-2'],
-    )
-
-    # Create consumer, assign
-    group_name = f'grp-{os.urandom(4).hex()}'
-    instance_name = f'inst-{os.urandom(4).hex()}'
-    consumer_service_real.create_consumer(
-        subject=random_subject,
-        namespace=namespace,
-        group_name=group_name,
-        name=instance_name,
-        format_type='binary',
-    )
-    cleanup_consumer_and_user(
-        consumer_service_real,
-        random_subject,
-        namespace,
-        group_name,
-        instance_name,
-    )
-
-    consumer_service_real.assign_partitions(
-        random_subject,
-        namespace,
-        group_name,
-        instance_name,
-        partitions=[{'topic': topic, 'partition': 0}],
-    )
-
-    # Seek to offset 1 (skip first message)
-    body_sk, status_sk = consumer_service_real.seek(
-        random_subject,
-        namespace,
-        group_name,
-        instance_name,
-        offsets=[{'topic': topic, 'partition': 0, 'offset': 1}],
-    )
-    assert status_sk == 204
-
-    # Poll and verify first record starts at offset 1
-    all_records: list[dict[str, Any]] = []
-    for _attempt in range(5):
-        body_p, status_p = consumer_service_real.poll_records(
-            random_subject,
-            namespace,
-            group_name,
-            instance_name,
-            timeout_ms=5000,
-        )
-        assert status_p == 200
-        if isinstance(body_p, list):
-            all_records.extend(body_p)
-        if len(all_records) >= 2:
-            break
-
-    print(f'  Records after seek to offset 1: {len(all_records)}')
-    assert len(all_records) >= 2
-    assert all_records[0]['offset'] == 1
