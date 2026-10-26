@@ -24,6 +24,7 @@ import base64
 import binascii
 import json
 import logging
+import math
 import re
 import threading
 import time
@@ -34,9 +35,11 @@ from datetime import timezone
 from typing import Any
 
 from kafka import KafkaProducer
+from kafka.errors import AuthorizationError
 from kafka.errors import KafkaTimeoutError
 from kafka.errors import MessageSizeTooLargeError
 from kafka.errors import RecordListTooLargeError
+from kafka.errors import UnknownTopicOrPartitionError
 from kafka.producer.future import FutureRecordMetadata
 from kafka.record.default_records import DefaultRecordBatchBuilder
 
@@ -52,9 +55,12 @@ MAX_RECORD_BYTES = 8 * MIB
 MAX_BODY_BYTES = 16 * MIB
 MAX_BATCH_ENTRIES = 500
 MAX_ENTRY_ID_LENGTH = 80
-# Longest a request takes from its arrival to its reply, give or take the
-# token and namespace checks
+# Longest a request's records take to be sent and acknowledged, from the
+# moment its body is read and parsed
 SEND_TIMEOUT_S = 30
+# Longest an admitted request may take to send its body: 16 MiB in 20 s
+# needs about 7 Mbit/s, and a stalled upload holds its admission no longer
+READ_TIMEOUT_S = 20
 # Longest send() blocks waiting for topic metadata; no send starts with
 # less than this left of the request's time
 PRODUCER_MAX_BLOCK_MS = 10_000
@@ -63,13 +69,23 @@ PRODUCER_CLOSE_TIMEOUT_S = 10
 # How long produce requests fail at once after the producer could not be
 # built, before the next request tries again
 PRODUCER_BUILD_RETRY_S = 5
+# How long a topic the cluster answers for without listing it may stay
+# missing before it counts as not found; a topic just created can take a
+# moment to reach every broker's metadata
+TOPIC_GRACE_S = 2
+# Answers from the cluster without the topic before it counts as not found;
+# the first can come from a request sent before the topic was asked for
+TOPIC_ANSWERS = 2
 
 # Requests in the produce path at once; each holds a thread of its own
 # limiter while it waits for the cluster
 PRODUCE_MAX_REQUESTS = 8
-# Declared body bytes in the produce path at once (a body without a
-# Content-Length counts as MAX_BODY_BYTES)
+# Bytes the produce path holds at once: a body's Content-Length, or the
+# bytes of a chunked body read so far, and then its encoded records
 PRODUCE_MAX_BODY_BYTES = 48 * MIB
+# One subject's share of those bounds, so one user cannot take them all
+PRODUCE_SUBJECT_MAX_REQUESTS = 2
+PRODUCE_SUBJECT_MAX_BODY_BYTES = 16 * MIB
 # Most a body may cost in memory to parse, by estimate_parse_cost
 MAX_PARSE_COST = 192 * MIB
 # Seconds a refused client is told to wait
@@ -80,11 +96,14 @@ BAD_TOPIC_NAME = 40002  # Confluent: invalid topic
 BAD_BODY = 40003
 MULTIPLE_VALUES = 40004
 BAD_RECORD = 40005
+TOPIC_AUTHORIZATION_FAILED = 40301  # Confluent
 TOPIC_NOT_FOUND = 40401  # Confluent
 PARTITION_NOT_FOUND = 40402  # Confluent
+BODY_TIMEOUT = 40801
 BODY_TOO_LARGE = 41301
 RECORD_TOO_LARGE = 41302
 PARSE_TOO_COSTLY = 41303
+RECORDS_TOO_LARGE = 41304
 UNSUPPORTED_MEDIA_TYPE = 41501
 INVALID_PAYLOAD = 42206  # Confluent
 INVALID_BATCH = 42208  # Confluent
@@ -122,21 +141,54 @@ _NO_SCHEMA_REGISTRY = 'Octopus runs no schema registry'
 _CONTAINER_COST = 160
 _QUOTE_COST = 32
 _COMMA_COST = 40
+# Most characters json.dumps adds to a number with an exponent (1e15 is
+# written 1000000000000000.0) or a decimal point (a 17-digit decimal can
+# gain an exponent)
+_EXPONENT_GROWTH = 14
+_DECIMAL_GROWTH = 3
+# Signs of characters past Latin-1 (2 bytes each in a str) and past the
+# Basic Multilingual Plane (4 bytes), as UTF-8 lead bytes or \u escapes
+_WIDE_UTF8 = re.compile(rb'[\xc4-\xef]')
+_ASTRAL_UTF8 = re.compile(rb'[\xf0-\xf4]')
+_WIDE_ESCAPE = re.compile(rb'\\u(?!00)')
+_ASTRAL_ESCAPE = re.compile(rb'\\u[dD][89abAB]')
 
 
 class RecordError(Exception):
     """A request or record the routes refuse, with its reply."""
 
-    def __init__(self, status: int, error_code: int, message: str) -> None:
-        """Initialize with the HTTP status, error code and message."""
+    def __init__(
+        self,
+        status: int,
+        error_code: int,
+        message: str,
+        *,
+        retry_after_s: int | None = None,
+    ) -> None:
+        """Initialize with the HTTP status, error code and message.
+
+        retry_after_s, if given, is sent as the reply's Retry-After.
+        """
         super().__init__(message)
         self.status = status
         self.error_code = error_code
         self.message = message
+        self.retry_after_s = retry_after_s
 
     def body(self) -> dict[str, Any]:
         """The error reply's body."""
         return {'error_code': self.error_code, 'message': self.message}
+
+
+def without_traceback(error: RecordError) -> RecordError:
+    """The error, freed of the frames that raised it.
+
+    Those frames can hold a body's parsed data and encoded records, which
+    would otherwise live as long as the error.
+    """
+    error.__traceback__ = None
+    error.__context__ = None
+    return error
 
 
 def _bad_record(message: str) -> RecordError:
@@ -167,69 +219,176 @@ class OutgoingRecord:
 
 
 class ProduceAdmission:
-    """Bound the produce requests in flight, by count and by body size.
+    """Bound the produce requests in flight, by count and by bytes held.
 
-    A request that would pass either bound is refused at once rather than
-    queued, so a burst cannot hold memory or threads while it waits.
+    Bounds the whole service and each subject's share of it. A request
+    that would pass a bound is refused at once rather than queued, so a
+    burst cannot hold memory or threads while it waits.
     """
 
     def __init__(
         self,
         max_requests: int = PRODUCE_MAX_REQUESTS,
         max_body_bytes: int = PRODUCE_MAX_BODY_BYTES,
+        subject_max_requests: int = PRODUCE_SUBJECT_MAX_REQUESTS,
+        subject_max_body_bytes: int = PRODUCE_SUBJECT_MAX_BODY_BYTES,
     ) -> None:
         """Initialize with the bounds."""
         self.max_requests = max_requests
         self.max_body_bytes = max_body_bytes
+        self.subject_max_requests = subject_max_requests
+        self.subject_max_body_bytes = subject_max_body_bytes
         self.requests = 0
         self.body_bytes = 0
+        # Requests and bytes in flight by subject
+        self._subjects: dict[str, list[int]] = {}
         self._lock = threading.Lock()
 
-    def acquire(self, body_bytes: int) -> RecordError | None:
-        """Admit a request declaring body_bytes, or return its refusal."""
+    def admit(self, subject: str, body_bytes: int) -> Reservation:
+        """Admit a request of subject holding body_bytes.
+
+        Raises:
+            RecordError: 429 if a bound would be passed
+        """
         with self._lock:
+            held = self._subjects.get(subject, [0, 0])
             if self.requests >= self.max_requests:
-                return RecordError(
-                    429,
-                    TOO_MANY_REQUESTS,
+                raise _busy(
                     f'The service is serving {self.max_requests} produce '
-                    'requests, the most it serves at once; retry shortly',
+                    'requests, the most it serves at once',
                 )
-            if self.body_bytes + body_bytes > self.max_body_bytes:
-                return RecordError(
-                    429,
-                    TOO_MANY_REQUESTS,
-                    'The service is reading or sending as many produce '
-                    'bytes as it can hold; retry shortly',
+            if held[0] >= self.subject_max_requests:
+                raise _busy(
+                    f'You have {held[0]} produce requests in flight, the '
+                    'most one user may',
                 )
+            self._check_bytes(held, body_bytes)
             self.requests += 1
             self.body_bytes += body_bytes
-            return None
+            self._subjects[subject] = [held[0] + 1, held[1] + body_bytes]
+        return Reservation(self, subject, body_bytes)
 
-    def release(self, body_bytes: int) -> None:
-        """Release a request admitted with body_bytes."""
+    def _check_bytes(self, held: list[int], more: int) -> None:
+        if self.body_bytes + more > self.max_body_bytes:
+            raise _busy(
+                'The service holds as many produce bytes as it can',
+            )
+        if held[1] + more > self.subject_max_body_bytes:
+            raise _busy(
+                f'Your produce requests in flight hold {held[1]} bytes; '
+                f'one user may hold {self.subject_max_body_bytes}',
+            )
+
+    def _grow(self, subject: str, more: int) -> None:
+        with self._lock:
+            held = self._subjects[subject]
+            self._check_bytes(held, more)
+            self.body_bytes += more
+            held[1] += more
+
+    def _release(self, subject: str, body_bytes: int) -> None:
         with self._lock:
             self.requests -= 1
             self.body_bytes -= body_bytes
+            held = self._subjects[subject]
+            held[0] -= 1
+            held[1] -= body_bytes
+            if held[0] == 0:
+                del self._subjects[subject]
+
+
+class Reservation:
+    """One admitted request's share of the produce bounds."""
+
+    def __init__(
+        self,
+        admission: ProduceAdmission,
+        subject: str,
+        body_bytes: int,
+    ) -> None:
+        """Initialize with the bytes admitted."""
+        self._admission = admission
+        self._subject = subject
+        self.body_bytes = body_bytes
+        self._released = False
+
+    def grow_to(self, body_bytes: int) -> None:
+        """Hold at least body_bytes.
+
+        Raises:
+            RecordError: 429 if the bounds cannot hold them
+        """
+        if body_bytes > self.body_bytes:
+            self._admission._grow(self._subject, body_bytes - self.body_bytes)
+            self.body_bytes = body_bytes
+
+    def release(self) -> None:
+        """Release the request's share; later calls do nothing."""
+        if not self._released:
+            self._released = True
+            self._admission._release(self._subject, self.body_bytes)
+
+
+def _busy(reason: str) -> RecordError:
+    return RecordError(
+        429,
+        TOO_MANY_REQUESTS,
+        f'{reason}; retry shortly',
+        retry_after_s=RETRY_AFTER_S,
+    )
 
 
 # --- Parsing ---
 
 
+def _char_width(raw: bytes | bytearray) -> int:
+    r"""Bytes per character of the widest str that raw can decode to.
+
+    CPython stores a str in 1, 2 or 4 bytes per character, by its widest
+    character; a \u escape in an ASCII body can make a wide one.
+    """
+    ascii_only = raw.isascii()
+    if ascii_only and b'\\u' not in raw:
+        return 1
+    if _ASTRAL_ESCAPE.search(raw) or (
+        not ascii_only and _ASTRAL_UTF8.search(raw)
+    ):
+        return 4
+    if _WIDE_ESCAPE.search(raw) or (not ascii_only and _WIDE_UTF8.search(raw)):
+        return 2
+    return 1
+
+
 def estimate_parse_cost(raw: bytes | bytearray) -> int:
     """An upper bound of the memory parsing raw and encoding it costs.
 
-    Counts the bytes that make Python objects when parsed (container
-    openings, quotes, commas), plus the decoded text and the compact
-    re-encoding of JSON data. The counts run at memchr speed and include
-    bytes inside strings, so the bound is loose for text-heavy bodies.
+    Counts the decoded text, the strings and other objects that parsing
+    makes (from the bytes that open a container, delimit a string or
+    separate two values), and the compact re-encoding of JSON data, which
+    json.dumps builds as pieces, joins and then encodes to UTF-8. The
+    re-encoding can be longer than the body: a float is written in full
+    (1e15 becomes 1000000000000000.0). The counts run at memchr speed and
+    include bytes inside strings, so the bound is loose for text.
     """
-    width = 1 if raw.isascii() else 4
+    width = _char_width(raw)
+    length = len(raw)
+    commas = raw.count(b',')
+    # Each number ends at a comma or a closing bracket, so there are no
+    # more numbers than those; a long base64 string has none
+    numbers = commas + raw.count(b']') + raw.count(b'}')
+    encoded = (
+        length
+        + _EXPONENT_GROWTH * min(numbers, raw.count(b'e') + raw.count(b'E'))
+        + _DECIMAL_GROWTH * min(numbers, raw.count(b'.'))
+    )
     return (
-        (2 * width + 1) * len(raw)
+        width * length
+        # The pieces, the joined text and its UTF-8, a byte a character
+        # to spare
+        + (2 * width + 2) * encoded
         + _CONTAINER_COST * (raw.count(b'{') + raw.count(b'['))
         + _QUOTE_COST * raw.count(b'"')
-        + _COMMA_COST * raw.count(b',')
+        + _COMMA_COST * commas
     )
 
 
@@ -596,18 +755,36 @@ def prepare_batch(
         )
     ids = _entry_ids(entries)
     prepared: list[tuple[str, OutgoingRecord | RecordError]] = []
+    total = 0
     for i, entry_id in enumerate(ids):
         entry, entries[i] = entries[i], None
         try:
-            prepared.append(
-                (
-                    entry_id,
-                    build_record(entry, extra_fields=frozenset({'id'})),
-                ),
-            )
+            record = build_record(entry, extra_fields=frozenset({'id'}))
         except RecordError as e:
-            prepared.append((entry_id, e))
+            prepared.append((entry_id, without_traceback(e)))
+            continue
+        # JSON data can be written longer than it was sent, so the records
+        # are bounded as well as the body
+        total += encoded_size(record)
+        if total > MAX_BODY_BYTES:
+            raise RecordError(
+                413,
+                RECORDS_TOO_LARGE,
+                f'The records total over {MAX_BODY_BYTES} bytes once '
+                'encoded, the most a request may send; JSON numbers are '
+                'written in full (1e15 as 1000000000000000.0)',
+            )
+        prepared.append((entry_id, record))
     return prepared
+
+
+def encoded_size(record: OutgoingRecord) -> int:
+    """The bytes a record's key, value and headers hold."""
+    return (
+        len(record.key or b'')
+        + len(record.value or b'')
+        + sum(len(name) + len(value) for name, value in record.headers)
+    )
 
 
 def format_timestamp(timestamp_ms: int) -> str:
@@ -668,6 +845,8 @@ def _kafka_failure(error: Exception, *, sent: bool) -> RecordError:
             'The cluster refused the record as too large',
         )
     logger.warning('Failed to produce a record: %r', error)
+    if isinstance(error, AuthorizationError):
+        return _not_authorized()
     if isinstance(error, KafkaTimeoutError):
         message = (
             'The cluster did not acknowledge the record in time; it may '
@@ -694,9 +873,30 @@ def _out_of_time() -> RecordError:
     return RecordError(
         500,
         KAFKA_RETRIABLE_ERROR,
-        "Not sent: too little of the request's "
-        f'{SEND_TIMEOUT_S} s was left to send it; retry it',
+        f'Not sent: too little of the {SEND_TIMEOUT_S} s the request has '
+        'to send its records was left; retry it',
     )
+
+
+def _not_authorized() -> RecordError:
+    return RecordError(
+        403,
+        TOPIC_AUTHORIZATION_FAILED,
+        'The service is not authorized to write to the topic',
+    )
+
+
+def _unreachable(retry_in_s: float) -> RecordError:
+    return RecordError(
+        503,
+        BROKER_NOT_AVAILABLE,
+        'The Kafka cluster is not reachable; retry shortly',
+        retry_after_s=max(1, math.ceil(retry_in_s)),
+    )
+
+
+def _topic_not_found() -> RecordError:
+    return RecordError(404, TOPIC_NOT_FOUND, 'Topic not found.')
 
 
 class ProducerService:
@@ -774,13 +974,8 @@ class ProducerService:
                     KAFKA_ERROR,
                     'Kafka endpoint is not configured',
                 )
-            unreachable = RecordError(
-                503,
-                BROKER_NOT_AVAILABLE,
-                'The Kafka cluster is not reachable; retry shortly',
-            )
-            if time.monotonic() < self._build_failed_until:
-                raise unreachable
+            if (left := self._build_failed_until - time.monotonic()) > 0:
+                raise _unreachable(left)
             try:
                 self._producer = self._build()
             except Exception:
@@ -788,7 +983,7 @@ class ProducerService:
                 self._build_failed_until = (
                     time.monotonic() + PRODUCER_BUILD_RETRY_S
                 )
-                raise unreachable from None
+                raise _unreachable(PRODUCER_BUILD_RETRY_S) from None
             return self._producer
         finally:
             self._lock.release()
@@ -811,6 +1006,14 @@ class ProducerService:
             producer = self._get_producer(deadline)
         except RecordError as e:
             return [e] * len(records)
+        if refusal := self._find_topic(producer, kafka_topic):
+            return [refusal] * len(records)
+        # A record still unacknowledged at the deadline stays in
+        # kafka-python's accumulator until its own delivery timeout, which
+        # runs from its send() below, so for up to the time this request
+        # took to reach that send after its admission is released. The
+        # produce path's memory bound does not count such records; it
+        # matters only while the cluster stalls with requests in flight.
         sent: list[FutureRecordMetadata | RecordError] = []
         for record in records:
             remaining = deadline - time.monotonic()
@@ -850,6 +1053,62 @@ class ProducerService:
                 },
             )
         return results
+
+    @staticmethod
+    def _find_topic(
+        producer: KafkaProducer,
+        kafka_topic: str,
+    ) -> RecordError | None:
+        """Refuse a topic the cluster's metadata does not list.
+
+        For such a topic, kafka-python's send() waits PRODUCER_MAX_BLOCK_MS
+        and then fails as if the cluster were slow: it logs the broker's
+        error but keeps no record of it. So this waits with the producer's
+        own metadata instead, and answers as soon as the cluster has
+        answered TOPIC_ANSWERS times without the topic and TOPIC_GRACE_S
+        have passed.
+
+        Returns:
+            403 if the cluster refuses the topic, 404 if it does not list
+            it, 500 if it does not answer, None if the topic is listed
+        """
+        # kafka-python's own, as its send() uses them; absent from another
+        # version, which then leaves the wait to send()
+        metadata = getattr(producer, '_metadata', None)
+        sender = getattr(producer, '_sender', None)
+        if metadata is None or sender is None:
+            return None
+        if metadata.partitions_for_topic(kafka_topic) is not None:
+            return None
+        sender.add_topic(kafka_topic)
+        start = time.monotonic()
+        end = start + PRODUCER_MAX_BLOCK_MS / 1000
+        answers = 0
+        while (left := end - time.monotonic()) > 0:
+            answered = threading.Event()
+            update = metadata.request_update()
+            update.add_both(lambda event, _: event.set(), answered)
+            sender.wakeup()
+            answered.wait(left)
+            if metadata.partitions_for_topic(kafka_topic) is not None:
+                return None
+            if kafka_topic in metadata.unauthorized_topics:
+                logger.warning('Not authorized for topic %s', kafka_topic)
+                return _not_authorized()
+            # A response about this topic alone fails the update with the
+            # topic's error; one about several succeeds without it
+            if update.is_done and (
+                update.succeeded()
+                or isinstance(update.exception, UnknownTopicOrPartitionError)
+            ):
+                answers += 1
+                if (
+                    answers >= TOPIC_ANSWERS
+                    and time.monotonic() - start >= TOPIC_GRACE_S
+                ):
+                    logger.warning('Topic %s not in Kafka', kafka_topic)
+                    return _topic_not_found()
+        return _kafka_failure(KafkaTimeoutError('no metadata'), sent=False)
 
     def close(self) -> None:
         """Close the producer, waiting at most PRODUCER_CLOSE_TIMEOUT_S.

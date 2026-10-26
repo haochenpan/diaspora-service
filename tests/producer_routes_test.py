@@ -25,6 +25,9 @@ from web_service.producer_service import MAX_BODY_BYTES
 from web_service.producer_service import MAX_RECORD_BYTES
 from web_service.producer_service import PRODUCE_MAX_BODY_BYTES
 from web_service.producer_service import PRODUCE_MAX_REQUESTS
+from web_service.producer_service import PRODUCE_SUBJECT_MAX_REQUESTS
+from web_service.producer_service import ProduceAdmission
+from web_service.producer_service import PRODUCER_BUILD_RETRY_S
 from web_service.producer_service import PRODUCER_CLOSE_TIMEOUT_S
 from web_service.producer_service import PRODUCER_MAX_BLOCK_MS
 from web_service.producer_service import RETRY_AFTER_S
@@ -506,10 +509,12 @@ async def _call_asgi(
     chunks: Iterator[bytes],
     *,
     content_length: int | None,
+    pause_s: float = 0,
 ) -> tuple[int, Any, int]:
     """Send a request straight to the app, a chunk per receive().
 
-    Returns the status, the JSON reply and how many chunks were read.
+    Waits pause_s before each chunk after the first. Returns the status,
+    the JSON reply and how many chunks were read.
     """
     headers = [
         (b'subject', SUBJECT.encode()),
@@ -541,6 +546,8 @@ async def _call_asgi(
             # Starlette waits for a disconnect once the reply is sent
             await asyncio.sleep(0)
             return {'type': 'http.disconnect'}
+        if read:
+            await asyncio.sleep(pause_s)
         read += 1
         chunk = pending.pop(0)
         return {
@@ -827,7 +834,131 @@ class _Gate:
         raise AssertionError(f'{self.waiting} of {count} sends waiting')
 
 
+def _headers(subject: str) -> dict[str, str]:
+    return {**HEADERS, 'subject': subject}
+
+
+class _Stalled:
+    """A request whose body stops after its first chunks.
+
+    The client then goes away when told to.
+    """
+
+    def __init__(
+        self,
+        service: DiasporaService,
+        chunks: list[bytes],
+        *,
+        content_length: int | None,
+        subject: str = SUBJECT,
+    ) -> None:
+        self.messages: list[dict[str, Any]] = []
+        self.gone = asyncio.Event()
+        headers = [
+            (b'subject', subject.encode()),
+            (b'authorization', HEADERS['authorization'].encode()),
+            (b'content-type', b'application/json'),
+        ]
+        if content_length is not None:
+            headers.append((b'content-length', str(content_length).encode()))
+        pending = list(chunks)
+
+        async def receive() -> dict[str, Any]:
+            if pending:
+                return {
+                    'type': 'http.request',
+                    'body': pending.pop(0),
+                    'more_body': True,
+                }
+            await self.gone.wait()
+            return {'type': 'http.disconnect'}
+
+        async def send(message: dict[str, Any]) -> None:
+            self.messages.append(message)
+
+        scope = {
+            'type': 'http',
+            'asgi': {'version': '3.0'},
+            'http_version': '1.1',
+            'method': 'POST',
+            'scheme': 'http',
+            'path': RECORDS,
+            'raw_path': RECORDS.encode(),
+            'query_string': b'',
+            'root_path': '',
+            'headers': headers,
+            'client': ('127.0.0.1', 1234),
+            'server': ('test', 80),
+        }
+        self.task = asyncio.create_task(service.app(scope, receive, send))
+
+    async def reply(self) -> tuple[int, dict[str, str], Any]:
+        """The status, headers and JSON body, once sent."""
+        await asyncio.wait_for(self.task, 5)
+        start = next(
+            m for m in self.messages if m['type'] == 'http.response.start'
+        )
+        body = b''.join(
+            m.get('body', b'')
+            for m in self.messages
+            if m['type'] == 'http.response.body'
+        )
+        headers = {k.decode(): v.decode() for k, v in start['headers']}
+        return start['status'], headers, json.loads(body) if body else None
+
+    async def leave(self) -> None:
+        self.gone.set()
+        await asyncio.wait_for(self.task, 5)
+
+
+async def _until(condition: Any) -> None:
+    for _ in range(500):
+        if condition():
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError('condition not met')
+
+
+def _admitted(service: DiasporaService) -> tuple[int, int]:
+    admission = service.produce_admission
+    return admission.requests, admission.body_bytes
+
+
 async def test_requests_past_the_limit_get_429(
+    service: DiasporaService,
+    fake_producer: FakeProducer,
+) -> None:
+    gate = _Gate()
+    fake_producer.gate = gate
+    async with _client(service) as client:
+        held = [
+            asyncio.create_task(
+                client.post(
+                    RECORDS,
+                    json={'value': VALUE},
+                    headers=_headers(f'user-{i}'),
+                ),
+            )
+            for i in range(PRODUCE_MAX_REQUESTS)
+        ]
+        await gate.until_waiting(PRODUCE_MAX_REQUESTS)
+        refused = await client.post(
+            BATCH,
+            json={'entries': [{'id': 'a', 'value': VALUE}]},
+            headers=_headers('user-new'),
+        )
+        gate.release.set()
+        replies = await asyncio.gather(*held)
+    assert refused.status_code == 429
+    assert refused.headers['retry-after'] == str(RETRY_AFTER_S)
+    assert refused.json()['error_code'] == 42901
+    assert 'at once' in refused.json()['message']
+    assert [r.status_code for r in replies] == [200] * PRODUCE_MAX_REQUESTS
+    assert len(fake_producer.sent) == PRODUCE_MAX_REQUESTS
+    assert _admitted(service) == (0, 0)
+
+
+async def test_one_user_past_its_share_gets_429(
     service: DiasporaService,
     fake_producer: FakeProducer,
 ) -> None:
@@ -838,63 +969,146 @@ async def test_requests_past_the_limit_get_429(
             asyncio.create_task(
                 client.post(RECORDS, json={'value': VALUE}, headers=HEADERS),
             )
-            for _ in range(PRODUCE_MAX_REQUESTS)
+            for _ in range(PRODUCE_SUBJECT_MAX_REQUESTS)
         ]
-        await gate.until_waiting(PRODUCE_MAX_REQUESTS)
-        refused = await client.post(
-            BATCH,
-            json={'entries': [{'id': 'a', 'value': VALUE}]},
-            headers=HEADERS,
-        )
-        gate.release.set()
-        replies = await asyncio.gather(*held)
-    assert refused.status_code == 429
-    assert refused.headers['retry-after'] == str(RETRY_AFTER_S)
-    assert refused.json()['error_code'] == 42901
-    assert [r.status_code for r in replies] == [200] * PRODUCE_MAX_REQUESTS
-    assert len(fake_producer.sent) == PRODUCE_MAX_REQUESTS
-    assert service.produce_admission.requests == 0
-    assert service.produce_admission.body_bytes == 0
-
-
-async def test_bodies_past_the_byte_budget_get_429(
-    service: DiasporaService,
-    fake_producer: FakeProducer,
-) -> None:
-    """A body without Content-Length holds 16 MiB of the 48 MiB budget."""
-    gate = _Gate()
-    fake_producer.gate = gate
-    record = json.dumps({'value': VALUE}).encode()
-
-    async def chunked() -> Any:
-        yield record
-
-    held_count = PRODUCE_MAX_BODY_BYTES // MAX_BODY_BYTES
-    assert held_count < PRODUCE_MAX_REQUESTS
-    async with _client(service) as client:
-        held = [
-            asyncio.create_task(
-                client.post(
-                    RECORDS,
-                    content=chunked(),
-                    headers={**HEADERS, 'content-type': 'application/json'},
-                ),
-            )
-            for _ in range(held_count)
-        ]
-        await gate.until_waiting(held_count)
+        await gate.until_waiting(PRODUCE_SUBJECT_MAX_REQUESTS)
         refused = await client.post(
             RECORDS,
             json={'value': VALUE},
             headers=HEADERS,
         )
+        # Another user is still served
+        other = asyncio.create_task(
+            client.post(
+                RECORDS,
+                json={'value': VALUE},
+                headers=_headers('user-other'),
+            ),
+        )
+        await gate.until_waiting(PRODUCE_SUBJECT_MAX_REQUESTS + 1)
         gate.release.set()
-        replies = await asyncio.gather(*held)
+        replies = await asyncio.gather(*held, other)
     assert refused.status_code == 429
-    assert refused.headers['retry-after'] == str(RETRY_AFTER_S)
+    assert refused.json()['error_code'] == 42901
+    assert 'one user' in refused.json()['message']
+    assert [r.status_code for r in replies] == [200] * 3
+
+
+async def test_stalled_bodies_past_the_byte_budget_get_429(
+    service: DiasporaService,
+    fake_producer: FakeProducer,
+) -> None:
+    """Declared lengths hold the budget until the clients go away."""
+    count = PRODUCE_MAX_BODY_BYTES // MAX_BODY_BYTES
+    stalled = [
+        _Stalled(
+            service,
+            [b'{'],
+            content_length=MAX_BODY_BYTES,
+            subject=f'user-{i}',
+        )
+        for i in range(count)
+    ]
+    await _until(lambda: _admitted(service)[1] == PRODUCE_MAX_BODY_BYTES)
+    refused = await _post(
+        service,
+        RECORDS,
+        {'value': VALUE},
+        headers=_headers('user-new'),
+    )
+    assert refused.status_code == 429
     assert refused.json()['error_code'] == 42901
     assert 'bytes' in refused.json()['message']
-    assert [r.status_code for r in replies] == [200] * held_count
+    # A client that goes away mid-body releases what it held
+    for request in stalled:
+        await request.leave()
+    assert _admitted(service) == (0, 0)
+    served = await _post(service, RECORDS, {'value': VALUE})
+    assert served.status_code == 200
+
+
+async def test_chunked_body_reserves_bytes_as_they_arrive(
+    service: DiasporaService,
+    fake_producer: FakeProducer,
+) -> None:
+    stalled = _Stalled(service, [b' ' * 1000, b' ' * 500], content_length=None)
+    await _until(lambda: _admitted(service) == (1, 1500))
+    await stalled.leave()
+    assert _admitted(service) == (0, 0)
+
+
+async def test_chunked_body_past_the_share_mid_read_gets_429(
+    service: DiasporaService,
+    fake_producer: FakeProducer,
+) -> None:
+    service.produce_admission = ProduceAdmission(subject_max_body_bytes=1500)
+    status, body, read = await _call_asgi(
+        service,
+        RECORDS,
+        iter([b' ' * 1000] * 3),
+        content_length=None,
+    )
+    assert (status, body['error_code']) == (429, 42901)
+    assert read == 2
+    assert _admitted(service) == (0, 0)
+
+
+async def test_slow_body_gets_408(
+    service: DiasporaService,
+    fake_producer: FakeProducer,
+) -> None:
+    with patch('web_service.main.READ_TIMEOUT_S', 0.2):
+        stalled = _Stalled(service, [b'{'], content_length=40)
+        status, headers, body = await stalled.reply()
+    assert (status, body['error_code']) == (408, 40801)
+    assert headers['connection'] == 'close'
+    assert _admitted(service) == (0, 0)
+    assert fake_producer.sent == []
+
+
+async def test_records_reserve_their_encoded_bytes(
+    service: DiasporaService,
+    fake_producer: FakeProducer,
+) -> None:
+    """JSON numbers written in full hold more than the body did."""
+    service.produce_admission = ProduceAdmission(subject_max_body_bytes=2000)
+    body = {'value': {'type': 'JSON', 'data': [1e15] * 120}}
+    raw = json.dumps(body, separators=(',', ':')).replace(
+        '1000000000000000.0',
+        '1e15',
+    )
+    assert len(raw) < 1000
+    response = await _post(service, RECORDS, content=raw.encode())
+    assert (response.status_code, response.json()['error_code']) == (
+        429,
+        42901,
+    )
+    assert fake_producer.sent == []
+    assert _admitted(service) == (0, 0)
+
+
+async def test_admission_released_on_an_unexpected_error(
+    service: DiasporaService,
+    fake_producer: FakeProducer,
+) -> None:
+    with patch(
+        'web_service.main.prepare_record',
+        side_effect=RuntimeError('bug'),
+    ):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(
+                app=service.app,
+                raise_app_exceptions=False,
+            ),
+            base_url='http://test',
+        ) as client:
+            response = await client.post(
+                RECORDS,
+                json={'value': VALUE},
+                headers=HEADERS,
+            )
+    assert response.status_code == 500
+    assert _admitted(service) == (0, 0)
 
 
 async def test_admission_released_on_refusal(
@@ -904,8 +1118,7 @@ async def test_admission_released_on_refusal(
     for body in ({'value': {'type': 'AVRO', 'data': {}}}, {'value': VALUE}):
         await _post(service, RECORDS, body)
     await _post(service, RECORDS, content=b'x' * 10)
-    assert service.produce_admission.requests == 0
-    assert service.produce_admission.body_bytes == 0
+    assert _admitted(service) == (0, 0)
 
 
 async def test_bodies_parsed_one_at_a_time(
@@ -935,9 +1148,9 @@ async def test_bodies_parsed_one_at_a_time(
                     client.post(
                         RECORDS,
                         json={'value': VALUE},
-                        headers=HEADERS,
+                        headers=_headers(f'user-{i}'),
                     )
-                    for _ in range(4)
+                    for i in range(4)
                 ),
             )
     assert [r.status_code for r in replies] == [200] * 4
@@ -968,10 +1181,10 @@ async def test_sends_leave_the_shared_threadpool_free(
                     client.post(
                         RECORDS,
                         json={'value': VALUE},
-                        headers=HEADERS,
+                        headers=_headers(f'user-{i}'),
                     ),
                 )
-                for _ in range(PRODUCE_MAX_REQUESTS)
+                for i in range(PRODUCE_MAX_REQUESTS)
             ]
             await gate.until_waiting(PRODUCE_MAX_REQUESTS)
             with anyio.fail_after(2):
@@ -984,25 +1197,25 @@ async def test_sends_leave_the_shared_threadpool_free(
     assert other.json() == {'status': 'success'}
 
 
-async def test_deadline_starts_at_arrival(
+async def test_upload_time_does_not_count_against_the_send(
     service: DiasporaService,
     fake_producer: FakeProducer,
 ) -> None:
-    """Time spent in the access checks counts against the 30 s."""
-
-    def slow_check(*_args: Any) -> None:
-        time.sleep(0.5)
-
-    service.auth.validate_access_token.side_effect = slow_check
+    """The records' time starts once the body is read."""
+    record = json.dumps({'value': VALUE}).encode()
     with patch(
         'web_service.main.SEND_TIMEOUT_S',
         PRODUCER_MAX_BLOCK_MS / 1000 + 0.3,
     ):
-        response = await _post(service, RECORDS, {'value': VALUE})
-    assert response.status_code == 500
-    assert response.json()['error_code'] == 50003
-    assert 'too little' in response.json()['message']
-    assert fake_producer.sent == []
+        status, body, _ = await _call_asgi(
+            service,
+            RECORDS,
+            iter([record[:5], record[5:]]),
+            content_length=len(record),
+            pause_s=0.5,
+        )
+    assert status == 200
+    assert body['offset'] == 100
 
 
 async def test_unreachable_cluster_gets_503(
@@ -1019,9 +1232,11 @@ async def test_unreachable_cluster_gets_503(
         second = await _post(service, RECORDS, {'value': VALUE})
     for response in (first, second):
         assert response.status_code == 503
-        assert response.headers['retry-after'] == str(RETRY_AFTER_S)
         assert response.json()['error_code'] == 50302
         assert broker not in response.text
+    # The time left before the next build
+    assert first.headers['retry-after'] == str(PRODUCER_BUILD_RETRY_S)
+    assert 1 <= int(second.headers['retry-after']) <= PRODUCER_BUILD_RETRY_S
     # The second request fails at once instead of building again
     assert build.call_count == 1
 

@@ -13,12 +13,18 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
+from kafka.cluster import ClusterMetadata
 from kafka.errors import KafkaTimeoutError
+from kafka.errors import LeaderNotAvailableError
 from kafka.errors import MessageSizeTooLargeError
 from kafka.errors import NoBrokersAvailable
 from kafka.errors import NotEnoughReplicasError
+from kafka.errors import TopicAuthorizationFailedError
+from kafka.errors import UnknownTopicOrPartitionError
 from kafka.errors import UnsupportedForMessageFormatError
+from kafka.future import Future as KafkaFuture
 from kafka.producer.future import RecordMetadata
+from kafka.protocol.metadata import MetadataResponse
 from kafka.structs import TopicPartition
 
 from web_service.producer_service import batch_reply
@@ -41,6 +47,7 @@ from web_service.producer_service import ProducerService
 from web_service.producer_service import record_reply
 from web_service.producer_service import record_size
 from web_service.producer_service import RecordError
+from web_service.producer_service import RETRY_AFTER_S
 from web_service.producer_service import SEND_TIMEOUT_S
 
 NAMESPACE = 'ns-test123'
@@ -82,10 +89,47 @@ class FakeFuture:
         return self.metadata
 
 
+class FakeMetadata:
+    """The parts of kafka-python's ClusterMetadata the producer reads.
+
+    Lists every topic but those in missing. While answering, each update
+    succeeds 10 ms after it is requested; otherwise none completes.
+    """
+
+    def __init__(self) -> None:
+        self.missing: set[str] = set()
+        self.unauthorized_topics: set[str] = set()
+        self.answering = True
+        self.updates = 0
+
+    def partitions_for_topic(self, topic: str) -> set[int] | None:
+        return None if topic in self.missing else {0}
+
+    def request_update(self) -> KafkaFuture:
+        self.updates += 1
+        future = KafkaFuture()
+        if self.answering:
+            threading.Timer(0.01, future.success, (self,)).start()
+        return future
+
+
+class FakeSender:
+    def __init__(self) -> None:
+        self.topics: list[str] = []
+
+    def add_topic(self, topic: str) -> None:
+        self.topics.append(topic)
+
+    def wakeup(self) -> None:
+        pass
+
+
 class FakeProducer:
     """Records each send; sends and acknowledgements can be made to fail."""
 
     def __init__(self) -> None:
+        self._metadata = FakeMetadata()
+        self._sender = FakeSender()
         self.config: dict[str, Any] = {}
         self.builds = 0
         self.sent: list[dict[str, Any]] = []
@@ -278,11 +322,37 @@ def _flood(unit: bytes, size: int) -> bytes:
         b'1000,',
         b'"abcdefghij",',
         b'{"a":0.5,"b":"cd"},',
+        # Written longer than they are sent
+        b'1e15,',
+        b'41654541853973785.0,',
+        # Wide strings from escapes in an ASCII body
+        b'"\\ud83d\\ude00' + b'a' * 1000 + b'",',
+        b'"\\u4e2d' + b'a' * 1000 + b'",',
+        '"\U0001f600",'.encode(),
     ),
 )
 def test_parse_cost_bounds_parsing_and_encoding(unit: bytes) -> None:
     """The estimate is at least what parsing and encoding allocate."""
     raw = _flood(unit, 1 * 1024 * 1024)
+    tracemalloc.start()
+    try:
+        prepare_record(raw)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert estimate_parse_cost(raw) >= peak
+
+
+@pytest.mark.parametrize(
+    'escape',
+    (b'\\ud83d\\ude00', b'\\u4e2d'),
+)
+def test_parse_cost_of_one_long_string_made_wide_by_an_escape(
+    escape: bytes,
+) -> None:
+    """One escape widens the whole string, and its re-encoding."""
+    size = 1024 * 1024
+    raw = b'{"value":{"type":"JSON","data":["' + escape + b'a' * size + b'"]}}'
     tracemalloc.start()
     try:
         prepare_record(raw)
@@ -310,7 +380,7 @@ def test_parse_cost_of_a_full_base64_body_is_low() -> None:
             },
         },
     )
-    assert estimate_parse_cost(raw) < MAX_PARSE_COST // 4
+    assert estimate_parse_cost(raw) < MAX_PARSE_COST // 2
 
 
 # ============================================================================
@@ -826,6 +896,23 @@ def test_prepare_batch_more_than_one_value_refused() -> None:
     assert (err.status, err.error_code) == (400, 40004)
 
 
+def test_prepare_batch_records_over_16_mib_encoded_refused() -> None:
+    """Numbers written in full can make the records outgrow the body."""
+    floats = b'[' + b'1e15,' * 999 + b'1e15]'
+    entry = b'{"id":"%d","value":{"type":"JSON","data":' + floats + b'}}'
+    raw = b'{"entries":[' + b','.join(entry % i for i in range(10)) + b']}'
+    one = len(b'1000000000000000.0,') * 1000 - 1 + 2
+    # The body fits, the records do not
+    with patch(
+        'web_service.producer_service.MAX_BODY_BYTES',
+        one * 9 + 10,
+    ):
+        assert len(raw) < one * 9
+        err = _refusal(lambda: prepare_batch(raw))
+        assert (err.status, err.error_code) == (413, 41304)
+        assert len(prepare_batch(raw[: raw.index(b',{"id":"9"')] + b']}')) == 9
+
+
 # ============================================================================
 # Replies
 # ============================================================================
@@ -886,27 +973,70 @@ def test_batch_reply_keeps_entry_order() -> None:
 # ============================================================================
 
 
+def _refused(call: Callable[[], Any]) -> RecordError:
+    with pytest.raises(RecordError) as caught:
+        call()
+    assert (caught.value.status, caught.value.error_code) == (429, 42901)
+    assert caught.value.retry_after_s == RETRY_AFTER_S
+    return caught.value
+
+
 def test_admission_bounds_requests() -> None:
     admission = ProduceAdmission(max_requests=2, max_body_bytes=100)
-    assert admission.acquire(1) is None
-    assert admission.acquire(1) is None
-    refusal = admission.acquire(1)
-    assert refusal is not None
-    assert (refusal.status, refusal.error_code) == (429, 42901)
-    admission.release(1)
-    assert admission.acquire(1) is None
+    first = admission.admit('a', 1)
+    admission.admit('b', 1)
+    _refused(lambda: admission.admit('c', 1))
+    first.release()
+    admission.admit('c', 1)
 
 
 def test_admission_bounds_body_bytes() -> None:
-    admission = ProduceAdmission(max_requests=10, max_body_bytes=100)
-    assert admission.acquire(60) is None
-    refusal = admission.acquire(41)
-    assert refusal is not None
-    assert (refusal.status, refusal.error_code) == (429, 42901)
-    assert admission.acquire(40) is None
-    admission.release(60)
-    admission.release(40)
+    admission = ProduceAdmission(
+        max_requests=10,
+        max_body_bytes=100,
+        subject_max_body_bytes=100,
+    )
+    first = admission.admit('a', 60)
+    _refused(lambda: admission.admit('b', 41))
+    second = admission.admit('b', 40)
+    first.release()
+    second.release()
     assert (admission.requests, admission.body_bytes) == (0, 0)
+
+
+def test_admission_bounds_each_subject() -> None:
+    admission = ProduceAdmission(
+        max_requests=10,
+        max_body_bytes=100,
+        subject_max_requests=2,
+        subject_max_body_bytes=50,
+    )
+    admission.admit('a', 10)
+    admission.admit('a', 10)
+    assert 'one user' in _refused(lambda: admission.admit('a', 0)).message
+    # Another subject is not held back, up to its own share of bytes
+    admission.admit('b', 50)
+    _refused(lambda: admission.admit('c', 51))
+
+
+def test_reservation_grows_within_the_bounds() -> None:
+    admission = ProduceAdmission(
+        max_requests=10,
+        max_body_bytes=100,
+        subject_max_body_bytes=60,
+    )
+    reservation = admission.admit('a', 0)
+    reservation.grow_to(40)
+    reservation.grow_to(30)  # never shrinks
+    assert (reservation.body_bytes, admission.body_bytes) == (40, 40)
+    _refused(lambda: reservation.grow_to(61))
+    other = admission.admit('b', 50)
+    _refused(lambda: reservation.grow_to(51))
+    reservation.release()
+    reservation.release()  # once only
+    other.release()
+    assert (admission.requests, admission.body_bytes) == (0, 0)
+    assert admission._subjects == {}
 
 
 # ============================================================================
@@ -1045,8 +1175,187 @@ def test_failed_build_fails_fast_then_retries(
         assert isinstance(result, RecordError)
         assert (result.status, result.error_code) == (503, 50302)
         assert _BROKER not in result.message
+    # Retry-After is what is left of the retry window
+    assert isinstance(first, RecordError)
+    assert isinstance(second, RecordError)
+    assert first.retry_after_s == PRODUCER_BUILD_RETRY_S
+    assert second.retry_after_s == 1
     assert not isinstance(third, RecordError)
     assert builds == []
+
+
+# ============================================================================
+# ProducerService - topics Kafka does not list
+# ============================================================================
+
+
+@pytest.fixture
+def short_grace() -> Iterator[None]:
+    with (
+        patch('web_service.producer_service.TOPIC_GRACE_S', 0.1),
+        patch('web_service.producer_service.PRODUCER_MAX_BLOCK_MS', 500),
+    ):
+        yield
+
+
+@pytest.mark.usefixtures('short_grace')
+def test_topic_missing_from_kafka_not_found_quickly(
+    producer_service: ProducerService,
+    fake_producer: FakeProducer,
+) -> None:
+    """Not found once the cluster has answered without it, unsent."""
+    fake_producer._metadata.missing.add(KAFKA_TOPIC)
+    start = time.monotonic()
+    results = producer_service.send(
+        KAFKA_TOPIC,
+        [_record(), _record()],
+        _deadline(),
+    )
+    elapsed = time.monotonic() - start
+    for result in results:
+        assert isinstance(result, RecordError)
+        assert (result.status, result.error_code) == (404, 40401)
+        assert result.message == 'Topic not found.'
+    assert 0.1 <= elapsed < 0.4
+    assert fake_producer._metadata.updates >= 2
+    assert fake_producer._sender.topics == [KAFKA_TOPIC]
+    assert fake_producer.sent == []
+
+
+class _AnsweringSender(FakeSender):
+    """Answers each metadata update with one response, 10 ms later.
+
+    Runs kafka-python's own ClusterMetadata, so the producer reads its
+    answers as it would a broker's.
+    """
+
+    def __init__(
+        self,
+        metadata: ClusterMetadata,
+        topics: list[tuple[int, str]],
+    ) -> None:
+        super().__init__()
+        self.metadata = metadata
+        self.response = MetadataResponse[1](
+            brokers=[(0, 'broker', 9098, None)],
+            controller_id=0,
+            topics=[
+                (error, topic, False, [] if error else [(0, 0, 0, [0], [0])])
+                for error, topic in topics
+            ],
+        )
+
+    def wakeup(self) -> None:
+        threading.Timer(
+            0.01,
+            self.metadata.update_metadata,
+            (self.response,),
+        ).start()
+
+
+_UNKNOWN = UnknownTopicOrPartitionError.errno
+_LEADER_NOT_AVAILABLE = LeaderNotAvailableError.errno
+_NOT_AUTHORIZED = TopicAuthorizationFailedError.errno
+
+
+@pytest.mark.usefixtures('short_grace')
+@pytest.mark.parametrize(
+    ('topics', 'status', 'code'),
+    (
+        # The response names only this topic, and the update fails
+        ([(_UNKNOWN, KAFKA_TOPIC)], 404, 40401),
+        # It names others too, and succeeds without this one
+        ([(_UNKNOWN, KAFKA_TOPIC), (0, 'ns-other.t')], 404, 40401),
+        ([(0, 'ns-other.t')], 404, 40401),
+        ([(_NOT_AUTHORIZED, KAFKA_TOPIC)], 403, 40301),
+        # A topic being created is not taken to be missing
+        ([(_LEADER_NOT_AVAILABLE, KAFKA_TOPIC)], 500, 50003),
+    ),
+    ids=(
+        'unknown',
+        'unknown-among-others',
+        'unlisted',
+        'unauthorized',
+        'leader',
+    ),
+)
+def test_topic_lookup_with_kafka_python_metadata(
+    producer_service: ProducerService,
+    fake_producer: FakeProducer,
+    *,
+    topics: list[tuple[int, str]],
+    status: int,
+    code: int,
+) -> None:
+    metadata = ClusterMetadata()
+    fake_producer._metadata = metadata
+    fake_producer._sender = _AnsweringSender(metadata, topics)
+    (result,) = producer_service.send(KAFKA_TOPIC, [_record()], _deadline())
+    assert isinstance(result, RecordError)
+    assert (result.status, result.error_code) == (status, code)
+    assert fake_producer.sent == []
+
+
+@pytest.mark.usefixtures('short_grace')
+def test_topic_listed_by_kafka_python_metadata_is_sent(
+    producer_service: ProducerService,
+    fake_producer: FakeProducer,
+) -> None:
+    metadata = ClusterMetadata()
+    fake_producer._metadata = metadata
+    fake_producer._sender = _AnsweringSender(
+        metadata,
+        [(0, KAFKA_TOPIC)],
+    )
+    (result,) = producer_service.send(KAFKA_TOPIC, [_record()], _deadline())
+    assert not isinstance(result, RecordError)
+    assert len(fake_producer.sent) == 1
+
+
+@pytest.mark.usefixtures('short_grace')
+def test_topic_that_appears_is_sent(
+    producer_service: ProducerService,
+    fake_producer: FakeProducer,
+) -> None:
+    """A topic just created reaches the metadata within the grace."""
+    metadata = fake_producer._metadata
+    metadata.missing.add(KAFKA_TOPIC)
+    threading.Timer(0.05, metadata.missing.clear).start()
+    (result,) = producer_service.send(KAFKA_TOPIC, [_record()], _deadline())
+    assert not isinstance(result, RecordError)
+    assert len(fake_producer.sent) == 1
+
+
+@pytest.mark.usefixtures('short_grace')
+def test_topic_not_authorized(
+    producer_service: ProducerService,
+    fake_producer: FakeProducer,
+) -> None:
+    metadata = fake_producer._metadata
+    metadata.missing.add(KAFKA_TOPIC)
+    metadata.unauthorized_topics.add(KAFKA_TOPIC)
+    (result,) = producer_service.send(KAFKA_TOPIC, [_record()], _deadline())
+    assert isinstance(result, RecordError)
+    assert (result.status, result.error_code) == (403, 40301)
+    assert fake_producer.sent == []
+
+
+@pytest.mark.usefixtures('short_grace')
+def test_topic_lookup_without_an_answer(
+    producer_service: ProducerService,
+    fake_producer: FakeProducer,
+) -> None:
+    """A cluster that does not answer is not taken to lack the topic."""
+    metadata = fake_producer._metadata
+    metadata.missing.add(KAFKA_TOPIC)
+    metadata.answering = False
+    start = time.monotonic()
+    (result,) = producer_service.send(KAFKA_TOPIC, [_record()], _deadline())
+    assert isinstance(result, RecordError)
+    assert (result.status, result.error_code) == (500, 50003)
+    assert 'not sent' in result.message
+    assert 0.5 <= time.monotonic() - start < 1
+    assert fake_producer.sent == []
 
 
 def test_build_lock_wait_bounded_by_deadline(
@@ -1159,6 +1468,13 @@ def test_send_shares_one_deadline(
             41302,
             'refused the record as too large',
         ),
+        (
+            TopicAuthorizationFailedError(_BROKER),
+            True,
+            403,
+            40301,
+            'not authorized to write to the topic',
+        ),
     ),
     ids=(
         'ack-timeout',
@@ -1167,6 +1483,7 @@ def test_send_shares_one_deadline(
         'not-retriable',
         'send-raises',
         'broker-size',
+        'not-authorized',
     ),
 )
 def test_send_kafka_failure(
