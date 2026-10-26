@@ -1099,6 +1099,7 @@
 </span><span id="__span-6-27"><a id="__codelineno-6-27" name="__codelineno-6-27" href="#__codelineno-6-27"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"subject: </span><span class="nv">$SUBJECT</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-6-28"><a id="__codelineno-6-28" name="__codelineno-6-28" href="#__codelineno-6-28"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"authorization: </span><span class="nv">$AUTHORIZATION</span><span class="s2">"</span>
 </span></code></pre></div>
+<p>A consumer instance serves one request at a time. A request that waits more than 10 seconds for another request on the same instance returns 409 with error code 40904; retry it. The fetch <code>timeout</code> is capped at 30000 ms: a larger value waits 30000 ms.</p>
 
 
 
