@@ -13,6 +13,7 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
+from kafka import KafkaProducer
 from kafka.cluster import ClusterMetadata
 from kafka.errors import KafkaTimeoutError
 from kafka.errors import LeaderNotAvailableError
@@ -24,6 +25,7 @@ from kafka.errors import UnknownTopicOrPartitionError
 from kafka.errors import UnsupportedForMessageFormatError
 from kafka.future import Future as KafkaFuture
 from kafka.producer.future import RecordMetadata
+from kafka.producer.sender import Sender
 from kafka.protocol.metadata import MetadataResponse
 from kafka.structs import TopicPartition
 
@@ -1341,6 +1343,65 @@ def test_topic_listed_by_kafka_python_metadata_is_sent(
     (result,) = producer_service.send(KAFKA_TOPIC, [_record()], _deadline())
     assert not isinstance(result, RecordError)
     assert len(fake_producer.sent) == 1
+
+
+@pytest.fixture
+def real_producer(
+    producer_service: ProducerService,
+) -> Iterator[KafkaProducer]:
+    """A real KafkaProducer with the service's settings, never connected.
+
+    The api_version spares it the version probe, and its sender thread is
+    never started, so it opens no connection.
+    """
+    built: list[KafkaProducer] = []
+
+    def build(**config: Any) -> KafkaProducer:
+        built.append(KafkaProducer(**config, api_version=(2, 8, 0)))
+        return built[0]
+
+    with (
+        patch.object(Sender, 'start'),
+        patch('web_service.producer_service.KafkaProducer', side_effect=build),
+    ):
+        producer_service._get_producer(_deadline())
+    producer = built[0]
+    yield producer
+    # close() would join the sender thread, which never started
+    producer._unregister_cleanup()
+    producer._sender._client.close()
+    producer._closed = True
+
+
+@pytest.mark.usefixtures('short_grace')
+def test_topic_lookup_runs_on_kafka_python_internals(
+    producer_service: ProducerService,
+    real_producer: KafkaProducer,
+) -> None:
+    """Fails if a kafka-python upgrade drops what the topic lookup uses.
+
+    The lookup reads the producer's _metadata and _sender, as its own
+    send() does; here they answer the lookup as a broker would.
+    """
+    metadata = real_producer._metadata
+    sender = real_producer._sender
+    assert isinstance(metadata, ClusterMetadata)
+    assert isinstance(sender, Sender)
+    assert metadata.unauthorized_topics == set()
+    response = _AnsweringSender(metadata, [(_UNKNOWN, KAFKA_TOPIC)]).response
+    answer = sender.wakeup
+
+    def wakeup() -> None:
+        answer()
+        threading.Timer(0.01, metadata.update_metadata, (response,)).start()
+
+    with patch.object(sender, 'wakeup', wakeup):
+        refusal = ProducerService._find_topic(
+            real_producer,
+            KAFKA_TOPIC,
+        )
+    assert refusal is not None
+    assert (refusal.status, refusal.error_code) == (404, 40401)
 
 
 @pytest.mark.usefixtures('short_grace')
