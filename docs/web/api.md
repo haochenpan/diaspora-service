@@ -17,8 +17,9 @@ from diaspora_event_sdk import Client as GlobusClient
 c = GlobusClient()  # triggers Globus login flow on first use
 
 subject = c.subject_openid
-authorization = c.web_client.authorizer.get_authorization_header()
-namespace = f'ns-{subject.replace("-", "")[-12:]}'
+authorizer = c.authorizer or c.app.get_authorizer(c.DIASPORA_RESOURCE_SERVER)
+authorization = authorizer.get_authorization_header()
+namespace = c.namespace
 
 print(f'export SUBJECT="{subject}"')
 print(f'export AUTHORIZATION="{authorization}"')
