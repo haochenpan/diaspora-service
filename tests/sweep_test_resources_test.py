@@ -17,6 +17,8 @@ import pytest
 from botocore.stub import Stubber
 from kafka.errors import UnknownTopicOrPartitionError
 
+from tests.live_identity import live_namespace
+from tests.live_identity import live_subject
 from web_service.services import NamespaceService
 
 
@@ -42,8 +44,11 @@ CUTOFF = NOW - timedelta(hours=2)
 OLD = NOW - timedelta(hours=3)
 NEW = NOW - timedelta(minutes=30)
 ACCOUNT = '000000000000'
+# Test subjects named the way the live tests used to, and the way they do.
 SUBJECT_A = 'test-subject-0123456789abcdef'
 SUBJECT_B = 'test-subject-fedcba9876543210'
+SUBJECT_C = 'test-subject-test0123abcd'
+SUBJECT_D = 'test-subject-testfedc9876'
 TABLES = sweep.ServiceTables()
 REAL_USER = '3f1e2d4c-aaaa-bbbb-cccc-c0ffee000001'
 REAL_USER_NAMESPACE = 'ns-c0ffee000001'
@@ -102,6 +107,13 @@ def test_select_users_matches_only_old_test_subjects() -> None:
     users = [
         _user(SUBJECT_A, OLD),
         _user(SUBJECT_B, NEW),
+        _user(SUBJECT_C, OLD),
+        _user(SUBJECT_D, NEW),
+        _user('test-subject-test0123abc', OLD),
+        _user('test-subject-test0123abcde', OLD),
+        _user('test-subject-test0123ABCD', OLD),
+        _user('test-subject-TEST0123abcd', OLD),
+        _user('test-subject-test0123abcd', OLD, path='/'),
         _user('test-subject-0123456789abcdeg', OLD),
         _user('test-subject-0123456789abcde', OLD),
         _user('test-subject-0123456789ABCDEF', OLD),
@@ -112,13 +124,15 @@ def test_select_users_matches_only_old_test_subjects() -> None:
         _user('test-subject-1111111111111111', OLD, path='/'),
     ]
 
-    assert sweep.select_users(users, CUTOFF) == [SUBJECT_A]
+    assert sweep.select_users(users, CUTOFF) == [SUBJECT_A, SUBJECT_C]
 
 
 def test_select_policies_skips_young_foreign_and_attached() -> None:
     policies = [
         _policy(SUBJECT_A, OLD, attachments=1),
         _policy(SUBJECT_B, OLD),
+        _policy(SUBJECT_C, OLD),
+        _policy(SUBJECT_D, OLD, attachments=1),
         _policy('test-subject-2222222222222222', OLD, attachments=1),
         _policy('test-subject-3333333333333333', NEW),
         _policy('test-subject-4444444444444444', OLD, path='/'),
@@ -127,7 +141,11 @@ def test_select_policies_skips_young_foreign_and_attached() -> None:
 
     selected = sweep.select_policies(policies, [SUBJECT_A], CUTOFF)
 
-    assert selected == [_policy_arn(SUBJECT_A), _policy_arn(SUBJECT_B)]
+    assert selected == [
+        _policy_arn(SUBJECT_A),
+        _policy_arn(SUBJECT_B),
+        _policy_arn(SUBJECT_C),
+    ]
 
 
 @pytest.mark.parametrize(
@@ -137,6 +155,13 @@ def test_select_policies_skips_young_foreign_and_attached() -> None:
             'test-namespace-0123456789abcdef.test-topic-fedcba9876543210',
             'test-namespace-0123456789abcdef',
         ),
+        ('ns-test0123abcd.test-topic-1', 'ns-test0123abcd'),
+        ('ns-test0123abcd.test-topic-1a2b3c4d', 'ns-test0123abcd'),
+        ('ns-test0123abcd.test-topic-concurrent', 'ns-test0123abcd'),
+        ('ns-test0123abcd.orders', None),
+        ('ns-test0123abc.test-topic-1', None),
+        ('ns-test0123abcde.test-topic-1', None),
+        ('ns-TEST0123abcd.test-topic-1', None),
         ('ns-0123456789ab.test-topic-1', 'ns-0123456789ab'),
         ('ns-0123456789ab.test-topic-1a2b3c4d', 'ns-0123456789ab'),
         (
@@ -202,15 +227,27 @@ def test_topic_namespace_matches_known_leftovers(topic: str) -> None:
     ),
 )
 def test_topic_namespace_matches_fixed_test_topic_names(suffix: str) -> None:
-    topic = f'ns-0123456789ab.test-topic-{suffix}'
+    for namespace in ('ns-test0123abcd', 'ns-0123456789ab'):
+        topic = f'{namespace}.test-topic-{suffix}'
 
-    assert sweep.topic_namespace(topic) == 'ns-0123456789ab'
+        assert sweep.topic_namespace(topic) == namespace
+
+
+def test_sweep_matches_the_names_the_live_tests_use() -> None:
+    subject = live_subject()
+    topic_suffix = 'test-topic-0a1b2c3d'
+
+    assert sweep.TEST_SUBJECT.fullmatch(subject)
+    for namespace in (sweep.default_namespace(subject), live_namespace()):
+        topic = f'{namespace}.{topic_suffix}'
+        assert sweep.topic_namespace(topic) == namespace
 
 
 @pytest.mark.parametrize(
     'subject',
     (
         SUBJECT_A,
+        SUBJECT_C,
         '3f1e2d4c-aaaa-bbbb-cccc-0123456789ab',
         'abc',
         'no-dashes-here',
@@ -278,6 +315,11 @@ def test_collect_selects_only_test_resources() -> None:
         f'{sweep.default_namespace(SUBJECT_B)}.test-topic-1',
         # Default namespace of the old test user being swept.
         f'{sweep.default_namespace(SUBJECT_A)}.test-topic-2',
+        # The same, for a test user named the way the live tests are now.
+        f'{sweep.default_namespace(SUBJECT_C)}.test-topic-1a2b3c4d',
+        # A test user's namespace too young to sweep, and one recorded.
+        f'{sweep.default_namespace(SUBJECT_D)}.test-topic-1',
+        'ns-testaaaaaaaa.test-topic-1',
     ]
     with Stubber(iam) as iam_stub, Stubber(dynamodb) as db_stub:
         _stub_listing(
@@ -285,11 +327,15 @@ def test_collect_selects_only_test_resources() -> None:
             [
                 _user(SUBJECT_A, OLD),
                 _user(SUBJECT_B, NEW),
+                _user(SUBJECT_C, OLD),
+                _user(SUBJECT_D, NEW),
                 _user(REAL_USER, OLD),
             ],
             [
                 _policy(SUBJECT_A, OLD, attachments=1),
                 _policy(SUBJECT_B, NEW, attachments=1),
+                _policy(SUBJECT_C, OLD, attachments=1),
+                _policy(SUBJECT_D, NEW, attachments=1),
             ],
         )
         db_stub.add_response(
@@ -305,6 +351,8 @@ def test_collect_selects_only_test_resources() -> None:
             ('ns-0123456789ab', None),
             (sweep.default_namespace(SUBJECT_A), None),
             ('ns-abcdefabcdef', {'namespace': {'S': 'ns-abcdefabcdef'}}),
+            (sweep.default_namespace(SUBJECT_C), None),
+            ('ns-testaaaaaaaa', {'namespace': {'S': 'ns-testaaaaaaaa'}}),
             ('test-namespace-0123456789abcdef', None),
         ):
             db_stub.add_response(
@@ -322,11 +370,12 @@ def test_collect_selects_only_test_resources() -> None:
         iam_stub.assert_no_pending_responses()
         db_stub.assert_no_pending_responses()
 
-    assert plan.users == [SUBJECT_A]
-    assert plan.policies == [_policy_arn(SUBJECT_A)]
+    assert plan.users == [SUBJECT_A, SUBJECT_C]
+    assert plan.policies == [_policy_arn(SUBJECT_A), _policy_arn(SUBJECT_C)]
     assert plan.topics == [
         'ns-0123456789ab.test-topic-1',
         f'{sweep.default_namespace(SUBJECT_A)}.test-topic-2',
+        f'{sweep.default_namespace(SUBJECT_C)}.test-topic-1a2b3c4d',
         'test-namespace-0123456789abcdef.test-topic-fedcba9876543210',
     ]
     assert plan.errors == []

@@ -5,18 +5,23 @@ and Kafka topics and delete them when they finish. A test that fails or
 times out can leave some behind. This script finds those leftovers by the
 exact names the tests use and nothing broader:
 
-- IAM users under ``/msk-users/`` named ``test-subject-<16 hex>``, created
-  more than ``--min-age-hours`` ago, with their access keys and their
-  policy.
+- IAM users under ``/msk-users/`` named ``test-subject-test<8 hex>``,
+  created more than ``--min-age-hours`` ago, with their access keys and
+  their policy.
 - IAM policies under ``/msk-policy/`` with the same names and age, either
   attached to nothing or attached only to a user selected above.
 - Kafka topics named ``test-namespace-<16 hex>.test-topic-<16 hex>`` or
-  ``ns-<12 hex>.test-topic-<suffix>``, with a suffix the tests use, whose
-  namespace the service has no record of (in neither its users table's
-  namespace list nor its namespace table) and is not the default
+  ``ns-test<8 hex>.test-topic-<suffix>``, with a suffix the tests use,
+  whose namespace the service has no record of (in neither its users
+  table's namespace list nor its namespace table) and is not the default
   namespace of any IAM user other than a selected test user. Kafka keeps
   no topic creation time, so topics are not filtered by age; run the
   script when no live test run is in progress.
+
+It also still selects the names the live tests used before:
+``test-subject-<16 hex>`` users and policies, and
+``ns-<12 hex>.test-topic-<suffix>`` topics. Those patterns go once no
+leftovers with the old names remain.
 
 Without ``--apply`` it only prints what it would delete. It exits non-zero
 if listing or any deletion fails. If the service's namespace list cannot
@@ -49,19 +54,28 @@ from web_service.services import MSKTokenProvider
 
 IAM_USER_PATH = '/msk-users/'
 IAM_POLICY_PATH = '/msk-policy/'
-TEST_SUBJECT = re.compile(r'test-subject-[0-9a-f]{16}')
+TEST_SUBJECT = re.compile(
+    r'test-subject-test[0-9a-f]{8}'
+    # The names the live tests used before; remove once none are left.
+    r'|test-subject-[0-9a-f]{16}',
+)
+
+# The fixed or 8-hex topic names the WebService and consumer tests use.
+_TEST_TOPIC_SUFFIX = (
+    r'test-topic-'
+    r'(?:1|2|concurrent(?:-existing|-delete)?|during-deletion'
+    r'|delete-during-create|[0-9a-f]{8})'
+)
 
 # Each pattern captures the namespace part of the Kafka topic name.
 TEST_TOPICS = (
     # KafkaService tests: random namespace and topic.
     re.compile(r'(test-namespace-[0-9a-f]{16})\.test-topic-[0-9a-f]{16}'),
-    # WebService, NamespaceService and consumer tests: a test user's
-    # default namespace, with the fixed or 8-hex topic names they use.
-    re.compile(
-        r'(ns-[0-9a-f]{12})\.test-topic-'
-        r'(?:1|2|concurrent(?:-existing|-delete)?|during-deletion'
-        r'|delete-during-create|[0-9a-f]{8})',
-    ),
+    # WebService and consumer tests: a test user's default namespace.
+    re.compile(rf'(ns-test[0-9a-f]{{8}})\.{_TEST_TOPIC_SUFFIX}'),
+    # The default namespace of a test user named the way the live tests
+    # used before; remove once none are left.
+    re.compile(rf'(ns-[0-9a-f]{{12}})\.{_TEST_TOPIC_SUFFIX}'),
 )
 
 DEFAULT_MIN_AGE_HOURS = 2.0
