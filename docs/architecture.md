@@ -33,7 +33,7 @@ reads topics on one Amazon MSK cluster.
 Calls to Globus, IAM, DynamoDB and Kafka block, so the handlers run them
 in threads. On the event loop, they would stall every other request.
 Produce parsing and sends run at most 8 at once and consumer fetches at
-most 6, each with a limit of its own, since they hold the most memory.
+most 4, each with a limit of its own, since they hold the most memory.
 Every other blocking call shares a pool of 40 threads.
 
 The service reaches AWS with the key in `AWS_ACCESS_KEY_ID` and
@@ -133,8 +133,30 @@ instance ID. Only the subject that created an instance can use it. A
 background thread looks every 30 seconds for instances idle for longer
 than `CONSUMER_INSTANCE_TIMEOUT_MS` (5 minutes by default) and closes them.
 When the process stops, it closes them all. A subject may hold 8
-instances and the service 100, which bounds the memory that idle
-instances and their fetches hold.
+instances and the service 16.
+
+These limits bound the memory of the consumer routes:
+
+- An idle instance holds what kafka-python fetched ahead for its next
+  fetch: the next reply of each broker, however long the instance sits
+  idle. A fetch asks each broker for at most 1 MiB, but a broker returns
+  a first record batch larger than that whole, so an instance can hold
+  8 MiB per broker. Pausing the instance's partitions after each fetch
+  does not drop it. On a cluster of two brokers, 16 instances can hold
+  256 MiB this way.
+- The service runs 4 fetches at once, and a subject may have 2 in
+  progress. A fetch reads a record of up to 8 MiB from each broker,
+  decodes it and encodes the reply. A reply holds at most 2 MiB of JSON,
+  except a first record larger than that, which is returned alone and
+  written in chunks of about 256 KiB, so its JSON (up to 48 MiB for
+  8 MiB of control characters) is never held whole. In the test below, a
+  fetch of one 8 MiB record took up to 36 MiB, so 4 fetches of a record
+  from each of two brokers hold about 290 MiB.
+
+In a test against one local broker on macOS, the service started at
+99 MiB of resident memory. With 12 idle instances holding 64 MiB of
+fetched-ahead records, 4 fetches of one 8 MiB record each raised it to
+320 MiB as base64 and to 350 MiB as JSON of control characters.
 
 `WebService` and `NamespaceService` each hold a lock. The lock in
 `WebService` serializes user and key operations, including the Kafka
