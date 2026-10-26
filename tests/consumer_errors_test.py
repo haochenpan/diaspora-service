@@ -1749,6 +1749,41 @@ async def test_a_reply_past_the_send_limit_is_skipped(
     assert 'r0' not in message
 
 
+async def test_a_reply_out_of_time_before_its_send_is_fetched_again(
+    service: DiasporaService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A reply whose time runs out while it is encoded was never sent."""
+    monkeypatch.setattr(main, 'FETCH_SEND_TIMEOUT_S', 0.2)
+    log = _log(service, 'i1', b'r0', b'r1')
+    encode = FetchReply.body
+
+    def slow_body(reply: FetchReply) -> bytes:
+        time.sleep(0.5)
+        return encode(reply)
+
+    response = await _fetch(service, _connected())
+    sent: list[dict[str, Any]] = []
+
+    async def receive() -> dict[str, Any]:
+        await asyncio.Event().wait()
+        return {'type': 'http.disconnect'}
+
+    async def send(message: dict[str, Any]) -> None:
+        sent.append(message)
+
+    with patch.object(FetchReply, 'body', slow_body):
+        await response({'type': 'http'}, receive, send)
+    assert sent[0]['status'] == 500
+    assert json.loads(sent[1]['body']) == {
+        'error_code': 500,
+        'message': 'Internal server error',
+    }
+    # Nothing of the reply was sent, so its records come again
+    assert log.pos[_kafka_tp()] == 0
+    _assert_released(service)
+
+
 async def test_fetch_slots_go_to_the_longest_waiter() -> None:
     """A slot given back and asked for again at once waits its turn."""
     slots = main.FetchSlots(2)

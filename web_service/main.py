@@ -216,9 +216,11 @@ class FetchResponse(Response):
     or the encode or the send fails, unfetch runs before the release, so
     the next fetch returns the reply's records again. A reply handed whole
     to the server counts as received, since the server cannot tell
-    whether the client read it. A reply that takes longer than
-    FETCH_SEND_TIMEOUT_S to send is skipped: the server closes the
-    connection, and the next fetch starts after the reply.
+    whether the client read it. A reply that has begun to be sent but
+    takes longer than FETCH_SEND_TIMEOUT_S is skipped: the server closes
+    the connection, and the next fetch starts after the reply. One whose
+    time runs out before anything is sent is fetched again, and the
+    client gets a 500.
     """
 
     def __init__(
@@ -270,11 +272,11 @@ class FetchResponse(Response):
                             self._complete = delivered = True
                         tasks.cancel_scope.cancel()
             finally:
-                if timer.cancelled_caught:
+                if timer.cancelled_caught and self._started:
                     self._skip()
                 elif not delivered:
                     self._unfetch()
-            if failed and not self._started:
+            if (failed or timer.cancelled_caught) and not self._started:
                 refusal = error_response(
                     500,
                     SERVER_ERROR,
