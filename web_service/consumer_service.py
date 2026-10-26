@@ -513,6 +513,45 @@ class ManagedConsumer:
         # Set, under the lock, once the consumer is closed; a request that
         # was waiting for the lock then finds the instance gone
         self.closed = False
+        # Set when a close gave up waiting for the thread using the
+        # consumer; that thread closes it once it is done, since the
+        # consumer's IO thread would otherwise keep it, and its place in
+        # its group, for the life of the process
+        self.abandoned = False
+
+    @contextmanager
+    def using(self) -> Iterator[None]:
+        """Hold calls while using the consumer; close it after if abandoned."""
+        try:
+            with self.calls:
+                yield
+        finally:
+            self.close_if_abandoned()
+
+    def close_if_abandoned(self) -> None:
+        """Close the consumer, without a commit, if a close gave up on it.
+
+        Does nothing while another thread uses the consumer: that thread
+        closes it when it is done.
+        """
+        if not self.abandoned or not self.calls.acquire(blocking=False):
+            return
+        try:
+            if not self.abandoned:
+                return
+            self.abandoned = False
+            try:
+                self.consumer.close(
+                    autocommit=False,
+                    timeout_ms=CLOSE_TIMEOUT_MS,
+                )
+            except Exception:
+                logger.exception(
+                    'Error closing consumer %s after its last use',
+                    self.instance_id,
+                )
+        finally:
+            self.calls.release()
 
     def touch(self) -> None:
         """Update last access time."""
@@ -773,7 +812,8 @@ class ConsumerService:
         and a failed commit is logged and the close goes on. An instance
         without auto-commit commits nothing. Both wait first for a thread
         still using the consumer, at most CLOSE_COMMIT_TIMEOUT_MS; if it
-        is still busy then, the consumer is left open. A deadline
+        is still busy then, that thread closes the consumer, without a
+        commit, once it is done. A deadline
         (time.monotonic()) shortens every wait to the time left before it.
         """
         managed.closed = True
@@ -788,10 +828,13 @@ class ConsumerService:
             timeout=within(CLOSE_COMMIT_TIMEOUT_MS) / 1000,
         ):
             logger.warning(
-                'Consumer %s still in use by a thread; not committed or '
-                'closed',
+                'Consumer %s still in use by a thread; not committed, and '
+                'closed once the thread is done',
                 managed.instance_id,
             )
+            managed.abandoned = True
+            # The thread may have finished since the wait gave up
+            managed.close_if_abandoned()
             return
         try:
             if managed.auto_commit:
@@ -894,7 +937,7 @@ class ConsumerService:
             if error:
                 return error
             managed.touch()
-            with managed.calls:
+            with managed.using():
                 try:
                     return serve(managed)
                 except Exception as e:

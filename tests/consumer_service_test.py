@@ -2251,13 +2251,16 @@ def test_shutdown_waits_no_longer_than_its_deadline(
 def test_close_leaves_a_consumer_a_thread_still_uses(
     consumer_service: ConsumerService,
 ) -> None:
-    """A close neither commits nor closes while another thread polls."""
+    """A close neither commits nor closes while another thread polls.
+
+    The thread closes the consumer, without a commit, once it is done.
+    """
     managed = _auto_commit_managed('inst')
     using = threading.Event()
     done = threading.Event()
 
     def _use() -> None:
-        with managed.calls:
+        with managed.using():
             using.set()
             done.wait(5)
 
@@ -2270,11 +2273,49 @@ def test_close_leaves_a_consumer_a_thread_still_uses(
             'Error closing consumer %s',
             deadline=time.monotonic() + 0.2,
         )
+        managed.consumer.commit.assert_not_called()
+        managed.consumer.close.assert_not_called()
     finally:
         done.set()
         user.join(5)
     managed.consumer.commit.assert_not_called()
-    managed.consumer.close.assert_not_called()
+    managed.consumer.close.assert_called_once_with(
+        autocommit=False,
+        timeout_ms=CLOSE_TIMEOUT_MS,
+    )
+
+
+def test_an_abandoned_consumer_freed_meanwhile_is_closed_at_once() -> None:
+    """A thread that let go before the flag was set leaves the close to it."""
+    managed = _new_managed('inst')
+    managed.abandoned = True
+    managed.close_if_abandoned()
+    managed.consumer.close.assert_called_once_with(
+        autocommit=False,
+        timeout_ms=CLOSE_TIMEOUT_MS,
+    )
+    managed.close_if_abandoned()
+    managed.consumer.close.assert_called_once()
+
+
+def test_a_request_on_an_abandoned_instance_closes_it(
+    consumer_service: ConsumerService,
+) -> None:
+    """A request still using an instance a delete gave up on closes it."""
+    managed = _new_managed('inst')
+    consumer_service._consumers[('u', 'ns', 'g', 'inst')] = managed
+
+    def serve(served: ManagedConsumer) -> tuple[None, int]:
+        served.abandoned = True
+        served.consumer.close.assert_not_called()
+        return (None, 204)
+
+    reply = consumer_service._serve(('u', 'ns', 'g', 'inst'), 'test', serve)
+    assert reply == (None, 204)
+    managed.consumer.close.assert_called_once_with(
+        autocommit=False,
+        timeout_ms=CLOSE_TIMEOUT_MS,
+    )
 
 
 def test_fetch_attempt_hands_the_reply_to_one_side() -> None:
