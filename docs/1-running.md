@@ -73,16 +73,18 @@ still holds the deleted key, and the production service's
 `POST /api/v3/key` keeps returning it with `fresh` set to `false`. To
 recover, call `DELETE /api/v3/key` on the production service, then
 `POST /api/v3/key` there: the first deletes the IAM user's keys and the
-stored key, and the second creates and stores a new one. The test keys
-table still holds a key for that identity, so a later
-`DELETE /api/v3/key` to a local service with it deletes the production
-IAM user's keys again.
+stored key, and the second creates and stores a new one. After that, a
+local `DELETE /api/v3/key` or `DELETE /api/v3/user` with that identity
+still acts on the production IAM user, whatever the test tables hold. A
+local `POST /api/v3/key` keeps returning the deleted key from the test
+keys table. No route removes that item without also deleting the IAM
+user's keys, so delete it from the table directly.
 
 To check only that the service starts, run it with the placeholder values
 of the unit tests ([Run the unit tests locally](2-testing.md#run-the-unit-tests-locally)).
 It makes no AWS call and serves its API documentation at `/`. API requests
-reach Globus but not AWS, and fail: Globus rejects the placeholder client
-credentials, so a request with a well-formed token gets `500`
+with a well-formed token reach Globus but not AWS, and fail: Globus
+rejects the placeholder client credentials, so they get `500`
 ([Authentication](architecture.md#authentication) lists the other
 answers).
 

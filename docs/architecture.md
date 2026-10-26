@@ -58,7 +58,7 @@ and `authorization`, `Bearer` followed by a Globus access token. The class
 6. The token's scopes include
    `https://auth.globus.org/scopes/<SERVER_CLIENT_ID>/action_all`.
 
-A request without either header gets FastAPI's `422`. A failed check ends
+A request missing one of the headers gets FastAPI's `422`. A failed check ends
 the request: the user, key, namespace and topic routes answer `200` with
 `{"status": "error", "reason": ...}`, and the consumer routes answer
 `401`. Step 3 fails this way only when Globus answers that the token is
