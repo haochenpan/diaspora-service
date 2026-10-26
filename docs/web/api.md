@@ -297,11 +297,11 @@ Every topic has one partition, 0, and a request that names another partition is 
 
 A subscribe or an assign takes only topics the namespace holds, and refuses any other with 404 and 40401. A topic the namespace holds but the cluster does not list, such as one deleted while an instance reads it, is not created by the subscription or the assignment: the instance's fetches return no records from it.
 
-#### The deprecated `/api/v3` consumer routes
+#### The earlier `/api/v3` consumer routes
 
-The consumer routes of earlier versions, under `/api/v3/{namespace}/consumers`, remain as deprecated aliases of the v2 routes, with the namespace in the path. They take the same bodies and give the same replies, and a create through them returns a `base_uri` under `/api/v3`. Their replies carry the header `Deprecation: @1792972800` (RFC 9745: deprecated since 26 October 2026), and the OpenAPI document marks them deprecated. An instance is the same instance through either prefix. A later version removes the aliases, so clients should move to `/api/v2/consumers`.
+The consumer routes of earlier versions, under `/api/v3/{namespace}/consumers`, are removed, and a request to them is refused with 404. Clients use `/api/v2/consumers`, which acts in the caller's default namespace.
 
-Clients of the earlier routes see these changes:
+A client of the earlier routes also sees these changes:
 
 - A request body with a content type other than a v2 type or `application/json` is refused with 415. `curl -d` without `-H "Content-Type: ..."` sends `application/x-www-form-urlencoded`, so it is refused.
 - A create with a group or name that breaks the rule above is refused with 422, including an empty name, which the earlier routes took.
@@ -373,7 +373,6 @@ The consumer routes follow the paths, bodies, statuses and codes of Confluent's 
 | Case | Octopus | Confluent | Why |
 | --- | --- | --- | --- |
 | Namespace and topic names | The routes act in the caller's default namespace; topics and groups are named without it | No namespaces | Each user's topics and groups are prefixed with the user's namespace |
-| `/api/v3/{namespace}/consumers` | Deprecated aliases of the v2 routes | No such routes | Clients of earlier versions keep working until a later version removes them |
 | Group and instance names | 1 to 128 letters, digits, dots, dashes or underscores, starting with a letter or digit; else 422, 42204 | No rule | Both are segments of `base_uri`, and clients drop a segment such as `..` |
 | Request content type `application/json` | Accepted | 415, 415 | Clients that send JSON as `application/json` keep working |
 | Record headers | Each record has `headers` | v2 records have none | The produce routes write headers, so the consumer routes return them |

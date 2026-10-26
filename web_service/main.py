@@ -27,7 +27,6 @@ from fastapi import Body
 from fastapi import Depends
 from fastapi import FastAPI
 from fastapi import Header
-from fastapi import Path
 from fastapi import Query
 from fastapi import Request
 from fastapi.concurrency import run_in_threadpool
@@ -124,10 +123,8 @@ SHARED_THREADS = 40
 # for a failed authentication
 AUTHENTICATION_FAILED = 40101
 # Where the consumer routes are: Confluent REST Proxy v2's paths, whose
-# namespace is the caller's default one, and the earlier paths, which
-# name it and are deprecated
+# namespace is the caller's default one
 CONSUMERS_V2 = '/api/v2/consumers'
-CONSUMERS_V3 = '/api/v3/{namespace}/consumers'
 # A host and port as a URL may hold them, for the Host and
 # X-Forwarded-Host headers of a request whose base_uri the service builds
 _URL_HOST = re.compile(
@@ -425,31 +422,10 @@ class FetchResponse(Response):
 
 
 def consumer_namespace(
-    request: Request,
     subject: str = Header(..., alias='subject'),
 ) -> str:
-    """The namespace of a consumer request.
-
-    A deprecated route names it in its path. A v2 route takes the caller's
-    default namespace, the one every user has, so an instance created
-    through either route is found through the other.
-    """
-    named = request.path_params.get('namespace')
-    if named is not None:
-        return named
+    """The namespace of a consumer request: the caller's default one."""
     return NamespaceService.generate_default(subject)
-
-
-def _path_namespace(
-    namespace: str = Path(
-        ...,
-        description=(
-            'Your namespace. The /api/v2/consumers routes take your '
-            'default namespace instead.'
-        ),
-    ),
-) -> None:
-    """Document the namespace a deprecated consumer route names."""
 
 
 class DiasporaService:
@@ -943,18 +919,13 @@ class DiasporaService:
     @staticmethod
     def _instance_url(
         request: Request,
-        namespace: str,
         group_name: str,
         instance_id: str,
     ) -> str:
-        """An instance's absolute URL, under the prefix request used."""
-        if 'namespace' in request.path_params:
-            prefix = CONSUMERS_V3.format(namespace=quote(namespace, safe=''))
-        else:
-            prefix = CONSUMERS_V2
+        """An instance's absolute URL."""
         return service_url(
             request,
-            f'{prefix}/{quote(group_name, safe="")}'
+            f'{CONSUMERS_V2}/{quote(group_name, safe="")}'
             f'/instances/{quote(instance_id, safe="")}',
         )
 
@@ -977,10 +948,8 @@ class DiasporaService:
         """Add the consumer routes, in Confluent REST Proxy v2's paths.
 
         Each route is served under /api/v2/consumers, as Confluent's
-        /consumers, and under the deprecated /api/v3/{namespace}/consumers,
-        which a later API version removes. Both run the same handlers, so
-        an instance created through either is the same instance. Their
-        route class answers every failure in Confluent's shape.
+        /consumers. Their route class answers every failure in Confluent's
+        shape.
         """
         instance = '/{group_name}/instances/{instance_id}'
         routes: list[tuple[str, str, Callable[..., Any], str]] = [
@@ -1058,13 +1027,6 @@ class DiasporaService:
             route_class=ConsumerRoute,
             tags=['Consumer'],
         )
-        deprecated = APIRouter(
-            prefix=CONSUMERS_V3,
-            route_class=ConsumerRoute,
-            tags=['Consumer (deprecated)'],
-            deprecated=True,
-            dependencies=[Depends(_path_namespace)],
-        )
         for method, path, handler, name in routes:
             current.add_api_route(
                 path,
@@ -1072,14 +1034,7 @@ class DiasporaService:
                 methods=[method],
                 operation_id=f'consumer_{name}',
             )
-            deprecated.add_api_route(
-                path,
-                handler,
-                methods=[method],
-                operation_id=f'consumer_{name}_deprecated',
-            )
         self.app.include_router(current)
-        self.app.include_router(deprecated)
 
     # --- Consumer endpoint handlers ---
 
@@ -1096,8 +1051,7 @@ class DiasporaService:
         """Create a consumer instance in a consumer group.
 
         A request without a body takes every default, as in Confluent's
-        REST Proxy. The reply's base_uri is the instance's absolute URL
-        under the prefix the request used.
+        REST Proxy. The reply's base_uri is the instance's absolute URL.
         """
         settings = body or CreateConsumerRequest.model_validate({})
 
@@ -1119,7 +1073,6 @@ class DiasporaService:
             if status == DiasporaService._OK:
                 resp_body['base_uri'] = self._instance_url(
                     request,
-                    namespace,
                     group_name,
                     resp_body['instance_id'],
                 )

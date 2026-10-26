@@ -9,8 +9,7 @@ it is parsed. The other routes keep FastAPI's own replies.
 As in Confluent's REST Proxy v2, a request's Content-Type, if it has one,
 must be one of the v2 types (or application/json), and a JSON reply is
 `application/vnd.kafka.v2+json`; the fetch route chooses its reply's type
-from the request's Accept, as negotiate_records does. A deprecated route
-also answers with the Deprecation header of RFC 9745.
+from the request's Accept, as negotiate_records does.
 """
 
 from __future__ import annotations
@@ -73,9 +72,6 @@ RECORDS_TYPES = (
     ('application/vnd.kafka.jsonschema.v2+json', 'jsonschema', 0.1),
     ('application/vnd.kafka.protobuf.v2+json', 'protobuf', 0.1),
 )
-# The Deprecation header of a deprecated route (RFC 9745): deprecated since
-# 2026-10-26T00:00:00Z
-DEPRECATION = '@1792972800'
 _Q = re.compile(r'\s*q\s*=\s*([0-9.]+)\s*$', re.IGNORECASE)
 
 
@@ -180,8 +176,6 @@ class ConsumerRoute(APIRoute):
             response = await serve(request)
             if response.headers.get('content-type') == 'application/json':
                 response.headers['content-type'] = V2_JSON
-            if self.deprecated:
-                response.headers['Deprecation'] = DEPRECATION
             return response
 
         return handle

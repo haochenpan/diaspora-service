@@ -26,8 +26,7 @@ reads topics on one Amazon MSK cluster.
       namespace and topic records, through `DynamoDBService`.
     - `DynamoDBService` reads and writes the three tables.
     - `KafkaService` creates and deletes topics with a Kafka admin client.
-5. The consumer routes, under `/api/v2/consumers` and their deprecated
-   aliases under `/api/v3/{namespace}/consumers`, call `ConsumerService`
+5. The consumer routes, under `/api/v2/consumers`, call `ConsumerService`
    in `web_service/consumer_service.py`, which keeps Kafka consumers in
    memory ([State in memory](#state-in-memory)).
 

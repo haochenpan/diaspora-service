@@ -2,8 +2,7 @@
 
 Each test makes a user with a temporary topic, produces records through
 the produce route, and reads them through the v2 consumer routes, which
-take the user's default namespace. One test uses the deprecated aliases
-under /api/v3/{namespace}/consumers. The token check is replaced by a
+take the user's default namespace. The token check is replaced by a
 pass, since CI has no user token; the unit tests cover it. The namespace,
 the topic, the consumer groups, DynamoDB and Kafka are real.
 """
@@ -487,34 +486,3 @@ async def test_a_topic_deleted_under_an_instance_stays_deleted(
             await fetch_nothing(instance)
     await asyncio.sleep(2)
     assert not _cluster_lists(live_service, kafka_topic)
-
-
-async def test_the_deprecated_aliases_reach_the_same_instance(
-    client: httpx.AsyncClient,
-    live_topic: tuple[str, str, str],
-) -> None:
-    subject, namespace, topic = live_topic
-    group = _group()
-    alias = f'/api/v3/{namespace}/consumers/{group}/instances/inst'
-    created = await client.post(
-        f'/api/v3/{namespace}/consumers/{group}',
-        json={'name': 'inst'},
-        headers=_headers(subject),
-    )
-    assert created.status_code == 200
-    assert created.headers['deprecation'] == '@1792972800'
-    assert created.json()['base_uri'] == f'http://test{alias}'
-    subscribed = await client.post(
-        f'{alias}/subscription',
-        json={'topics': [topic]},
-        headers=_headers(subject),
-    )
-    assert subscribed.status_code == 204
-    got = await client.get(
-        f'{V2}/{group}/instances/inst/subscription',
-        headers=_headers(subject),
-    )
-    assert got.json() == {'topics': [topic]}
-    assert 'deprecation' not in got.headers
-    deleted = await client.delete(alias, headers=_headers(subject))
-    assert deleted.status_code == 204

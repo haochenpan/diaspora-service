@@ -675,7 +675,8 @@ async def test_list_namespace_and_topics_authentication_failure(
 # Consumer REST API - Constants
 # ============================================================================
 
-CONSUMER_NS = 'ns-test123'
+# The consumer routes take the default namespace of the subject they get
+CONSUMER_NS = 'ns-426614174000'
 CONSUMER_GROUP = 'my-group'
 CONSUMER_INST = 'my-instance'
 
@@ -1941,7 +1942,7 @@ async def test_seek_consumer_end_success(
 
 HTTP_SUBJECT = '123e4567-e89b-12d3-a456-426614174000'
 HTTP_HEADERS = {'subject': HTTP_SUBJECT, 'authorization': 'Bearer ' + 'a' * 50}
-_INST = f'/api/v3/{CONSUMER_NS}/consumers/{CONSUMER_GROUP}/instances/x'
+_INST = f'/api/v2/consumers/{CONSUMER_GROUP}/instances/x'
 _PARTITIONS = {'partitions': [{'topic': 't1', 'partition': 0}]}
 _OFFSETS = {'offsets': [{'topic': 't1', 'partition': 0, 'offset': 3}]}
 
@@ -1963,7 +1964,7 @@ MANAGEMENT_ROUTES = [
 CONSUMER_ROUTES: list[tuple[str, str, Any, str, tuple[Any, int]]] = [
     (
         'POST',
-        f'/api/v3/{CONSUMER_NS}/consumers/{CONSUMER_GROUP}',
+        f'/api/v2/consumers/{CONSUMER_GROUP}',
         {'name': 'x'},
         'create_consumer',
         ({'instance_id': 'x', 'base_uri': _INST}, 200),
@@ -2407,9 +2408,8 @@ def test_fetch_timeout_cap_is_documented(
 ) -> None:
     """The fetch timeout's description states the cap."""
     schema = mock_diaspora_service.app.openapi()
-    for prefix in ('/api/v2/consumers', '/api/v3/{namespace}/consumers'):
-        params = schema['paths'][
-            f'{prefix}/{{group_name}}/instances/{{instance_id}}/records'
-        ]['get']['parameters']
-        timeout = next(p for p in params if p['name'] == 'timeout')
-        assert '30000' in timeout['description']
+    params = schema['paths'][
+        '/api/v2/consumers/{group_name}/instances/{instance_id}/records'
+    ]['get']['parameters']
+    timeout = next(p for p in params if p['name'] == 'timeout')
+    assert '30000' in timeout['description']
