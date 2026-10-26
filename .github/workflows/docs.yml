@@ -51,9 +51,9 @@ jobs:
         run: mkdocs build --strict
 
   # Publishes main to the gh-pages branch, the only job that writes to the
-  # repository.
+  # repository. A manual run on another branch publishes nothing.
   docs:
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     timeout-minutes: 10
 
     runs-on: ubuntu-latest

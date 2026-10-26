@@ -4,6 +4,12 @@ site_author: Haochen Pan
 site_description: Documentation for Diaspora Service
 strict: true
 
+# Report a link to a missing heading as a warning, which strict mode
+# turns into an error.
+validation:
+  links:
+    anchors: warn
+
 repo_name: haochenpan/diaspora-service
 repo_url: https://github.com/haochenpan/diaspora-service
 
