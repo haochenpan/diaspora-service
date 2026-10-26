@@ -95,11 +95,11 @@ REPLY_MAX_BYTES = 2 * 1024 * 1024
 # KafkaClient with its own heartbeat thread and sockets to the brokers.
 # After a fetch, kafka-python keeps each broker's next reply for the next
 # fetch, up to 8 MiB a broker, however long the instance sits idle, and
-# pausing the instance's partitions does not drop it. 16 instances on two
-# brokers can hold 256 MiB this way; see the consumer routes' memory in
+# pausing the instance's partitions does not drop it. 12 instances on two
+# brokers can hold 192 MiB this way; see the consumer routes' memory in
 # docs/architecture.md.
 MAX_INSTANCES_PER_SUBJECT = 4
-MAX_INSTANCES = 16
+MAX_INSTANCES = 12
 # Fetch wait when neither the fetch nor the instance names one, and the
 # longest either may name
 DEFAULT_FETCH_WAIT_MS = 5_000

@@ -215,7 +215,7 @@ def test_the_service_holds_at_most_16_instances(
     body, status = consumers.create_consumer('another', NAMESPACE, GROUP)
     assert status == 429
     assert body['error_code'] == 42901
-    assert 'The service holds 16 consumer instances' in body['message']
+    assert 'The service holds 12 consumer instances' in body['message']
 
 
 def test_an_instance_being_built_counts_against_the_limit(
