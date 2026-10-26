@@ -31,8 +31,9 @@ REAPER_INTERVAL_SECONDS = 30
 # cluster; without a timeout kafka-python retries until it succeeds
 CONSUMER_OPERATION_TIMEOUT_MS = 10_000
 # Longest a request waits for an instance that another request is using
-# (a fetch holds it for up to its timeout) before it is told to retry
-INSTANCE_LOCK_TIMEOUT_S = 5.0
+# (a fetch holds it for up to its timeout) before it is told to retry;
+# longer than the default fetch wait, so that never yields a 409
+INSTANCE_LOCK_TIMEOUT_S = 10.0
 
 
 class ManagedConsumer:
@@ -135,6 +136,8 @@ class ConsumerService:
         # Keys of instances whose KafkaConsumer is being built outside the
         # global lock; a create of the same name meanwhile gets 409
         self._pending: set[tuple[str, str, str, str]] = set()
+        # Set by shutdown_all; creates from then on are refused
+        self._closing = False
         self.lock_timeout_s = INSTANCE_LOCK_TIMEOUT_S
         self._reaper_thread = threading.Thread(
             target=self._reap_expired_consumers,
@@ -193,6 +196,19 @@ class ConsumerService:
         if kafka_topic.startswith(prefix):
             return kafka_topic[len(prefix) :]
         return kafka_topic
+
+    @staticmethod
+    def _shutting_down() -> tuple[dict[str, Any], int]:
+        """The reply to a create once shutdown has begun."""
+        return (
+            {
+                'error_code': 50002,
+                'message': (
+                    'Failed to create consumer: service is shutting down'
+                ),
+            },
+            500,
+        )
 
     def _get_consumer(
         self,
@@ -302,6 +318,8 @@ class ConsumerService:
         # lock: its bootstrap waits on the cluster, and every request on
         # every instance takes the global lock
         with self._global_lock:
+            if self._closing:
+                return self._shutting_down()
             if key in self._consumers or key in self._pending:
                 return (
                     {
@@ -357,11 +375,17 @@ class ConsumerService:
             )
         finally:
             # Swap the reservation for the instance, or drop it if the
-            # build failed
+            # build failed or shutdown began meanwhile
             with self._global_lock:
                 self._pending.discard(key)
-                if managed is not None:
+                closing = self._closing
+                if managed is not None and not closing:
                     self._consumers[key] = managed
+
+        if closing and managed is not None:
+            with managed.lock:
+                self._close(managed, 'Error closing consumer %s at shutdown')
+            return self._shutting_down()
 
         return (
             {
@@ -1076,9 +1100,11 @@ class ConsumerService:
         """Close all consumers. Called on application shutdown.
 
         Each is closed under its own lock and outside the global lock; one
-        still busy after lock_timeout_s is left unclosed.
+        still busy after lock_timeout_s is left unclosed. A create still
+        building its consumer closes it instead of registering it.
         """
         with self._global_lock:
+            self._closing = True
             consumers = list(self._consumers.values())
             self._consumers.clear()
         for managed in consumers:

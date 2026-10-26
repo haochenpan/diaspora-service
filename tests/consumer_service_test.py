@@ -1566,6 +1566,7 @@ def test_instance_lock_waits_for_a_short_request(
     managed = _managed(populated_service)
     managed.lock.acquire()
     timer = threading.Timer(0.05, managed.lock.release)
+    timer.daemon = True
     timer.start()
     body, status = populated_service.get_subscription(
         SUBJECT,
@@ -1648,7 +1649,7 @@ def test_create_consumer_builds_outside_the_global_lock(
         'web_service.consumer_service.KafkaConsumer',
         side_effect=_construct,
     ):
-        thread = threading.Thread(target=_slow_create)
+        thread = threading.Thread(target=_slow_create, daemon=True)
         thread.start()
         try:
             assert slow_started.wait(timeout=5)
@@ -1716,6 +1717,82 @@ def test_create_consumer_failure_frees_the_name(
         )
     assert status == 200
     assert body['instance_id'] == 'retry-inst'
+
+
+def test_shutdown_during_create_closes_the_new_consumer(
+    consumer_service: ConsumerService,
+) -> None:
+    """A create building at shutdown closes its consumer, unregistered."""
+    started = threading.Event()
+    release = threading.Event()
+    built = MagicMock()
+
+    def _construct(**_kwargs: Any) -> MagicMock:
+        started.set()
+        release.wait(timeout=5)
+        return built
+
+    results: list[tuple[Any, int]] = []
+    with patch(
+        'web_service.consumer_service.KafkaConsumer',
+        side_effect=_construct,
+    ):
+        thread = threading.Thread(
+            target=lambda: results.append(
+                consumer_service.create_consumer(
+                    subject=SUBJECT,
+                    namespace=NAMESPACE,
+                    group_name=GROUP_NAME,
+                    name='late',
+                ),
+            ),
+            daemon=True,
+        )
+        thread.start()
+        assert started.wait(timeout=5)
+        consumer_service.shutdown_all()
+        release.set()
+        thread.join(timeout=5)
+
+    assert not thread.is_alive()
+    assert results == [
+        (
+            {
+                'error_code': 50002,
+                'message': (
+                    'Failed to create consumer: service is shutting down'
+                ),
+            },
+            500,
+        ),
+    ]
+    built.close.assert_called_once_with(
+        autocommit=False,
+        timeout_ms=CONSUMER_OPERATION_TIMEOUT_MS,
+    )
+    assert consumer_service._consumers == {}
+    assert consumer_service._pending == set()
+
+
+def test_create_after_shutdown_is_refused(
+    consumer_service: ConsumerService,
+) -> None:
+    """Once shutdown has begun, a create builds no consumer."""
+    consumer_service.shutdown_all()
+    with patch('web_service.consumer_service.KafkaConsumer') as mock_kc:
+        body, status = consumer_service.create_consumer(
+            subject=SUBJECT,
+            namespace=NAMESPACE,
+            group_name=GROUP_NAME,
+            name='late',
+        )
+    mock_kc.assert_not_called()
+    assert status == 500
+    assert body == {
+        'error_code': 50002,
+        'message': 'Failed to create consumer: service is shutting down',
+    }
+    assert consumer_service._consumers == {}
 
 
 def test_reaper_skips_busy_and_closes_idle(

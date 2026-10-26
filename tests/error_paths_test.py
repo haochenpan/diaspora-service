@@ -2206,12 +2206,14 @@ def test_delete_key_waits_for_create_key() -> None:
     with patch.object(web_service, '_create_user') as mock_create_user:
         mock_create_user.return_value = {'status': 'success'}
         creator = threading.Thread(
+            daemon=True,
             target=web_service.create_key,
             args=('test-subject',),
         )
         creator.start()
         assert in_create.wait(timeout=5)
         deleter = threading.Thread(
+            daemon=True,
             target=web_service.delete_key,
             args=('test-subject',),
         )
@@ -2239,6 +2241,7 @@ def test_create_user_takes_the_service_lock() -> None:
     web_service._global_lock.acquire()
     try:
         worker = threading.Thread(
+            daemon=True,
             target=web_service.create_user,
             args=('test-subject',),
         )
@@ -2266,6 +2269,7 @@ def test_create_key_creating_the_user_does_not_deadlock() -> None:
     )
     results: list[dict[str, object]] = []
     worker = threading.Thread(
+        daemon=True,
         target=lambda: results.append(web_service.create_key('test-subject')),
     )
     worker.start()

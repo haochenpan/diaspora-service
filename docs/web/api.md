@@ -123,3 +123,5 @@ curl -X DELETE "https://diaspora-web-service.qpp943wkvr7b2.us-east-1.cs.amazonli
   -H "subject: $SUBJECT" \
   -H "authorization: $AUTHORIZATION"
 ```
+
+A consumer instance serves one request at a time. A request that waits more than 10 seconds for another request on the same instance returns 409 with error code 40904; retry it. The fetch `timeout` is capped at 30000 ms: a larger value waits 30000 ms.
