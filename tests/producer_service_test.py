@@ -343,6 +343,20 @@ def test_parse_cost_bounds_parsing_and_encoding(unit: bytes) -> None:
     assert estimate_parse_cost(raw) >= peak
 
 
+@pytest.mark.parametrize('value', (b'1', b'1e15', b'"v"'))
+def test_parse_cost_of_one_object_with_unique_keys(value: bytes) -> None:
+    """Each key costs its entry, its hash table share and its memo."""
+    keys = b','.join(b'"%d":%s' % (i, value) for i in range(100_000))
+    raw = b'{"value":{"type":"JSON","data":{' + keys + b'}}}'
+    tracemalloc.start()
+    try:
+        prepare_record(raw)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert estimate_parse_cost(raw) >= peak
+
+
 @pytest.mark.parametrize(
     'escape',
     (b'\\ud83d\\ude00', b'\\u4e2d'),

@@ -141,6 +141,13 @@ _NO_SCHEMA_REGISTRY = 'Octopus runs no schema registry'
 _CONTAINER_COST = 160
 _QUOTE_COST = 32
 _COMMA_COST = 40
+# Bytes for each key of an object, counted by its colon: the dict entry,
+# its share of the hash table (which can be three times the entries while
+# it grows) and the decoder's memo of the key
+_COLON_COST = 48
+# Memory any parse can take beyond what the body's bytes predict: lists
+# and tables over-allocate as they grow, which tells most in a small body
+_FIXED_COST = 4 * 1024 * 1024
 # Most characters json.dumps adds to a number with an exponent (1e15 is
 # written 1000000000000000.0) or a decimal point (a 17-digit decimal can
 # gain an exponent)
@@ -382,13 +389,15 @@ def estimate_parse_cost(raw: bytes | bytearray) -> int:
         + _DECIMAL_GROWTH * min(numbers, raw.count(b'.'))
     )
     return (
-        width * length
+        _FIXED_COST
+        + width * length
         # The pieces, the joined text and its UTF-8, a byte a character
         # to spare
         + (2 * width + 2) * encoded
         + _CONTAINER_COST * (raw.count(b'{') + raw.count(b'['))
         + _QUOTE_COST * raw.count(b'"')
         + _COMMA_COST * commas
+        + _COLON_COST * raw.count(b':')
     )
 
 
