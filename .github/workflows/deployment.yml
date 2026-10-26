@@ -4,22 +4,18 @@ on:
   push:
     branches:
       - main
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
+      - "mkdocs.yml"
   workflow_dispatch:
-    inputs:
-      service_names:
-        description: "Comma-separated names of Lightsail services"
-        required: true
-        default: "diaspora-web-service"
-      container_names:
-        description: "Comma-separated names of Docker containers"
-        required: true
-        default: "docker"
-      dockerfile_paths:
-        description: "Comma-separated paths to Dockerfiles"
-        required: true
-        default: "web_service/Dockerfile"
-  schedule:
-    - cron: "0 9 * * *" # 3 am CST
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production
+  cancel-in-progress: false
 
 jobs:
   deploy-lightsail-containers:
