@@ -1,2 +1,0 @@
-- [DiasporaDemo.ipynb](https://github.com/globus-labs/diaspora-event-sdk/blob/main/DiasporaDemo.ipynb)
-- [SDK's documentation](https://github.com/globus-labs/diaspora-event-sdk/tree/main/docs)

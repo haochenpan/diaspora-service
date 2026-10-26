@@ -146,7 +146,7 @@ than `CONSUMER_INSTANCE_TIMEOUT_MS` (5 minutes by default) and closes them.
 When the process stops, it closes them all at once, within 8 s in all.
 An instance created with `auto.commit.enable` set to `true` commits its
 positions before it closes, at a delete, at the reaper's close and at
-shutdown ([Instance lifecycle](web/api.md#instance-lifecycle)). A subject
+shutdown ([Instance lifecycle](web/consume.md#instance-lifecycle)). A subject
 may hold 4 instances and the service 12.
 
 These limits bound the memory of the consumer routes:
