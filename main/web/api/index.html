@@ -847,6 +847,34 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#producing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Producing
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Producing">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#differences-from-confluents-rest-api" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Differences from Confluent's REST API
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#consumer" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1087,6 +1115,34 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#producing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Producing
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Producing">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#differences-from-confluents-rest-api" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Differences from Confluent's REST API
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#consumer" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1198,35 +1254,292 @@
 </span><span id="__span-5-14"><a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"authorization: </span><span class="nv">$AUTHORIZATION</span><span class="s2">"</span>
 </span></code></pre></div>
 <p>A namespace holds at most 50 topics, a limit the service sets with the <code>MAX_TOPICS_PER_NAMESPACE</code> environment variable. Creating a new topic in a namespace that already holds that many returns <code>"status": "failure"</code> with a message that says to delete a topic first. Once a create adds a topic and leaves the namespace with at least 90% of the limit (45 of 50), the reply appends a warning to <code>message</code> and returns the same sentence in a <code>warning</code> field, which is absent otherwise. At 45 of 50 the warning reads "Namespace my-namespace now holds 45 of 50 topics; a create fails once it holds 50, so delete topics you no longer need." and at 50 of 50 it reads "Namespace my-namespace now holds 50 of 50 topics, the most allowed; delete a topic before you create another." Repeating the create of a topic that already exists, recreating a topic and deleting one are not limited.</p>
-<h3 id="consumer">Consumer<a class="headerlink" href="#consumer" title="Permanent link">&para;</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># Create consumer instance</span>
-</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span><span class="s2">"https://diaspora-web-service.qpp943wkvr7b2.us-east-1.cs.amazonlightsail.com/api/v3/</span><span class="nv">$NAMESPACE</span><span class="s2">/consumers/my-group"</span><span class="w"> </span><span class="se">\</span>
+<h3 id="producing">Producing<a class="headerlink" href="#producing" title="Permanent link">&para;</a></h3>
+<p>The produce routes take the request syntax of Confluent's REST API v3, with the namespace in place of the cluster. They reply once every in-sync replica has acknowledged the record, so a client that only reaches port 443 can publish as well as consume.</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># Produce one record</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span><span class="s2">"https://diaspora-web-service.qpp943wkvr7b2.us-east-1.cs.amazonlightsail.com/api/v3/</span><span class="nv">$NAMESPACE</span><span class="s2">/topics/my-topic/records"</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"subject: </span><span class="nv">$SUBJECT</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"authorization: </span><span class="nv">$AUTHORIZATION</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">'{"format": "json", "auto.offset.reset": "earliest"}'</span>
-</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a>
-</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="c1"># Subscribe to a list of topics (topic patterns are not supported)</span>
-</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span><span class="s2">"https://diaspora-web-service.qpp943wkvr7b2.us-east-1.cs.amazonlightsail.com/api/v3/</span><span class="nv">$NAMESPACE</span><span class="s2">/consumers/my-group/instances/</span><span class="nv">$INSTANCE_ID</span><span class="s2">/subscription"</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"subject: </span><span class="nv">$SUBJECT</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-6-11"><a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"authorization: </span><span class="nv">$AUTHORIZATION</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-6-12"><a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-6-13"><a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">'{"topics": ["my-topic"]}'</span>
-</span><span id="__span-6-14"><a id="__codelineno-6-14" name="__codelineno-6-14" href="#__codelineno-6-14"></a>
-</span><span id="__span-6-15"><a id="__codelineno-6-15" name="__codelineno-6-15" href="#__codelineno-6-15"></a><span class="c1"># Fetch records</span>
-</span><span id="__span-6-16"><a id="__codelineno-6-16" name="__codelineno-6-16" href="#__codelineno-6-16"></a>curl<span class="w"> </span>-X<span class="w"> </span>GET<span class="w"> </span><span class="s2">"https://diaspora-web-service.qpp943wkvr7b2.us-east-1.cs.amazonlightsail.com/api/v3/</span><span class="nv">$NAMESPACE</span><span class="s2">/consumers/my-group/instances/</span><span class="nv">$INSTANCE_ID</span><span class="s2">/records?timeout=5000"</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-6-17"><a id="__codelineno-6-17" name="__codelineno-6-17" href="#__codelineno-6-17"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"subject: </span><span class="nv">$SUBJECT</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-6-18"><a id="__codelineno-6-18" name="__codelineno-6-18" href="#__codelineno-6-18"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"authorization: </span><span class="nv">$AUTHORIZATION</span><span class="s2">"</span>
-</span><span id="__span-6-19"><a id="__codelineno-6-19" name="__codelineno-6-19" href="#__codelineno-6-19"></a>
-</span><span id="__span-6-20"><a id="__codelineno-6-20" name="__codelineno-6-20" href="#__codelineno-6-20"></a><span class="c1"># Commit offsets</span>
-</span><span id="__span-6-21"><a id="__codelineno-6-21" name="__codelineno-6-21" href="#__codelineno-6-21"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span><span class="s2">"https://diaspora-web-service.qpp943wkvr7b2.us-east-1.cs.amazonlightsail.com/api/v3/</span><span class="nv">$NAMESPACE</span><span class="s2">/consumers/my-group/instances/</span><span class="nv">$INSTANCE_ID</span><span class="s2">/offsets"</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-6-22"><a id="__codelineno-6-22" name="__codelineno-6-22" href="#__codelineno-6-22"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"subject: </span><span class="nv">$SUBJECT</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-6-23"><a id="__codelineno-6-23" name="__codelineno-6-23" href="#__codelineno-6-23"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"authorization: </span><span class="nv">$AUTHORIZATION</span><span class="s2">"</span>
-</span><span id="__span-6-24"><a id="__codelineno-6-24" name="__codelineno-6-24" href="#__codelineno-6-24"></a>
-</span><span id="__span-6-25"><a id="__codelineno-6-25" name="__codelineno-6-25" href="#__codelineno-6-25"></a><span class="c1"># Delete consumer instance</span>
-</span><span id="__span-6-26"><a id="__codelineno-6-26" name="__codelineno-6-26" href="#__codelineno-6-26"></a>curl<span class="w"> </span>-X<span class="w"> </span>DELETE<span class="w"> </span><span class="s2">"https://diaspora-web-service.qpp943wkvr7b2.us-east-1.cs.amazonlightsail.com/api/v3/</span><span class="nv">$NAMESPACE</span><span class="s2">/consumers/my-group/instances/</span><span class="nv">$INSTANCE_ID</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-6-27"><a id="__codelineno-6-27" name="__codelineno-6-27" href="#__codelineno-6-27"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"subject: </span><span class="nv">$SUBJECT</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-6-28"><a id="__codelineno-6-28" name="__codelineno-6-28" href="#__codelineno-6-28"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"authorization: </span><span class="nv">$AUTHORIZATION</span><span class="s2">"</span>
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">'{"key": {"type": "STRING", "data": "job-42"},</span>
+</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="s1">       "value": {"type": "JSON", "data": {"step": 7, "loss": 0.31}},</span>
+</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="s1">       "headers": [{"name": "trace", "value": "AAE="}]}'</span>
+</span></code></pre></div>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="p">{</span><span class="nt">"topic_name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"my-topic"</span><span class="p">,</span><span class="w"> </span><span class="nt">"partition_id"</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="nt">"offset"</span><span class="p">:</span><span class="w"> </span><span class="mi">12</span><span class="p">,</span><span class="w"> </span><span class="nt">"timestamp"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2026-10-26T15:04:05.123Z"</span><span class="p">}</span>
+</span></code></pre></div>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="c1"># Produce a batch of records</span>
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span><span class="s2">"https://diaspora-web-service.qpp943wkvr7b2.us-east-1.cs.amazonlightsail.com/api/v3/</span><span class="nv">$NAMESPACE</span><span class="s2">/topics/my-topic/records:batch"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"subject: </span><span class="nv">$SUBJECT</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"authorization: </span><span class="nv">$AUTHORIZATION</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">'{"entries": [</span>
+</span><span id="__span-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="s1">        {"id": "1", "value": {"type": "JSON", "data": {"step": 8}}},</span>
+</span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="s1">        {"id": "2", "value": {"type": "AVRO", "data": {"step": 9}}}]}'</span>
+</span></code></pre></div>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="p">{</span>
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="w">  </span><span class="nt">"successes"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="w">    </span><span class="p">{</span><span class="nt">"id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"1"</span><span class="p">,</span><span class="w"> </span><span class="nt">"topic_name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"my-topic"</span><span class="p">,</span><span class="w"> </span><span class="nt">"partition_id"</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="nt">"offset"</span><span class="p">:</span><span class="w"> </span><span class="mi">13</span><span class="p">,</span><span class="w"> </span><span class="nt">"timestamp"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2026-10-26T15:04:05.456Z"</span><span class="p">}</span>
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="w">  </span><span class="p">],</span>
+</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="w">  </span><span class="nt">"failures"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="w">    </span><span class="p">{</span><span class="nt">"id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2"</span><span class="p">,</span><span class="w"> </span><span class="nt">"error_code"</span><span class="p">:</span><span class="w"> </span><span class="mi">42206</span><span class="p">,</span><span class="w"> </span><span class="nt">"message"</span><span class="p">:</span><span class="w"> </span><span class="s2">"value type AVRO needs a schema registry; Octopus runs no schema registry, so use BINARY, JSON or STRING"</span><span class="p">}</span>
+</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="w">  </span><span class="p">]</span>
+</span><span id="__span-9-8"><a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="p">}</span>
+</span></code></pre></div>
+<p>A produce request needs <code>Content-Type: application/json</code>; a <code>charset</code> parameter, if present, must be UTF-8. Any other content type is refused with 415.</p>
+<p>A record has the optional fields <code>key</code>, <code>value</code>, <code>headers</code>, <code>partition_id</code> and <code>timestamp</code>, and needs a key or a value:</p>
+<ul>
+<li><code>key</code> and <code>value</code> are <code>{"type": ..., "data": ...}</code>. <code>BINARY</code> data is base64 and is written decoded; <code>JSON</code> data is any JSON value, written compactly as UTF-8; <code>STRING</code> data is a string, written as UTF-8. Absent or null <code>data</code> writes a null key or value. Octopus runs no schema registry, so the <code>AVRO</code>, <code>PROTOBUF</code> and <code>JSONSCHEMA</code> types, the schema fields (<code>schema</code>, <code>schema_id</code>, <code>schema_version</code>, <code>subject</code>, <code>subject_name_strategy</code>) and a key or value without a <code>type</code> are refused with 422.</li>
+<li>A record whose key and value are both null or absent is refused with 400: kafka-python, which the service sends with, cannot send one.</li>
+<li><code>headers</code> is a list of <code>{"name": string, "value": base64 string or null}</code>; a null value is written as an empty one, because kafka-python cannot send a null header value.</li>
+<li><code>partition_id</code> may only be 0: every topic has one partition, and any other partition is not found (404).</li>
+<li><code>timestamp</code> is ISO-8601 with a UTC offset (for example <code>2026-10-26T15:04:05.123Z</code>) and becomes the record's timestamp; without it, the record takes the time it is produced. The reply gives the record's timestamp in UTC.</li>
+</ul>
+<p>The single-record route takes exactly one record: an empty body is refused with 422 and a body that holds more than one JSON value with 400. The batch route takes 1 to 500 entries, each a record with an <code>id</code> of 1 to 80 letters, digits, dashes or underscores that is distinct within the batch. It answers 207 once every entry has been acknowledged or has failed, within the 30 s, with each entry in <code>successes</code> or <code>failures</code>. An empty body, missing or empty <code>entries</code>, more than 500 entries, or a missing, invalid or repeated id refuses the whole batch with 422.</p>
+<p>A record holds at most 8 MiB (8,388,608 bytes), including about 100 bytes of Kafka's per-record overhead: its key, value and header names and values, once decoded, must fit in the rest. A request body holds at most 16 MiB, and so do a batch's records once encoded: JSON data is written compactly, but a number is written in full (<code>1e15</code> as <code>1000000000000000.0</code>), so a batch can grow past its body and is then refused with 413.</p>
+<p>A body whose JSON would take too much memory to parse is refused with 413 before it is parsed. The service estimates the cost from the body's bytes and refuses an estimate over 192 MiB. The estimate counts 4 MiB for any body; <code>w</code> bytes for each byte of the body, where <code>w</code> is 1, 2 or 4 by the widest character the body holds or escapes (<code>\u4e2d</code> counts 2, <code>\ud83d\ude00</code> counts 4); <code>2w + 2</code> bytes for each byte of JSON it may write, which can be longer than the body by up to 14 bytes for each number with an exponent and 3 for each decimal point; and 160 bytes for each <code>{</code> or <code>[</code>, 32 for each <code>"</code>, 40 for each <code>,</code> and 48 for each <code>:</code>. So a body of long ASCII strings or base64 passes up to the 16 MiB, a JSON array of four-digit numbers (<code>[1000,1000,...]</code>) up to about 14.5 MiB, a string of emoji up to about 13.4 MiB, an object with unique keys (<code>{"1":1,"2":1,...}</code>) up to about 9.9 MiB, an array of single digits or of numbers like <code>1e15</code> up to about 7.5 MiB, and one of empty objects or arrays (<code>[{},{},...]</code>) up to about 2.6 MiB.</p>
+<p>The service holds at most 48 MiB of produce bodies and records at once, and at most 16 MiB for any one user (<code>subject</code>). A request holds the bytes of its body that have arrived, whatever its <code>Content-Length</code> declares, and once parsed the size of its records if that is larger. Once its body has arrived, a request takes one of the 8 places the service has for parsing and sending; a request still sending its body takes none. A user may have at most 2 requests in flight, at any stage. A request past a limit is refused with 429 and <code>Retry-After: 1</code>, as soon as it passes it: when it arrives, while its body arrives, or once it is read or parsed. When it arrives, a request is also refused before its body is sent if every place is taken or its <code>Content-Length</code> is more than the bytes free, for the service or for its user; nothing is held for it until its bytes arrive. A request's body must arrive within 20 s of its admission, which needs about 7 Mbit/s for a body of 16 MiB; a slower body is refused with 408. The service closes the connection after a 408, a 413 or a 429.</p>
+<p>The records' 30 s start once the body is read and parsed, and the records of a request share them to be acknowledged. A record not sent by then fails with 50003 and is not written; a record sent but not acknowledged by then fails with 50003 and may still be written. A 200 or a success in a 207 does not rule out a second copy either: the producer is not idempotent and retries a failed write within the 30 s, so a write that reached the cluster but whose acknowledgement was lost can be written twice. Consumers that need each record once should carry an id in the record and drop repeats.</p>
+<p>While the service cannot reach the Kafka cluster, it answers 503 for 5 s before it tries again, with <code>Retry-After</code> set to the seconds left. A topic that the namespace holds but the cluster does not list answers 404 once the cluster has answered twice without it and 2 s have passed (a topic just created can take a moment to reach every broker). The token, namespace and topic checks answer as on the consumer routes, with 401 or 404.</p>
+<table>
+<thead>
+<tr>
+<th>Code</th>
+<th>Status</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>40002</td>
+<td>400</td>
+<td>The topic name contains a dot</td>
+</tr>
+<tr>
+<td>40003</td>
+<td>400</td>
+<td>The body is not one JSON object in UTF-8</td>
+</tr>
+<tr>
+<td>40004</td>
+<td>400</td>
+<td>The body holds more than one JSON value</td>
+</tr>
+<tr>
+<td>40005</td>
+<td>400</td>
+<td>A record field is invalid (bad base64, unknown type or field, timestamp without an offset, no key or value)</td>
+</tr>
+<tr>
+<td>40301</td>
+<td>403</td>
+<td>The service is not authorized to write to the topic</td>
+</tr>
+<tr>
+<td>40401</td>
+<td>404</td>
+<td>The namespace or topic is not found, in the namespace or in the cluster</td>
+</tr>
+<tr>
+<td>40402</td>
+<td>404</td>
+<td><code>partition_id</code> is not 0</td>
+</tr>
+<tr>
+<td>40801</td>
+<td>408</td>
+<td>The body did not arrive within 20 s</td>
+</tr>
+<tr>
+<td>41301</td>
+<td>413</td>
+<td>The request body is over 16 MiB</td>
+</tr>
+<tr>
+<td>41302</td>
+<td>413</td>
+<td>A record is over 8 MiB, counting Kafka's overhead</td>
+</tr>
+<tr>
+<td>41303</td>
+<td>413</td>
+<td>The body's JSON would take too much memory to parse</td>
+</tr>
+<tr>
+<td>41304</td>
+<td>413</td>
+<td>A batch's records are over 16 MiB once encoded</td>
+</tr>
+<tr>
+<td>41501</td>
+<td>415</td>
+<td>The body is not <code>Content-Type: application/json</code> in UTF-8</td>
+</tr>
+<tr>
+<td>42206</td>
+<td>422</td>
+<td>The body is empty, or the record needs a schema registry</td>
+</tr>
+<tr>
+<td>42208</td>
+<td>422</td>
+<td>The batch is empty or over 500 entries, or an entry's <code>id</code> is missing, invalid or repeated</td>
+</tr>
+<tr>
+<td>42901</td>
+<td>429</td>
+<td>The service, or your share of it, holds as many produce requests or bytes as it can; retry after <code>Retry-After</code></td>
+</tr>
+<tr>
+<td>50002</td>
+<td>500</td>
+<td>Kafka refused the record, or the service is shutting down</td>
+</tr>
+<tr>
+<td>50003</td>
+<td>500</td>
+<td>A retriable Kafka error, or the record was not acknowledged within the 30 s; retry it</td>
+</tr>
+<tr>
+<td>50302</td>
+<td>503</td>
+<td>The service cannot reach the Kafka cluster; retry after <code>Retry-After</code></td>
+</tr>
+</tbody>
+</table>
+<p>In a batch, 40005, 40301, 40401 (from the cluster), 40402, 41302, 42206, 50002, 50003 and 50302 fail the one entry and the others go on; the other codes refuse the whole request. Error messages do not include Kafka's own error text.</p>
+<h4 id="differences-from-confluents-rest-api">Differences from Confluent's REST API<a class="headerlink" href="#differences-from-confluents-rest-api" title="Permanent link">&para;</a></h4>
+<p>The routes follow Confluent's statuses and codes except where noted here.</p>
+<table>
+<thead>
+<tr>
+<th>Case</th>
+<th>Octopus</th>
+<th>Confluent</th>
+<th>Why</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Body over 16 MiB</td>
+<td>413, 41301</td>
+<td>400, 400</td>
+<td>413 says what is wrong, and the code tells it apart</td>
+</tr>
+<tr>
+<td>Record over 8 MiB</td>
+<td>413, 41302</td>
+<td>413, 413</td>
+<td>A five-digit code like the rest</td>
+</tr>
+<tr>
+<td>Body not JSON, more than one value, invalid field</td>
+<td>400 with 40003, 40004, 40005</td>
+<td>400, 400</td>
+<td>One code for each cause</td>
+</tr>
+<tr>
+<td>Content type not JSON</td>
+<td>415, 41501</td>
+<td>415, 415</td>
+<td>A five-digit code like the rest</td>
+</tr>
+<tr>
+<td>More than one JSON value in a single-record body</td>
+<td>Refused</td>
+<td>Read as a stream of records</td>
+<td>One request is one record; several go to <code>records:batch</code></td>
+</tr>
+<tr>
+<td>Schema fields with type <code>BINARY</code>, <code>JSON</code> or <code>STRING</code></td>
+<td>Refused, 422</td>
+<td>Ignored</td>
+<td>Without a schema registry the fields cannot mean what the client asked</td>
+</tr>
+<tr>
+<td>Payload errors in a record (a schema type or field, no type)</td>
+<td>422, <code>error_code</code> 42206</td>
+<td>422, <code>error_code</code> 422 and <code>Error: 42206 : ...</code> in the message</td>
+<td>The code where a client looks for it; Confluent already puts 42206 in <code>error_code</code> for an empty body and 42208 for an invalid batch, as here</td>
+</tr>
+<tr>
+<td>Token check failed</td>
+<td>The consumer routes' 401</td>
+<td>401 from the web server's HTTP authentication, without a Confluent error code; Confluent's 40101 is for a failed Kafka authentication</td>
+<td>The same reply as the rest of Octopus</td>
+</tr>
+<tr>
+<td><code>partition_id</code> above 0</td>
+<td>404, 40402, at once</td>
+<td>Negative ids: 404, 40402. Ids past the partition count: the Kafka producer waits <code>max.block.ms</code>, then fails with "not present in metadata", which Confluent answers with 404, 40401</td>
+<td>Every topic has one partition, so the answer is known at once</td>
+</tr>
+<tr>
+<td>No key and no value</td>
+<td>Refused, 400</td>
+<td>Sent</td>
+<td>kafka-python cannot send it</td>
+</tr>
+<tr>
+<td>Null header value</td>
+<td>Written empty</td>
+<td>Written null</td>
+<td>kafka-python cannot send a null header value</td>
+</tr>
+<tr>
+<td>Too many requests or bytes</td>
+<td>429, 42901</td>
+<td>429, 429 for its own rate limit</td>
+<td>Confluent's code for a quota, which this is</td>
+</tr>
+<tr>
+<td>Topic missing from the cluster</td>
+<td>404, 40401 after 2 s</td>
+<td>404, 40401 after <code>max.block.ms</code> (60 s by default)</td>
+<td>Same reply, sooner</td>
+</tr>
+<tr>
+<td>Body slower than 20 s</td>
+<td>408, 40801</td>
+<td>No limit of its own; Confluent sends 408, 40801 for a serialization error</td>
+<td>A stalled upload would hold its share; the code is Confluent's for a 408</td>
+</tr>
+<tr>
+<td>Parse cost, records over 16 MiB</td>
+<td>413 with 41303, 41304</td>
+<td>No such limits</td>
+<td>They bound the service's memory</td>
+</tr>
+</tbody>
+</table>
+<h3 id="consumer">Consumer<a class="headerlink" href="#consumer" title="Permanent link">&para;</a></h3>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="c1"># Create consumer instance</span>
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span><span class="s2">"https://diaspora-web-service.qpp943wkvr7b2.us-east-1.cs.amazonlightsail.com/api/v3/</span><span class="nv">$NAMESPACE</span><span class="s2">/consumers/my-group"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"subject: </span><span class="nv">$SUBJECT</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"authorization: </span><span class="nv">$AUTHORIZATION</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">'{"format": "json", "auto.offset.reset": "earliest"}'</span>
+</span><span id="__span-10-7"><a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a>
+</span><span id="__span-10-8"><a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a><span class="c1"># Subscribe to a list of topics (topic patterns are not supported)</span>
+</span><span id="__span-10-9"><a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span><span class="s2">"https://diaspora-web-service.qpp943wkvr7b2.us-east-1.cs.amazonlightsail.com/api/v3/</span><span class="nv">$NAMESPACE</span><span class="s2">/consumers/my-group/instances/</span><span class="nv">$INSTANCE_ID</span><span class="s2">/subscription"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-10-10"><a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"subject: </span><span class="nv">$SUBJECT</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-10-11"><a id="__codelineno-10-11" name="__codelineno-10-11" href="#__codelineno-10-11"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"authorization: </span><span class="nv">$AUTHORIZATION</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-10-12"><a id="__codelineno-10-12" name="__codelineno-10-12" href="#__codelineno-10-12"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-10-13"><a id="__codelineno-10-13" name="__codelineno-10-13" href="#__codelineno-10-13"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">'{"topics": ["my-topic"]}'</span>
+</span><span id="__span-10-14"><a id="__codelineno-10-14" name="__codelineno-10-14" href="#__codelineno-10-14"></a>
+</span><span id="__span-10-15"><a id="__codelineno-10-15" name="__codelineno-10-15" href="#__codelineno-10-15"></a><span class="c1"># Fetch records</span>
+</span><span id="__span-10-16"><a id="__codelineno-10-16" name="__codelineno-10-16" href="#__codelineno-10-16"></a>curl<span class="w"> </span>-X<span class="w"> </span>GET<span class="w"> </span><span class="s2">"https://diaspora-web-service.qpp943wkvr7b2.us-east-1.cs.amazonlightsail.com/api/v3/</span><span class="nv">$NAMESPACE</span><span class="s2">/consumers/my-group/instances/</span><span class="nv">$INSTANCE_ID</span><span class="s2">/records?timeout=5000"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-10-17"><a id="__codelineno-10-17" name="__codelineno-10-17" href="#__codelineno-10-17"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"subject: </span><span class="nv">$SUBJECT</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-10-18"><a id="__codelineno-10-18" name="__codelineno-10-18" href="#__codelineno-10-18"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"authorization: </span><span class="nv">$AUTHORIZATION</span><span class="s2">"</span>
+</span><span id="__span-10-19"><a id="__codelineno-10-19" name="__codelineno-10-19" href="#__codelineno-10-19"></a>
+</span><span id="__span-10-20"><a id="__codelineno-10-20" name="__codelineno-10-20" href="#__codelineno-10-20"></a><span class="c1"># Commit offsets</span>
+</span><span id="__span-10-21"><a id="__codelineno-10-21" name="__codelineno-10-21" href="#__codelineno-10-21"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span><span class="s2">"https://diaspora-web-service.qpp943wkvr7b2.us-east-1.cs.amazonlightsail.com/api/v3/</span><span class="nv">$NAMESPACE</span><span class="s2">/consumers/my-group/instances/</span><span class="nv">$INSTANCE_ID</span><span class="s2">/offsets"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-10-22"><a id="__codelineno-10-22" name="__codelineno-10-22" href="#__codelineno-10-22"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"subject: </span><span class="nv">$SUBJECT</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-10-23"><a id="__codelineno-10-23" name="__codelineno-10-23" href="#__codelineno-10-23"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"authorization: </span><span class="nv">$AUTHORIZATION</span><span class="s2">"</span>
+</span><span id="__span-10-24"><a id="__codelineno-10-24" name="__codelineno-10-24" href="#__codelineno-10-24"></a>
+</span><span id="__span-10-25"><a id="__codelineno-10-25" name="__codelineno-10-25" href="#__codelineno-10-25"></a><span class="c1"># Delete consumer instance</span>
+</span><span id="__span-10-26"><a id="__codelineno-10-26" name="__codelineno-10-26" href="#__codelineno-10-26"></a>curl<span class="w"> </span>-X<span class="w"> </span>DELETE<span class="w"> </span><span class="s2">"https://diaspora-web-service.qpp943wkvr7b2.us-east-1.cs.amazonlightsail.com/api/v3/</span><span class="nv">$NAMESPACE</span><span class="s2">/consumers/my-group/instances/</span><span class="nv">$INSTANCE_ID</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-10-27"><a id="__codelineno-10-27" name="__codelineno-10-27" href="#__codelineno-10-27"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"subject: </span><span class="nv">$SUBJECT</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-10-28"><a id="__codelineno-10-28" name="__codelineno-10-28" href="#__codelineno-10-28"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"authorization: </span><span class="nv">$AUTHORIZATION</span><span class="s2">"</span>
 </span></code></pre></div>
 <p>A consumer instance serves one request at a time. A request that waits more than 10 seconds for another request on the same instance returns 409 with error code 40904; retry it. The fetch <code>timeout</code> is capped at 30000 ms: a larger value waits 30000 ms.</p>
 
