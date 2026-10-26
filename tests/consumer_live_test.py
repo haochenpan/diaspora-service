@@ -10,6 +10,7 @@ the topic, the consumer groups, DynamoDB and Kafka are real.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import contextlib
 import os
@@ -418,6 +419,74 @@ async def test_delete_commits_an_auto_commit_instance(
         headers=_headers(subject),
     )
     assert offsets.json()['offsets'][0]['offset'] == 3
+
+
+def _cluster_lists(live_service: Any, kafka_topic: str) -> bool:
+    """Whether the cluster lists the topic."""
+    admin = live_service.web_service.kafka_service._admin_client()
+    try:
+        return kafka_topic in admin.list_topics()
+    finally:
+        admin.close()
+
+
+async def test_a_topic_deleted_under_an_instance_stays_deleted(
+    client: httpx.AsyncClient,
+    live_service: Any,
+    live_topic: tuple[str, str, str],
+) -> None:
+    """Instances reading a topic the cluster then loses fetch nothing.
+
+    The cluster creates a topic a client asks about if the client lets it;
+    neither the subscribed nor the assigned instance may bring it back.
+    """
+    subject, namespace, topic = live_topic
+    kafka_topic = f'{namespace}.{topic}'
+    group = _group()
+    subscriber = f'{V2}/{group}/instances/subscriber'
+    assigned = f'{V2}/{group}-a/instances/assigned'
+    assert (
+        await _create(client, subject, group, 'subscriber')
+    ).status_code == 200
+    assert (
+        await _create(client, subject, f'{group}-a', 'assigned')
+    ).status_code == 200
+    subscribed = await client.post(
+        f'{subscriber}/subscription',
+        json={'topics': [topic]},
+        headers=_headers(subject),
+    )
+    assert subscribed.status_code == 204
+    assigning = await client.post(
+        f'{assigned}/assignments',
+        json={'partitions': [{'topic': topic, 'partition': 0}]},
+        headers=_headers(subject),
+    )
+    assert assigning.status_code == 204
+
+    async def fetch_nothing(instance: str) -> None:
+        fetched = await client.get(
+            f'{instance}/records',
+            params={'timeout': 3000},
+            headers=_headers(subject),
+        )
+        assert fetched.status_code == 200, fetched.text
+        assert fetched.json() == []
+
+    for instance in (subscriber, assigned):
+        await fetch_nothing(instance)
+    kafka_service = live_service.web_service.kafka_service
+    deleted = kafka_service.delete_topic(namespace, topic)
+    assert deleted['status'] == 'success', deleted
+    deadline = time.monotonic() + 60
+    while _cluster_lists(live_service, kafka_topic):
+        assert time.monotonic() < deadline, 'the topic was not deleted'
+        await asyncio.sleep(1)
+    for _ in range(3):
+        for instance in (subscriber, assigned):
+            await fetch_nothing(instance)
+    await asyncio.sleep(2)
+    assert not _cluster_lists(live_service, kafka_topic)
 
 
 async def test_the_deprecated_aliases_reach_the_same_instance(

@@ -919,6 +919,17 @@ def test_half_built_consumer_is_closed(
     assert _create(client).status_code == 200
 
 
+def test_consumers_never_have_the_cluster_create_a_topic(
+    client: TestClient,
+    service: DiasporaService,
+) -> None:
+    """A consumer's metadata requests ask the cluster to create no topic."""
+    assert _create(client).status_code == 200
+    [managed] = service.consumer_service._consumers.values()
+    network = managed.consumer._client
+    assert network.cluster.config['allow_auto_create_topics'] is False
+
+
 def test_network_clients_get_the_auto_create_setting() -> None:
     """Each network client's metadata takes the setting, False when unset."""
     networks: list[KafkaNetClient] = []
