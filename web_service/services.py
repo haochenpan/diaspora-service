@@ -105,6 +105,7 @@ class IAMService:
         account_id: str,
         region: str,
         cluster_name: str,
+        permissions_boundary_arn: str | None = None,
     ) -> None:
         """Initialize IAM service.
 
@@ -112,11 +113,15 @@ class IAMService:
             account_id: AWS account ID
             region: AWS region
             cluster_name: MSK cluster name
+            permissions_boundary_arn: ARN of a managed policy set as the
+                permissions boundary of every IAM user this service
+                creates; None or empty creates users without one
         """
         self.iam = boto3.client('iam')
         self.account_id = account_id
         self.region = region
         self.cluster_name = cluster_name
+        self.permissions_boundary_arn = permissions_boundary_arn or None
         self.policy_arn_prefix = (
             f'arn:aws:iam::{account_id}:policy/msk-policy/'
         )
@@ -174,14 +179,16 @@ class IAMService:
         Returns:
             Dictionary with status (success/failure) and message
         """
+        create_user_args = {'Path': '/msk-users/', 'UserName': subject}
+        if self.permissions_boundary_arn:
+            create_user_args['PermissionsBoundary'] = (
+                self.permissions_boundary_arn
+            )
         try:
             with contextlib.suppress(
                 self.iam.exceptions.EntityAlreadyExistsException,
             ):
-                self.iam.create_user(
-                    Path='/msk-users/',
-                    UserName=subject,
-                )
+                self.iam.create_user(**create_user_args)
 
             with contextlib.suppress(
                 self.iam.exceptions.EntityAlreadyExistsException,
