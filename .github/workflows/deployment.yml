@@ -81,7 +81,8 @@ jobs:
           echo "DOCKERFILE PATH"
           echo "$DOCKERFILE_PATH"
 
-          docker build -t "$CONTAINER_NAME" -f "$DOCKERFILE_PATH" .
+          docker build -t "$CONTAINER_NAME" -f "$DOCKERFILE_PATH" \
+              --build-arg GIT_SHA="$GITHUB_SHA" .
           docker images
 
       - name: Idempotently create Lightsail container service

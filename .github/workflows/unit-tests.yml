@@ -51,14 +51,18 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ env.PIP_CACHE_DIR }}
-          key: tests-${{ runner.os }}-pip-${{ env.PYTHON_VERSION }}-${{ hashFiles('pyproject.toml') }}
+          key: tests-${{ runner.os }}-pip-${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
           restore-keys: |
             tests-${{ runner.os }}-pip-${{ env.PYTHON_VERSION }}-
 
+      # The service's locked dependencies, as the image installs them,
+      # then the service, then the dev tools, locked to the same versions
       - name: Install Packages
         run: |
           python -m pip install --upgrade pip setuptools
-          python -m pip install -e ".[dev]"
+          python -m pip install -r requirements.txt
+          python -m pip install --no-deps -e .
+          python -m pip install -r requirements-dev.txt -c requirements.txt
 
       - name: Run unit tests
         run: pytest tests/ -m "not integration" -vv

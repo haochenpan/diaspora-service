@@ -41,7 +41,7 @@ from dataclasses import dataclass
 from dataclasses import field
 from datetime import datetime
 from datetime import timedelta
-from datetime import timezone
+from datetime import UTC
 from typing import Any
 
 import boto3
@@ -422,8 +422,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             iam,
             dynamodb,
             kafka_admin,
-            cutoff=datetime.now(timezone.utc)
-            - timedelta(hours=args.min_age_hours),
+            cutoff=datetime.now(UTC) - timedelta(hours=args.min_age_hours),
             tables=ServiceTables(args.users_table, args.namespace_table),
         )
         print_plan(plan, dry_run=not args.apply)

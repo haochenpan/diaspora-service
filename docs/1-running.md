@@ -90,15 +90,20 @@ answers).
 
 ## Set up
 
-The service needs Python 3.10 to 3.14. CI runs 3.14, and the container image
-runs 3.11. A full local run also needs AWS keys for the service's account
-and the ID and secret of the service's Globus confidential client. Without
-them, you can run the unit tests and start the service with placeholders.
+The service needs Python 3.14, which CI and the container image run. A
+full local run also needs AWS keys for the service's account and the ID
+and secret of the service's Globus confidential client. Without them, you
+can run the unit tests and start the service with placeholders.
+
+Install the locked dependencies, the service and the locked dev tools, as
+CI does ([Dependencies](contributing.md#dependencies)):
 
 ```bash
-python -m venv .venv
+python3.14 -m venv .venv
 . .venv/bin/activate
-pip install -e ".[dev]"
+pip install -r requirements.txt
+pip install --no-deps -e .
+pip install -r requirements-dev.txt -c requirements.txt
 cp .env.example .env
 ```
 
@@ -120,7 +125,7 @@ In development mode, with reloading on code changes:
 As the container runs it, with gunicorn and one Uvicorn worker:
 
 ```bash
-(set -a; . ./.env; set +a; exec gunicorn --bind 127.0.0.1:8000 -k uvicorn.workers.UvicornWorker web_service.main:app)
+(set -a; . ./.env; set +a; exec gunicorn --bind 127.0.0.1:8000 -k web_service.worker.Worker --graceful-timeout 30 web_service.main:app)
 ```
 
 The parentheses run each command in a subshell, so the values from `.env`
@@ -141,7 +146,11 @@ docker build -t diaspora-service -f web_service/Dockerfile .
 docker run --rm -p 127.0.0.1:8000:8000 --env-file .env diaspora-service
 ```
 
-The Dockerfile pins the platform `linux/amd64`, which Lightsail runs.
+The Dockerfile pins the platform `linux/amd64`, which Lightsail runs. The
+image runs the service as a user other than root. To have the service
+report the commit in its version, as deployed images do, add
+`--build-arg GIT_SHA="$(git rev-parse HEAD)"` to `docker build`
+([Releases](contributing.md#releases)).
 
 ## Call the API
 

@@ -32,7 +32,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timedelta
-from datetime import timezone
+from datetime import UTC
 from typing import Any
 
 from kafka import KafkaProducer
@@ -132,7 +132,7 @@ _RECORD_FIELDS = frozenset(
 _HEADER_FIELDS = frozenset({'name', 'value'})
 _ENTRY_ID = re.compile(r'[0-9a-zA-Z_-]+')
 _WHITESPACE = re.compile(r'[ \t\n\r]*')
-_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 _ONE_MS = timedelta(milliseconds=1)
 _NO_SCHEMA_REGISTRY = 'Octopus runs no schema registry'
 
@@ -490,7 +490,7 @@ def parse_body(raw: bytes | bytearray, *, empty: RecordError) -> Any:
     if rest < len(text):
         try:
             decoder.raw_decode(text, rest)
-        except (ValueError, RecursionError):
+        except ValueError, RecursionError:
             raise RecordError(
                 400,
                 BAD_BODY,
@@ -570,7 +570,7 @@ def _decode_base64(data: str, what: str) -> bytes:
         raise _too_large(size - 2)
     try:
         return base64.b64decode(data, validate=True)
-    except (binascii.Error, ValueError):
+    except binascii.Error, ValueError:
         raise _bad_record(f'{what} is not valid base64') from None
 
 
@@ -602,7 +602,7 @@ def _encode_data(field: str, spec: Any) -> bytes | None:
                 separators=(',', ':'),
                 allow_nan=False,
             )
-        except (ValueError, RecursionError):
+        except ValueError, RecursionError:
             raise _bad_record(
                 f'{field} data cannot be written as JSON',
             ) from None

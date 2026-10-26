@@ -8,8 +8,9 @@ says, privately and not in an issue or a pull request.
 
 ## Set up
 
-Create the virtual environment and install the dev extras as in
-[Running locally](1-running.md#set-up), then install the Git hooks:
+Create the virtual environment and install the locked dependencies and
+dev tools as in [Running locally](1-running.md#set-up), then install the
+Git hooks:
 
 ```bash
 pre-commit install
@@ -81,6 +82,71 @@ the `random_subject` fixture in `tests/conftest.py`, which calls
 resources with those names, and the nightly sweep, a script that deletes
 what live runs leave behind, finds only those
 ([Naming live-test resources](2-testing.md#naming-live-test-resources)).
+
+## Dependencies
+
+`pyproject.toml` lists the service's dependencies, and two files generated
+by [uv](https://docs.astral.sh/uv/) lock their versions for Python 3.14 on
+Linux x86_64, the image's platform:
+
+- `requirements.txt` locks the service's dependencies. The image and CI
+  install it.
+- `requirements-dev.txt` locks the dev tools, at the same versions for the
+  packages the two files share. CI installs it, and the image does not.
+
+After you change the dependencies in `pyproject.toml`, regenerate both
+files from the repository root, `requirements.txt` first, since it
+constrains the other:
+
+```bash
+uv pip compile pyproject.toml --python-version 3.14 --python-platform x86_64-unknown-linux-gnu --exclude-newer 2026-10-26T12:00:00Z -o requirements.txt
+uv pip compile pyproject.toml --extra dev -c requirements.txt --python-version 3.14 --python-platform x86_64-unknown-linux-gnu --exclude-newer 2026-10-26T12:00:00Z -o requirements-dev.txt
+```
+
+Each file's header holds the command that generated it. uv ignores
+releases published after the `--exclude-newer` time, so the commands give
+the same versions on any machine, and it keeps the versions already in a
+file where it can. To move every package to its newest release, add
+`--upgrade` to both commands and set `--exclude-newer` to the current
+date.
+
+Dependabot proposes updates to both files once a month, in one pull
+request. It edits the pinned versions in place and keeps each header as
+it is, but it does not run uv: the `--exclude-newer` date stays, and a
+package that an updated one newly needs is not added. If the unit tests
+fail on such a pull request, regenerate the files with `--upgrade`
+instead. Dependabot also proposes new builds and patch releases of the
+image's Python 3.14, but not a new minor or major version of Python.
+
+## Releases
+
+Each change that users can see, such as a new route or a change to a
+response, gets a release:
+
+1. In the pull request that makes the change, bump `version` in
+   `pyproject.toml`.
+2. Once it is merged, tag the commit on `main` with `v` and the version,
+   and push the tag:
+
+    ```bash
+    git tag vX.Y.Z <commit>
+    git push origin vX.Y.Z
+    ```
+
+3. Publish a GitHub release from the tag, with notes that GitHub generates
+   from the pull requests merged since the previous release:
+
+    ```bash
+    gh release create vX.Y.Z --verify-tag --generate-notes
+    ```
+
+The service reports its version, followed by `+` and the first 12
+characters of the commit its image was built from, as `info.version` in
+`/openapi.json`, and the API documentation at `/` shows it:
+
+```bash
+curl -sS https://diaspora-web-service.qpp943wkvr7b2.us-east-1.cs.amazonlightsail.com/openapi.json | jq -r .info.version
+```
 
 ## Commits and pull requests
 

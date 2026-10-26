@@ -15,7 +15,6 @@ from collections.abc import Callable
 from contextlib import asynccontextmanager
 from contextlib import AsyncExitStack
 from typing import Any
-from typing import TypeVar
 
 import anyio
 import anyio.lowlevel
@@ -87,8 +86,6 @@ from .services import NamespaceService
 from .services import parse_max_topics_per_namespace
 from .services import WebService
 
-_Prepared = TypeVar('_Prepared')
-
 logger = logging.getLogger(__name__)
 
 # Fetches that hold a slot at once: from a poll that found records until
@@ -117,6 +114,17 @@ SHARED_THREADS = 40
 # Code of a failed token check on the consumer routes: Confluent's code
 # for a failed authentication
 AUTHENTICATION_FAILED = 40101
+
+
+def service_version() -> str:
+    """The package's version, followed by the commit the image is built from.
+
+    The image sets GIT_SHA to that commit. Without it, as in a local run,
+    the version is the package's alone.
+    """
+    version = importlib_metadata.version('diaspora_service')
+    commit = os.getenv('GIT_SHA', '').strip()
+    return f'{version}+{commit[:12]}' if commit else version
 
 
 def fetch_wait_ms(timeout: int | None, default_wait_ms: int | None) -> int:
@@ -459,7 +467,7 @@ class DiasporaService:
         self.app = FastAPI(
             title='Diaspora Web Service V3',
             docs_url='/',
-            version=importlib_metadata.version('diaspora_service'),
+            version=service_version(),
             lifespan=self._lifespan,
         )
         self.add_routes()
@@ -1953,10 +1961,10 @@ class DiasporaService:
         return self._produce_error(_body_too_large_error())
 
 
-def _refusal_returned(
-    prepare: Callable[[bytearray], _Prepared],
+def _refusal_returned[Prepared](
+    prepare: Callable[[bytearray], Prepared],
     raw: bytearray,
-) -> _Prepared | RecordError:
+) -> Prepared | RecordError:
     """Prepare a body, returning its refusal instead of raising it.
 
     A refusal raised out of the parse thread would keep the frames that
