@@ -103,8 +103,10 @@ markdown_extensions:
 nav:
   - Development:
       - Introduction: index.md
+      - Architecture: architecture.md
       - Running: 1-running.md
       - Testing: 2-testing.md
+      - Contributing: contributing.md
       - Deployment: 3-deploying.md
       - Monitoring: 4-monitoring.md
       - Runbook: 5-runbook.md
