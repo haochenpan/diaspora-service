@@ -168,7 +168,7 @@ secrets:
 | Credential | Secrets | Also used by |
 | --- | --- | --- |
 | The deploy's AWS key, used by the workflow | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | |
-| The container's AWS key, used by the service | `DOCKER_AWS_ACCESS_KEY_ID`, `DOCKER_AWS_SECRET_ACCESS_KEY` | The `live` job of `tests.yml` and its nightly sweep, while the live tests' own key is not set |
+| The container's AWS key, used by the service; the key of the IAM user `diaspora-web-service-container` ([The service's AWS identity](3-deploying.md#the-services-aws-identity)) | `DOCKER_AWS_ACCESS_KEY_ID`, `DOCKER_AWS_SECRET_ACCESS_KEY` | The `live` job of `tests.yml` and its nightly sweep, while the live tests' own key is not set |
 | The Globus confidential client's secret, used by the service | `DOCKER_SERVER_SECRET` | The `live` job of `tests.yml` |
 
 The running container keeps the values it started with. A new value
@@ -283,5 +283,8 @@ that are not the default.
 
 With `--boundary <policy ARN>`, the script also gives each of these IAM
 users that has no permissions boundary the policy as its boundary, and
-reports a user that has a different boundary. `--undo` leaves the
-boundaries in place.
+reports a user that has a different boundary
+([Users created before the boundary](3-deploying.md#users-created-before-the-boundary)
+says why the service's identity needs it). `--undo` leaves the boundaries
+in place: the boundary allows everything a user's policy grants, so
+removing it would give no user a right back.

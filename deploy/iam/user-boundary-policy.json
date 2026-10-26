@@ -1,0 +1,26 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "UsersUseOnlyTheCluster",
+      "Effect": "Allow",
+      "Action": [
+        "kafka-cluster:Connect",
+        "kafka-cluster:DescribeTopic",
+        "kafka-cluster:ReadData",
+        "kafka-cluster:WriteData",
+        "kafka-cluster:DescribeGroup",
+        "kafka-cluster:AlterGroup",
+        "kafka-cluster:WriteDataIdempotently",
+        "kafka-cluster:DescribeTransactionalId",
+        "kafka-cluster:AlterTransactionalId"
+      ],
+      "Resource": [
+        "arn:aws:kafka:<region>:<account-id>:cluster/<cluster-name>/<cluster-uuid>",
+        "arn:aws:kafka:<region>:<account-id>:topic/<cluster-name>/<cluster-uuid>/*",
+        "arn:aws:kafka:<region>:<account-id>:group/<cluster-name>/<cluster-uuid>/*",
+        "arn:aws:kafka:<region>:<account-id>:transactional-id/<cluster-name>/<cluster-uuid>/*"
+      ]
+    }
+  ]
+}
