@@ -62,6 +62,39 @@ def parse_max_topics_per_namespace(value: str | None) -> int:
     return parsed
 
 
+def _topics(count: int) -> str:
+    """Return '1 topic' or '{count} topics'."""
+    return f'{count} topic' if count == 1 else f'{count} topics'
+
+
+def _topic_cap_refusal(namespace: str, count: int, cap: int) -> str:
+    """Say why a namespace holding count topics cannot add one."""
+    if count <= cap:
+        return (
+            f'Namespace {namespace} already holds {_topics(count)}, the '
+            f'most allowed is {cap}; delete a topic to create another.'
+        )
+    return (
+        f'Namespace {namespace} holds {_topics(count)}, more than the '
+        f'{cap} allowed; delete {_topics(count - cap + 1)} to create '
+        'another.'
+    )
+
+
+def _topic_cap_warning(namespace: str, count: int, cap: int) -> str:
+    """Warn that a namespace holding count topics is near or at the cap."""
+    if count < cap:
+        return (
+            f'Namespace {namespace} now holds {count} of {_topics(cap)}; '
+            f'a create fails once it holds {cap}, so delete topics you no '
+            'longer need.'
+        )
+    return (
+        f'Namespace {namespace} now holds {count} of {_topics(cap)}, the '
+        'most allowed; delete a topic before you create another.'
+    )
+
+
 class IAMService:
     """Service for managing IAM users and policies."""
 
@@ -1240,10 +1273,10 @@ class NamespaceService:
             if len(existing_topics) >= cap:
                 return {
                     'status': 'failure',
-                    'message': (
-                        f'Namespace {namespace} already holds '
-                        f'{len(existing_topics)} topics, the most allowed '
-                        f'is {cap}; delete a topic to create another.'
+                    'message': _topic_cap_refusal(
+                        namespace,
+                        len(existing_topics),
+                        cap,
                     ),
                 }, False
 
@@ -1254,18 +1287,17 @@ class NamespaceService:
             # (already deduplicated by get_namespace_topics)
             all_topics = self.dynamodb.get_namespace_topics(namespace)
 
+            message = f'Topic {topic} created in {namespace}'
             result: dict[str, Any] = {
                 'status': 'success',
-                'message': f'Topic {topic} created in {namespace}',
+                'message': message,
                 'topics': all_topics,
             }
             if len(all_topics) >= self.topic_warning_threshold:
-                warning = (
-                    f'Namespace {namespace} now holds {len(all_topics)} of '
-                    f'{cap} topics; delete old topics before you reach '
-                    f'{cap}.'
-                )
-                result['message'] += f' {warning}'
+                warning = _topic_cap_warning(namespace, len(all_topics), cap)
+                if not message.endswith('.'):
+                    message += '.'
+                result['message'] = f'{message} {warning}'
                 result['warning'] = warning
             return result, True
 

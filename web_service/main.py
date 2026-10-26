@@ -206,7 +206,8 @@ class DiasporaService:
         leaves the namespace with at least 90% of the cap (45 of 50)
         succeeds and appends a warning to `message`, also returned in a
         `warning` field, which is absent otherwise. Repeating the create
-        of an existing topic always succeeds and is not counted.
+        of a topic the namespace already holds is neither counted nor
+        refused by the cap.
 
         The Kafka admin call blocks, so it runs in the threadpool: on the
         event loop it would stall every other request and the worker's

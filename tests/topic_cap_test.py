@@ -6,6 +6,9 @@ These tests use mocks only and need no AWS or Kafka access.
 from __future__ import annotations
 
 import logging
+import threading
+import time
+from typing import Any
 from unittest.mock import MagicMock
 from unittest.mock import patch
 
@@ -91,8 +94,8 @@ def test_create_refused_over_cap_keeps_topics() -> None:
 
     assert result['status'] == 'failure'
     assert result['message'] == (
-        f'Namespace {NAMESPACE} already holds 55 topics, the most '
-        'allowed is 50; delete a topic to create another.'
+        f'Namespace {NAMESPACE} holds 55 topics, more than the 50 '
+        'allowed; delete 6 topics to create another.'
     )
     kafka.create_topic.assert_not_called()
     assert db.get_namespace_topics(NAMESPACE) == existing
@@ -116,12 +119,16 @@ def test_create_allows_nth_topic() -> None:
 
     result = web_service.create_topic(SUBJECT, NAMESPACE, 'new-topic')
 
+    warning = (
+        f'Namespace {NAMESPACE} now holds 50 of 50 topics, the most '
+        'allowed; delete a topic before you create another.'
+    )
     assert result['status'] == 'success'
     assert len(result['topics']) == 50
     assert 'new-topic' in result['topics']
-    assert result['warning'] == (
-        f'Namespace {NAMESPACE} now holds 50 of 50 topics; '
-        'delete old topics before you reach 50.'
+    assert result['warning'] == warning
+    assert result['message'] == (
+        f'Topic new-topic created in {NAMESPACE}. {warning}'
     )
     kafka.create_topic.assert_called_once_with(NAMESPACE, 'new-topic')
 
@@ -133,15 +140,112 @@ def test_create_warns_from_threshold() -> None:
     result = web_service.create_topic(SUBJECT, NAMESPACE, 'new-topic')
 
     warning = (
-        f'Namespace {NAMESPACE} now holds 45 of 50 topics; '
-        'delete old topics before you reach 50.'
+        f'Namespace {NAMESPACE} now holds 45 of 50 topics; a create fails '
+        'once it holds 50, so delete topics you no longer need.'
     )
     assert set(result) == {'status', 'message', 'topics', 'warning'}
     assert result['status'] == 'success'
     assert result['warning'] == warning
     assert result['message'] == (
-        f'Topic new-topic created in {NAMESPACE} {warning}'
+        f'Topic new-topic created in {NAMESPACE}. {warning}'
     )
+    assert '..' not in result['message']
+
+
+def test_cap_of_one_uses_singular_wording() -> None:
+    """With N=1 the first create warns at the cap; the second is refused."""
+    web_service, _, kafka = _web_service([], cap=1)
+
+    first = web_service.create_topic(SUBJECT, NAMESPACE, 'first-topic')
+    second = web_service.create_topic(SUBJECT, NAMESPACE, 'second-topic')
+
+    assert first['status'] == 'success'
+    assert first['warning'] == (
+        f'Namespace {NAMESPACE} now holds 1 of 1 topic, the most '
+        'allowed; delete a topic before you create another.'
+    )
+    assert second == {
+        'status': 'failure',
+        'message': (
+            f'Namespace {NAMESPACE} already holds 1 topic, the most '
+            'allowed is 1; delete a topic to create another.'
+        ),
+    }
+    kafka.create_topic.assert_called_once_with(NAMESPACE, 'first-topic')
+
+
+def test_over_cap_by_one_says_delete_two_topics() -> None:
+    """A namespace one past the cap must delete two to add one."""
+    web_service, _, _ = _web_service(_topics(51))
+
+    result = web_service.create_topic(SUBJECT, NAMESPACE, 'new-topic')
+
+    assert result['message'] == (
+        f'Namespace {NAMESPACE} holds 51 topics, more than the 50 '
+        'allowed; delete 2 topics to create another.'
+    )
+
+
+class _SlowTopicTable:
+    """In-memory namespace topic set whose reads yield to other threads.
+
+    The pause between reading the set and adding to it lets concurrent
+    creates interleave unless the caller serializes them.
+    """
+
+    def __init__(self, topics: list[str]) -> None:
+        self.topics = set(topics)
+        self.adds = 0
+
+    def get_user_namespaces(self, _subject: str) -> list[str]:
+        return [NAMESPACE]
+
+    def get_namespace_topics(self, _namespace: str) -> list[str]:
+        snapshot = sorted(self.topics)
+        time.sleep(0.002)
+        return snapshot
+
+    def add_namespace_topic(self, _namespace: str, topic: str) -> None:
+        self.adds += 1
+        self.topics.add(topic)
+
+
+def test_concurrent_creates_at_cap_minus_one_admit_one() -> None:
+    """Ten concurrent creates at N-1 give exactly one success."""
+    table = _SlowTopicTable(_topics(49))
+    kafka = MagicMock(spec=KafkaService)
+    kafka.bootstrap_servers = 'localhost:9092'
+    kafka.create_topic.return_value = {'status': 'success', 'message': ''}
+    web_service = WebService(
+        iam_service=MagicMock(),
+        kafka_service=kafka,
+        namespace_service=NamespaceService(
+            dynamodb_service=table,
+            max_topics_per_namespace=50,
+        ),
+    )
+    start = threading.Barrier(10)
+    results: list[dict[str, Any]] = [{} for _ in range(10)]
+
+    def create(i: int) -> None:
+        start.wait()
+        results[i] = web_service.create_topic(
+            SUBJECT,
+            NAMESPACE,
+            f'racer-{i}',
+        )
+
+    threads = [threading.Thread(target=create, args=(i,)) for i in range(10)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    statuses = sorted(r['status'] for r in results)
+    assert statuses == ['failure'] * 9 + ['success']
+    assert table.adds == 1
+    assert len(table.topics) == 50
+    assert kafka.create_topic.call_count == 1
 
 
 def test_create_below_threshold_has_no_warning() -> None:
