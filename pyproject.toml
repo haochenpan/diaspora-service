@@ -58,13 +58,7 @@ dev = [
     "ruff>=0.2.0",
 ]
 docs = [
-    "black",
-    "mkdocs-gen-files",
-    "mkdocs-literate-nav",
     "mkdocs-material",
-    "mkdocs-section-index",
-    "mkdocstrings",
-    "mkdocstrings-python",
     "mike",
 ]
 demo = [

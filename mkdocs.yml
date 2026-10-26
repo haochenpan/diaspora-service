@@ -1,7 +1,8 @@
 site_name: Diaspora Service Documentation
-site_url: https://github.com/haochenpan/diaspora-service
+site_url: https://haochenpan.github.io/diaspora-service/
 site_author: Haochen Pan
 site_description: Documentation for Diaspora Service
+strict: true
 
 repo_name: haochenpan/diaspora-service
 repo_url: https://github.com/haochenpan/diaspora-service
@@ -56,13 +57,12 @@ theme:
   logo: static/octopus.svg
 
 plugins:
-  - mkdocstrings
+  - search
 
 watch:
   - mkdocs.yml
   - README.md
   - docs/
-  - web_service/
 
 extra:
   version:
@@ -88,8 +88,8 @@ markdown_extensions:
   - pymdownx.keys
   - pymdownx.magiclink:
       repo_url_shorthand: true
-      user: foobar-author
-      repo: foobar
+      user: haochenpan
+      repo: diaspora-service
   - pymdownx.mark
   - pymdownx.smartsymbols
   - pymdownx.snippets:

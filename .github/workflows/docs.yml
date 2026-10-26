@@ -3,13 +3,63 @@ name: docs
 on:
   push:
     branches: [main]
+  pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
-  docs:
+  # Builds the site on pull requests, failing on any warning; publishes
+  # nothing.
+  build:
+    if: github.event_name == 'pull_request'
     timeout-minutes: 10
 
     runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.11'
+
+      - name: Get pip cache dir
+        id: pip-cache-dir
+        run: echo "PIP_CACHE_DIR=$(pip cache dir)" >> "$GITHUB_ENV"
+
+      - name: Use pip cache
+        id: pip-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.PIP_CACHE_DIR }}
+          key: docs-ubuntu-latest-pip-3.11-${{ hashFiles('pyproject.toml') }}
+          restore-keys: |
+            docs-ubuntu-latest-pip-3.11-
+
+      - name: Install Packages
+        run: |
+          pip install --upgrade setuptools pip
+          pip install .[docs]
+
+      - name: Build docs
+        run: mkdocs build --strict
+
+  # Publishes main to the gh-pages branch, the only job that writes to the
+  # repository.
+  docs:
+    if: github.event_name != 'pull_request'
+    timeout-minutes: 10
+
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout
