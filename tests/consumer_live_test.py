@@ -430,6 +430,45 @@ def _cluster_lists(live_service: Any, kafka_topic: str) -> bool:
         admin.close()
 
 
+async def test_unsubscribe_commits_an_auto_commit_instance(
+    client: httpx.AsyncClient,
+    live_topic: tuple[str, str, str],
+) -> None:
+    """An unsubscribe commits what the instance fetched, as a close does."""
+    subject, namespace, topic = live_topic
+    values = [{'type': 'STRING', 'data': f'msg-{i}'} for i in range(3)]
+    await _produce(client, subject, namespace, topic, values)
+    group = _group()
+    settings = {'auto.offset.reset': 'earliest', 'auto.commit.enable': 'true'}
+    first = f'{V2}/{group}/instances/first'
+    created = await _create(client, subject, group, 'first', **settings)
+    assert created.status_code == 200
+    subscribed = await client.post(
+        f'{first}/subscription',
+        json={'topics': [topic]},
+        headers=_headers(subject),
+    )
+    assert subscribed.status_code == 204
+    records = await _fetch_all(client, subject, first, 3)
+    assert [r['offset'] for r in records] == [0, 1, 2]
+    unsubscribed = await client.delete(
+        f'{first}/subscription',
+        headers=_headers(subject),
+    )
+    assert unsubscribed.status_code == 204
+
+    second = f'{V2}/{group}/instances/second'
+    created = await _create(client, subject, group, 'second', **settings)
+    assert created.status_code == 200
+    offsets = await client.request(
+        'GET',
+        f'{second}/offsets',
+        json={'partitions': [{'topic': topic, 'partition': 0}]},
+        headers=_headers(subject),
+    )
+    assert offsets.json()['offsets'][0]['offset'] == 3
+
+
 async def test_a_topic_deleted_under_an_instance_stays_deleted(
     client: httpx.AsyncClient,
     live_service: Any,

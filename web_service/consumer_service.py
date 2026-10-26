@@ -1202,11 +1202,29 @@ class ConsumerService:
     ) -> tuple[dict[str, Any] | None, int]:
         """Unsubscribe consumer from all topics.
 
+        An instance with auto.commit.enable first commits its positions,
+        waiting at most CONSUMER_OPERATION_TIMEOUT_MS; a failed commit is
+        logged and the unsubscribe goes on. kafka-python's own commit at
+        unsubscribe is sent after the instance has left its group, so the
+        group refuses it.
+
         Returns:
             Tuple of (None_or_error, http_status_code)
         """
 
         def serve(managed: ManagedConsumer) -> tuple[None, int]:
+            if managed.auto_commit and managed.consumer.assignment():
+                try:
+                    managed.consumer.commit(
+                        timeout_ms=CONSUMER_OPERATION_TIMEOUT_MS,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        'Failed to commit the positions of consumer %s '
+                        'before it unsubscribed: %r',
+                        managed.instance_id,
+                        e,
+                    )
             managed.consumer.unsubscribe()
             return (None, 204)
 
@@ -1374,10 +1392,12 @@ class ConsumerService:
         """Seek back to a reply's first records, which the client never got.
 
         The caller holds the instance's lock. Nothing commits the
-        positions the reply moved past before this: kafka-python commits,
-        auto-commit included, only inside poll(), commit(), assign(),
-        unsubscribe() and close(), and the service calls each of them
-        under the lock.
+        positions the reply moved past before this: kafka-python reads the
+        positions it commits, auto-commit included, only inside poll(),
+        commit(), assign(), unsubscribe() and close(), and the service
+        calls each of them under the lock. assign() and unsubscribe() hand
+        their commit to the consumer's IO thread, which sends it later
+        with the positions read at the call.
         """
         for tp, offset in reply.starts.items():
             try:

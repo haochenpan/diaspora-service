@@ -775,6 +775,54 @@ def test_unsubscribe_success(
     mock_kafka_consumer.unsubscribe.assert_called_once()
 
 
+def test_unsubscribe_with_auto_commit_commits_first(
+    consumer_service: ConsumerService,
+) -> None:
+    """An auto-commit instance commits its positions, then unsubscribes."""
+    managed = _auto_commit_managed('inst')
+    managed.consumer.assignment.return_value = {TopicPartition('ns.t', 0)}
+    consumer_service._consumers[('u', 'ns', 'g', 'inst')] = managed
+    assert consumer_service.unsubscribe('u', 'ns', 'g', 'inst') == (None, 204)
+    assert [
+        c for c in managed.consumer.mock_calls if c[0] != 'assignment'
+    ] == [
+        call.commit(timeout_ms=CONSUMER_OPERATION_TIMEOUT_MS),
+        call.unsubscribe(),
+    ]
+
+
+def test_unsubscribe_after_a_failed_commit(
+    consumer_service: ConsumerService,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A commit that fails before an unsubscribe is logged; it goes on."""
+    managed = _auto_commit_managed('inst')
+    managed.consumer.assignment.return_value = {TopicPartition('ns.t', 0)}
+    managed.consumer.commit.side_effect = KafkaTimeoutError('timed out')
+    consumer_service._consumers[('u', 'ns', 'g', 'inst')] = managed
+    with caplog.at_level(logging.WARNING, logger='web_service'):
+        result = consumer_service.unsubscribe('u', 'ns', 'g', 'inst')
+    assert result == (None, 204)
+    managed.consumer.unsubscribe.assert_called_once_with()
+    assert 'before it unsubscribed' in caplog.text
+
+
+def test_unsubscribe_commits_nothing_without_auto_commit_or_partitions(
+    consumer_service: ConsumerService,
+) -> None:
+    """Without auto-commit, or with nothing assigned, nothing is committed."""
+    plain = _new_managed('plain')
+    plain.consumer.assignment.return_value = {TopicPartition('ns.t', 0)}
+    empty = _auto_commit_managed('empty')
+    empty.consumer.assignment.return_value = set()
+    for managed in (plain, empty):
+        key = ('u', 'ns', 'g', managed.instance_id)
+        consumer_service._consumers[key] = managed
+        assert consumer_service.unsubscribe(*key) == (None, 204)
+        managed.consumer.commit.assert_not_called()
+        managed.consumer.unsubscribe.assert_called_once_with()
+
+
 def test_unsubscribe_not_found(
     consumer_service: ConsumerService,
 ) -> None:

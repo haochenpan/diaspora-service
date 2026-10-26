@@ -319,10 +319,11 @@ An instance lives in the memory of the one worker that created it. A deploy or a
 An instance created with `auto.commit.enable` set to `true` commits its positions at these times, and no others:
 
 - During a fetch, when 5 s or more have passed since its last commit: the Kafka consumer commits the positions it had before that fetch's poll.
-- When it is assigned partitions or unsubscribes, and, while it is subscribed, before its group rebalances during a fetch: the Kafka consumer commits its positions first.
+- When it unsubscribes: the service commits its positions first, waiting at most 10 s.
+- When it is assigned partitions, and, while it is subscribed, before its group rebalances during a fetch: the Kafka consumer commits its positions first.
 - When it is deleted, when the service closes it for being idle, and when the service shuts down, before it closes. The commit waits at most 5 s; at shutdown, all the instances share 8 s.
 
-Its position in a partition is the record after the last one a fetch returned to the client: records that a reply left out, that did not reach the client, or that a fetch cancelled at shutdown had polled are sought back to before any commit. An idle instance stays in its consumer group until the service closes it, so the commit at that close goes through. A commit that fails or runs out of time is logged, and the instance closes anyway, so the group keeps its earlier commit; at shutdown, an instance still busy after 8 s is neither committed nor closed. An instance without auto-commit commits nothing by itself: only the client's commits count.
+Its position in a partition is the record after the last one a fetch returned to the client: records that a reply left out, that did not reach the client, or that a fetch cancelled at shutdown had polled are sought back to before any commit. An idle instance stays in its consumer group until the service closes it, so the commit at that close goes through. A commit that fails or runs out of time is logged, and the instance closes or unsubscribes anyway, so the group keeps its earlier commit; at shutdown, an instance still busy after 8 s is neither committed nor closed. An instance without auto-commit commits nothing by itself: only the client's commits count.
 
 After a 404 with 40403, the client creates the instance again with the same group and name, subscribes or assigns again, and fetches. The group starts from its last commit, so the records fetched after that commit come again; a client that needs each record once should carry an id in the record and drop repeats. A group that has never committed starts where the instance's `auto.offset.reset` says, and with `latest`, the default, it skips the records produced while no instance was reading.
 
