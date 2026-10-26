@@ -90,12 +90,14 @@ from web_service.utils import EnvironmentChecker
 
 from .services import DynamoDBService
 from .services import IAMService
+from .services import install_kafka_log_filters
 from .services import KafkaService
 from .services import NamespaceService
 from .services import parse_max_topics_per_namespace
 from .services import WebService
 
 logger = logging.getLogger(__name__)
+install_kafka_log_filters()
 
 # Fetches that hold a slot at once: from a poll that found records until
 # the reply is sent, or for one slice of a poll that finds none. A slot

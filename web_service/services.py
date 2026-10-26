@@ -938,6 +938,61 @@ def build_kafka_client[T](build: Callable[..., T], **config: Any) -> T:
         raise
 
 
+class TopicNotFoundLogFilter(logging.Filter):
+    """Let kafka-python's "topic not found" error through once per interval.
+
+    kafka-python retries the metadata of a topic the cluster does not list
+    every 100 ms and logs an error each time, so an instance reading a
+    topic the cluster lost would log it about 8 times a second for as long
+    as it is read. This keeps the first record for each topic in each
+    interval and drops the repeats; other records pass.
+    """
+
+    MESSAGE = 'Topic %s not found in cluster metadata'
+
+    def __init__(
+        self,
+        interval_s: float = 60.0,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        """Make a filter that passes each topic's error once per interval_s."""
+        super().__init__()
+        self.interval_s = interval_s
+        self._clock = clock
+        self._lock = threading.Lock()
+        # When each topic's error last passed
+        self._passed: dict[Any, float] = {}
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        """Whether to keep the record."""
+        if record.msg != self.MESSAGE or not (
+            isinstance(record.args, tuple) and len(record.args) == 1
+        ):
+            return True
+        topic = record.args[0]
+        now = self._clock()
+        with self._lock:
+            last = self._passed.get(topic)
+            if last is not None and now - last < self.interval_s:
+                return False
+            self._passed = {
+                t: at
+                for t, at in self._passed.items()
+                if now - at < self.interval_s
+            }
+            self._passed[topic] = now
+        return True
+
+
+def install_kafka_log_filters() -> None:
+    """Add TopicNotFoundLogFilter to the kafka.cluster logger, once."""
+    cluster_logger = logging.getLogger('kafka.cluster')
+    if not any(
+        isinstance(f, TopicNotFoundLogFilter) for f in cluster_logger.filters
+    ):
+        cluster_logger.addFilter(TopicNotFoundLogFilter())
+
+
 class MSKTokenProvider(AbstractTokenProvider):
     """Provide tokens for MSK authentication."""
 
