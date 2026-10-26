@@ -683,13 +683,22 @@ class DiasporaService:
         self,
         app: FastAPI,
     ) -> AsyncIterator[None]:
-        """Application lifespan: size the threadpool; close consumers."""
+        """Application lifespan: size the threadpool; close consumers.
+
+        At shutdown the consumer instances and the producer are closed at
+        the same time, so the whole takes as long as the longer of the two,
+        not their sum.
+        """
         anyio.to_thread.current_default_thread_limiter().total_tokens = (
             SHARED_THREADS
         )
         yield
-        await run_in_threadpool(self.consumer_service.shutdown_all)
-        await run_in_threadpool(self.producer_service.close)
+        async with anyio.create_task_group() as tasks:
+            tasks.start_soon(
+                run_in_threadpool,
+                self.consumer_service.shutdown_all,
+            )
+            tasks.start_soon(run_in_threadpool, self.producer_service.close)
 
     # --- Consumer helpers ---
 

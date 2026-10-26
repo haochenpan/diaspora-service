@@ -381,6 +381,28 @@ async def test_lifespan_sets_the_shared_threadpool(
             assert limiter.total_tokens == main.SHARED_THREADS
 
 
+async def test_shutdown_closes_consumers_and_producer_at_once(
+    service: DiasporaService,
+) -> None:
+    """Neither close waits for the other, so the whole is the longer one."""
+    both = threading.Barrier(2, timeout=5)
+    with (
+        patch.object(
+            service.consumer_service,
+            'shutdown_all',
+            side_effect=both.wait,
+        ),
+        patch.object(
+            service.producer_service,
+            'close',
+            side_effect=both.wait,
+        ),
+    ):
+        async with service._lifespan(service.app):
+            pass
+    assert not both.broken
+
+
 # ============================================================================
 # Errors: shape and client mistakes
 # ============================================================================

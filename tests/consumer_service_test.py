@@ -11,6 +11,7 @@ import threading
 import time
 import warnings
 from typing import Any
+from unittest.mock import call
 from unittest.mock import MagicMock
 from unittest.mock import patch
 
@@ -23,6 +24,8 @@ from kafka.structs import TopicPartition
 from tests.live_identity import live_namespace
 from tests.live_identity import permissions_boundary_arn
 from web_service.consumer_records import EncodedField
+from web_service.consumer_service import CLOSE_COMMIT_TIMEOUT_MS
+from web_service.consumer_service import CLOSE_TIMEOUT_MS
 from web_service.consumer_service import CONSUMER_OPERATION_TIMEOUT_MS
 from web_service.consumer_service import ConsumerService
 from web_service.consumer_service import ManagedConsumer
@@ -472,7 +475,7 @@ def test_delete_consumer_success(
     assert body is None
     mock_kafka_consumer.close.assert_called_once_with(
         autocommit=False,
-        timeout_ms=CONSUMER_OPERATION_TIMEOUT_MS,
+        timeout_ms=CLOSE_TIMEOUT_MS,
     )
     # Consumer should be removed from registry
     assert len(populated_service._consumers) == 0
@@ -1357,11 +1360,11 @@ def test_shutdown_all_closes_consumers(
     consumer_service.shutdown_all()
     mock1.close.assert_called_once_with(
         autocommit=False,
-        timeout_ms=CONSUMER_OPERATION_TIMEOUT_MS,
+        timeout_ms=CLOSE_TIMEOUT_MS,
     )
     mock2.close.assert_called_once_with(
         autocommit=False,
-        timeout_ms=CONSUMER_OPERATION_TIMEOUT_MS,
+        timeout_ms=CLOSE_TIMEOUT_MS,
     )
     assert len(consumer_service._consumers) == 0
 
@@ -1438,7 +1441,7 @@ def test_reaper_cleans_expired_consumers(
     assert len(consumer_service._consumers) == 0
     mock_consumer.close.assert_called_once_with(
         autocommit=False,
-        timeout_ms=CONSUMER_OPERATION_TIMEOUT_MS,
+        timeout_ms=CLOSE_TIMEOUT_MS,
     )
 
 
@@ -1806,7 +1809,7 @@ def test_shutdown_during_create_closes_the_new_consumer(
     ]
     built.close.assert_called_once_with(
         autocommit=False,
-        timeout_ms=CONSUMER_OPERATION_TIMEOUT_MS,
+        timeout_ms=CLOSE_TIMEOUT_MS,
     )
     assert consumer_service._consumers == {}
     assert consumer_service._pending == set()
@@ -1868,7 +1871,7 @@ def test_reaper_skips_busy_and_closes_idle(
 
     idle.consumer.close.assert_called_once_with(
         autocommit=False,
-        timeout_ms=CONSUMER_OPERATION_TIMEOUT_MS,
+        timeout_ms=CLOSE_TIMEOUT_MS,
     )
     assert seen == {'instance_lock_held': True, 'global_lock_free': True}
     assert idle.closed
@@ -1912,10 +1915,196 @@ def test_shutdown_all_skips_busy_instance(
         busy.lock.release()
     idle.consumer.close.assert_called_once_with(
         autocommit=False,
-        timeout_ms=CONSUMER_OPERATION_TIMEOUT_MS,
+        timeout_ms=CLOSE_TIMEOUT_MS,
     )
     busy.consumer.close.assert_not_called()
     assert consumer_service._consumers == {}
+
+
+def _auto_commit_managed(instance_id: str) -> ManagedConsumer:
+    managed = _new_managed(instance_id)
+    managed.auto_commit = True
+    return managed
+
+
+def test_create_consumer_keeps_auto_commit(
+    consumer_service: ConsumerService,
+) -> None:
+    """An instance remembers whether it commits its positions on close."""
+    with patch('web_service.consumer_service.KafkaConsumer'):
+        for name, setting in (('on', 'true'), ('off', 'false')):
+            consumer_service.create_consumer(
+                subject=SUBJECT,
+                namespace=NAMESPACE,
+                group_name=GROUP_NAME,
+                name=name,
+                auto_commit_enable=setting,
+            )
+    managed = {m.instance_id: m for m in consumer_service._consumers.values()}
+    assert managed['on'].auto_commit is True
+    assert managed['off'].auto_commit is False
+
+
+def test_delete_with_auto_commit_commits_before_close(
+    consumer_service: ConsumerService,
+) -> None:
+    """A delete of an auto-commit instance commits, then closes."""
+    managed = _auto_commit_managed('inst')
+    consumer_service._consumers[('u', 'ns', 'g', 'inst')] = managed
+    body, status = consumer_service.delete_consumer('u', 'ns', 'g', 'inst')
+    assert (body, status) == (None, 204)
+    assert managed.consumer.mock_calls == [
+        call.commit(timeout_ms=CLOSE_COMMIT_TIMEOUT_MS),
+        call.close(autocommit=False, timeout_ms=CLOSE_TIMEOUT_MS),
+    ]
+
+
+def test_delete_without_auto_commit_commits_nothing(
+    consumer_service: ConsumerService,
+) -> None:
+    """A delete of an instance without auto-commit only closes it."""
+    managed = _new_managed('inst')
+    consumer_service._consumers[('u', 'ns', 'g', 'inst')] = managed
+    consumer_service.delete_consumer('u', 'ns', 'g', 'inst')
+    assert managed.consumer.mock_calls == [
+        call.close(autocommit=False, timeout_ms=CLOSE_TIMEOUT_MS),
+    ]
+
+
+def test_a_failed_commit_on_close_still_closes(
+    consumer_service: ConsumerService,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A commit that fails on close is logged, and the close goes on."""
+    managed = _auto_commit_managed('inst')
+    managed.consumer.commit.side_effect = KafkaTimeoutError('timed out')
+    consumer_service._consumers[('u', 'ns', 'g', 'inst')] = managed
+    with caplog.at_level(logging.WARNING, logger='web_service'):
+        body, status = consumer_service.delete_consumer(
+            'u',
+            'ns',
+            'g',
+            'inst',
+        )
+    assert (body, status) == (None, 204)
+    managed.consumer.close.assert_called_once_with(
+        autocommit=False,
+        timeout_ms=CLOSE_TIMEOUT_MS,
+    )
+    assert 'Failed to commit the positions of consumer inst' in caplog.text
+
+
+def test_reaper_commits_an_auto_commit_instance(
+    consumer_service: ConsumerService,
+) -> None:
+    """The reaper commits an expired auto-commit instance before closing."""
+    committing = _auto_commit_managed('committing')
+    plain = _new_managed('plain')
+    for managed in (committing, plain):
+        managed.last_access = time.monotonic() - 600
+        consumer_service._consumers[('u', 'ns', 'g', managed.instance_id)] = (
+            managed
+        )
+    consumer_service._reap_once()
+    assert committing.consumer.mock_calls == [
+        call.commit(timeout_ms=CLOSE_COMMIT_TIMEOUT_MS),
+        call.close(autocommit=False, timeout_ms=CLOSE_TIMEOUT_MS),
+    ]
+    plain.consumer.commit.assert_not_called()
+    assert consumer_service._consumers == {}
+
+
+def test_shutdown_commits_auto_commit_instances(
+    consumer_service: ConsumerService,
+) -> None:
+    """Shutdown commits auto-commit instances and only closes the others."""
+    committing = _auto_commit_managed('committing')
+    plain = _new_managed('plain')
+    consumer_service._consumers[('u', 'ns', 'g', 'committing')] = committing
+    consumer_service._consumers[('u', 'ns', 'g', 'plain')] = plain
+    consumer_service.shutdown_all()
+    assert [c[0] for c in committing.consumer.mock_calls] == [
+        'commit',
+        'close',
+    ]
+    commit_ms = committing.consumer.commit.call_args.kwargs['timeout_ms']
+    assert 0 < commit_ms <= CLOSE_COMMIT_TIMEOUT_MS
+    plain.consumer.commit.assert_not_called()
+    plain.consumer.close.assert_called_once()
+
+
+def test_shutdown_closes_instances_at_once(
+    consumer_service: ConsumerService,
+) -> None:
+    """Shutdown closes the instances concurrently, not one after another."""
+    both = threading.Barrier(2, timeout=5)
+    managed = [_auto_commit_managed('a'), _auto_commit_managed('b')]
+    for m in managed:
+        # Each commit returns only once the other has started
+        m.consumer.commit.side_effect = lambda **_: both.wait()
+        consumer_service._consumers[('u', 'ns', 'g', m.instance_id)] = m
+    consumer_service.shutdown_all()
+    assert not both.broken
+    for m in managed:
+        m.consumer.close.assert_called_once()
+
+
+def test_shutdown_waits_no_longer_than_its_deadline(
+    consumer_service: ConsumerService,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A close still running at the deadline is left, and shutdown returns."""
+    release = threading.Event()
+    stuck = _auto_commit_managed('stuck')
+    stuck.consumer.commit.side_effect = lambda **_: release.wait(5)
+    consumer_service._consumers[('u', 'ns', 'g', 'stuck')] = stuck
+    try:
+        with (
+            patch('web_service.consumer_service.SHUTDOWN_TIMEOUT_S', 0.2),
+            caplog.at_level(logging.WARNING, logger='web_service'),
+        ):
+            start = time.monotonic()
+            consumer_service.shutdown_all()
+            took = time.monotonic() - start
+    finally:
+        release.set()
+    assert took < 2
+    assert '1 consumers not closed within' in caplog.text
+
+
+def test_shutdown_deadline_is_for_all_instances_together(
+    consumer_service: ConsumerService,
+) -> None:
+    """Sixteen slow commits take the deadline once, not sixteen times."""
+    managed = [_auto_commit_managed(f'i{i}') for i in range(16)]
+    for m in managed:
+        m.consumer.commit.side_effect = lambda **_: time.sleep(0.3)
+        consumer_service._consumers[('u', 'ns', 'g', m.instance_id)] = m
+    with patch('web_service.consumer_service.SHUTDOWN_TIMEOUT_S', 1):
+        start = time.monotonic()
+        consumer_service.shutdown_all()
+        took = time.monotonic() - start
+    assert took < 1
+    for m in managed:
+        assert m.consumer.commit.call_args.kwargs['timeout_ms'] <= 1000
+        m.consumer.close.assert_called_once()
+
+
+def test_close_waits_within_the_deadline(
+    consumer_service: ConsumerService,
+) -> None:
+    """A deadline shortens the commit's and the close's waits."""
+    managed = _auto_commit_managed('inst')
+    consumer_service._close(
+        managed,
+        'Error closing consumer %s',
+        deadline=time.monotonic() + 0.5,
+    )
+    commit_ms = managed.consumer.commit.call_args.kwargs['timeout_ms']
+    close_ms = managed.consumer.close.call_args.kwargs['timeout_ms']
+    assert 0 <= commit_ms <= 500
+    assert 0 <= close_ms <= 500
+    assert managed.closed
 
 
 # ============================================================================

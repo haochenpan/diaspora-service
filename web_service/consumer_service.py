@@ -55,9 +55,21 @@ logger = logging.getLogger(__name__)
 # Default idle timeout: 5 minutes
 DEFAULT_CONSUMER_TIMEOUT_MS = 300_000
 REAPER_INTERVAL_SECONDS = 30
-# Longest a commit, a committed-offsets lookup or a close waits on the
-# cluster; without a timeout kafka-python retries until it succeeds
+# Longest a commit or a committed-offsets lookup waits on the cluster;
+# without a timeout kafka-python retries until it succeeds
 CONSUMER_OPERATION_TIMEOUT_MS = 10_000
+# When an instance with auto-commit is closed (by a delete, the reaper or
+# shutdown), the longest the commit of its positions waits, and then the
+# longest kafka-python's close waits for each of its two steps: stopping
+# the heartbeat thread and leaving the group
+CLOSE_COMMIT_TIMEOUT_MS = 5_000
+CLOSE_TIMEOUT_MS = 2_000
+# Longest shutdown waits for all the instances together, which it closes
+# at once, each commit and close within what is left of it. The service's
+# shutdown closes the producer at the same time, so both fit in the time
+# gunicorn's graceful timeout leaves after uvicorn has waited for the
+# requests in progress.
+SHUTDOWN_TIMEOUT_S = 8
 # Longest a request waits for an instance that another request is using
 # (a fetch holds it for up to its timeout) before it is told to retry;
 # longer than the default fetch wait, so that never yields a 409
@@ -410,6 +422,7 @@ class ManagedConsumer:
         *,
         format_type: str,
         default_wait_ms: int | None = None,
+        auto_commit: bool = False,
     ) -> None:
         """Initialize a managed consumer.
 
@@ -423,6 +436,8 @@ class ManagedConsumer:
             default_wait_ms: How long a fetch that names no timeout waits
                 for records (consumer.request.timeout.ms), or None for
                 the service's default
+            auto_commit: Whether the consumer commits its positions
+                itself (auto.commit.enable), and so when it is closed
         """
         self.consumer = consumer
         self.subject = subject
@@ -431,6 +446,7 @@ class ManagedConsumer:
         self.instance_id = instance_id
         self.format_type = format_type
         self.default_wait_ms = default_wait_ms
+        self.auto_commit = auto_commit
         self.lock = InstanceLock()
         self.last_access = time.monotonic()
         # Fetches that found records so far, which rotate the partition a
@@ -652,13 +668,45 @@ class ConsumerService:
             managed.lock.release()
 
     @staticmethod
-    def _close(managed: ManagedConsumer, error_message: str) -> None:
-        """Close the instance's consumer; the caller holds its lock."""
+    def _close(
+        managed: ManagedConsumer,
+        error_message: str,
+        *,
+        deadline: float | None = None,
+    ) -> None:
+        """Close the instance's consumer; the caller holds its lock.
+
+        As in Confluent's REST Proxy, an instance with auto.commit.enable
+        first commits its positions, the next record of each partition its
+        fetches returned. The commit waits at most CLOSE_COMMIT_TIMEOUT_MS,
+        and a failed commit is logged and the close goes on. An instance
+        without auto-commit commits nothing. A deadline (time.monotonic())
+        shortens every wait to the time left before it.
+        """
         managed.closed = True
+
+        def within(timeout_ms: int) -> int:
+            if deadline is None:
+                return timeout_ms
+            left_ms = int((deadline - time.monotonic()) * 1000)
+            return max(0, min(timeout_ms, left_ms))
+
+        if managed.auto_commit:
+            try:
+                managed.consumer.commit(
+                    timeout_ms=within(CLOSE_COMMIT_TIMEOUT_MS),
+                )
+            except Exception as e:
+                logger.warning(
+                    'Failed to commit the positions of consumer %s before '
+                    'closing it: %r',
+                    managed.instance_id,
+                    e,
+                )
         try:
             managed.consumer.close(
                 autocommit=False,
-                timeout_ms=CONSUMER_OPERATION_TIMEOUT_MS,
+                timeout_ms=within(CLOSE_TIMEOUT_MS),
             )
         except Exception:
             logger.exception(error_message, managed.instance_id)
@@ -855,6 +903,7 @@ class ConsumerService:
                 instance_id=instance_id,
                 format_type=format_type,
                 default_wait_ms=wait_ms,
+                auto_commit=auto_commit_enable.strip().lower() == 'true',
             )
         finally:
             # Swap the reservation for the instance, or drop it if the
@@ -1530,22 +1579,56 @@ class ConsumerService:
     def shutdown_all(self) -> None:
         """Close all consumers. Called on application shutdown.
 
-        Each is closed under its own lock and outside the global lock; one
-        still busy after lock_timeout_s is left unclosed. A create still
+        The instances are closed at once, each on a thread of its own,
+        under its own lock and outside the global lock; those with
+        auto-commit commit their positions first. Shutdown waits at most
+        SHUTDOWN_TIMEOUT_S for them all: an instance still busy, or still
+        committing or closing, by then is left as it is. A create still
         building its consumer closes it instead of registering it.
         """
         with self._global_lock:
             self._closing = True
             consumers = list(self._consumers.values())
             self._consumers.clear()
-        for managed in consumers:
-            if not managed.lock.acquire(timeout=self.lock_timeout_s):
-                logger.warning(
-                    'Consumer %s busy at shutdown; not closed',
-                    managed.instance_id,
-                )
-                continue
-            try:
-                self._close(managed, 'Error closing consumer %s on shutdown')
-            finally:
-                managed.lock.release()
+        deadline = time.monotonic() + SHUTDOWN_TIMEOUT_S
+        closers = [
+            threading.Thread(
+                target=self._close_at_shutdown,
+                args=(managed, deadline),
+                name=f'close-consumer-{managed.instance_id}',
+                daemon=True,
+            )
+            for managed in consumers
+        ]
+        for closer in closers:
+            closer.start()
+        for closer in closers:
+            closer.join(max(0.0, deadline - time.monotonic()))
+        if left := sum(closer.is_alive() for closer in closers):
+            logger.warning(
+                '%d consumers not closed within %d s of shutdown',
+                left,
+                SHUTDOWN_TIMEOUT_S,
+            )
+
+    def _close_at_shutdown(
+        self,
+        managed: ManagedConsumer,
+        deadline: float,
+    ) -> None:
+        """Close one instance for shutdown_all, by the deadline."""
+        wait = min(self.lock_timeout_s, deadline - time.monotonic())
+        if not managed.lock.acquire(timeout=max(0.0, wait)):
+            logger.warning(
+                'Consumer %s busy at shutdown; not closed',
+                managed.instance_id,
+            )
+            return
+        try:
+            self._close(
+                managed,
+                'Error closing consumer %s on shutdown',
+                deadline=deadline,
+            )
+        finally:
+            managed.lock.release()
