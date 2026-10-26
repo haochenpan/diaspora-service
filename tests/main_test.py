@@ -7,13 +7,16 @@ error conditions, input validation, and edge cases.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
+import threading
 from typing import Any
 from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 from unittest.mock import patch
 
+import httpx
 import pytest
 
 from web_service.consumer_models import AssignmentRequest
@@ -1534,6 +1537,8 @@ def test_fetch_consumer_records_success(
         instance_id=CONSUMER_INST,
         subject=valid_subject,
         token=valid_token,
+        timeout=None,
+        max_bytes=None,
     )
     assert response.status_code == 200
     resp_body = _response_json(response)
@@ -1812,3 +1817,477 @@ async def test_seek_consumer_end_success(
         token=valid_token,
     )
     assert response.status_code == 204
+
+
+# ============================================================================
+# HTTP Tests - Blocking work runs off the event loop
+# ============================================================================
+
+HTTP_SUBJECT = '123e4567-e89b-12d3-a456-426614174000'
+HTTP_HEADERS = {'subject': HTTP_SUBJECT, 'authorization': 'Bearer ' + 'a' * 50}
+_INST = f'/api/v3/{CONSUMER_NS}/consumers/{CONSUMER_GROUP}/instances/x'
+_PARTITIONS = {'partitions': [{'topic': 't1', 'partition': 0}]}
+_OFFSETS = {'offsets': [{'topic': 't1', 'partition': 0, 'offset': 3}]}
+
+# Each management route: (method, path, WebService attribute it calls)
+MANAGEMENT_ROUTES = [
+    ('POST', '/api/v3/user', 'create_user'),
+    ('DELETE', '/api/v3/user', 'delete_user'),
+    ('POST', '/api/v3/key', 'create_key'),
+    ('DELETE', '/api/v3/key', 'delete_key'),
+    (
+        'GET',
+        '/api/v3/namespace',
+        'namespace_service.list_namespace_and_topics',
+    ),
+]
+
+# Each consumer route: (method, path, body, ConsumerService method, the
+# method's reply)
+CONSUMER_ROUTES: list[tuple[str, str, Any, str, tuple[Any, int]]] = [
+    (
+        'POST',
+        f'/api/v3/{CONSUMER_NS}/consumers/{CONSUMER_GROUP}',
+        {'name': 'x'},
+        'create_consumer',
+        ({'instance_id': 'x', 'base_uri': _INST}, 200),
+    ),
+    ('DELETE', _INST, None, 'delete_consumer', (None, 204)),
+    (
+        'POST',
+        f'{_INST}/subscription',
+        {'topics': ['t1']},
+        'subscribe',
+        (None, 204),
+    ),
+    (
+        'GET',
+        f'{_INST}/subscription',
+        None,
+        'get_subscription',
+        ({'topics': ['t1']}, 200),
+    ),
+    ('DELETE', f'{_INST}/subscription', None, 'unsubscribe', (None, 204)),
+    ('GET', f'{_INST}/records', None, 'poll_records', ([], 200)),
+    ('POST', f'{_INST}/offsets', _OFFSETS, 'commit_offsets', (None, 200)),
+    (
+        'GET',
+        f'{_INST}/offsets',
+        _PARTITIONS,
+        'get_committed',
+        (
+            {
+                'offsets': [
+                    {
+                        'topic': 't1',
+                        'partition': 0,
+                        'offset': 3,
+                        'metadata': '',
+                    },
+                ],
+            },
+            200,
+        ),
+    ),
+    (
+        'POST',
+        f'{_INST}/assignments',
+        _PARTITIONS,
+        'assign_partitions',
+        (None, 204),
+    ),
+    (
+        'GET',
+        f'{_INST}/assignments',
+        None,
+        'get_assignments',
+        ({'partitions': [{'topic': 't1', 'partition': 0}]}, 200),
+    ),
+    ('POST', f'{_INST}/positions', _OFFSETS, 'seek', (None, 204)),
+    (
+        'POST',
+        f'{_INST}/positions/beginning',
+        _PARTITIONS,
+        'seek_to_beginning',
+        (None, 204),
+    ),
+    (
+        'POST',
+        f'{_INST}/positions/end',
+        _PARTITIONS,
+        'seek_to_end',
+        (None, 204),
+    ),
+]
+
+
+def _resolve(root: MagicMock, dotted: str) -> MagicMock:
+    for part in dotted.split('.'):
+        root = getattr(root, part)
+    return root
+
+
+def _setup_consumer_mocks(mock_web_service: MagicMock) -> None:
+    """Let namespace and topic validation pass for CONSUMER_NS and t1."""
+    _setup_namespace_success(mock_web_service)
+    ns_db = mock_web_service.namespace_service.dynamodb
+    ns_db.get_namespace_topics.return_value = ['t1']
+
+
+def _blocking(result: Any) -> tuple[Any, threading.Event, threading.Event]:
+    """A callable that blocks until released, and its two events.
+
+    It records in release_seen whether the release came within 2 s.
+    """
+    entered = threading.Event()
+    release = threading.Event()
+
+    def _call(*_args: Any, **_kwargs: Any) -> Any:
+        entered.set()
+        _call.release_seen = release.wait(timeout=2)
+        return result
+
+    return _call, entered, release
+
+
+async def _request_while_blocked(
+    service: DiasporaService,
+    *,
+    method: str,
+    path: str,
+    body: Any,
+    blocking: Any,
+    entered: threading.Event,
+    release: threading.Event,
+) -> httpx.Response:
+    """Send a request that blocks, and check the loop serves another meanwhile.
+
+    The second request is the docs page, a plain async route. On a blocked
+    event loop it would only be served after the first request returned.
+    """
+    transport = httpx.ASGITransport(app=service.app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url='http://test',
+    ) as client:
+        slow = asyncio.create_task(
+            client.request(method, path, json=body, headers=HTTP_HEADERS),
+        )
+        assert await asyncio.to_thread(entered.wait, 2)
+        fast = await client.get('/')
+        assert fast.status_code == 200
+        release.set()
+        response = await slow
+    assert blocking.release_seen, 'the blocking call held the event loop'
+    return response
+
+
+@pytest.mark.parametrize(('method', 'path', 'attr'), MANAGEMENT_ROUTES)
+async def test_management_route_service_call_off_loop(
+    mock_diaspora_service: DiasporaService,
+    *,
+    mock_web_service: MagicMock,
+    method: str,
+    path: str,
+    attr: str,
+) -> None:
+    """A slow service call in a management route leaves the loop free."""
+    reply = {'status': 'success', 'message': 'done'}
+    blocking, entered, release = _blocking(reply)
+    _resolve(mock_web_service, attr).side_effect = blocking
+    response = await _request_while_blocked(
+        mock_diaspora_service,
+        method=method,
+        path=path,
+        body=None,
+        blocking=blocking,
+        entered=entered,
+        release=release,
+    )
+    assert response.status_code == 200
+    assert response.json() == reply
+
+
+@pytest.mark.parametrize(('method', 'path', 'attr'), MANAGEMENT_ROUTES)
+async def test_management_route_auth_off_loop(
+    mock_diaspora_service: DiasporaService,
+    *,
+    mock_auth_manager: MagicMock,
+    mock_web_service: MagicMock,
+    method: str,
+    path: str,
+    attr: str,
+) -> None:
+    """Slow token introspection in a management route leaves the loop free."""
+    error = {'status': 'error', 'reason': 'Token is inactive.'}
+    blocking, entered, release = _blocking(error)
+    mock_auth_manager.validate_access_token.side_effect = blocking
+    response = await _request_while_blocked(
+        mock_diaspora_service,
+        method=method,
+        path=path,
+        body=None,
+        blocking=blocking,
+        entered=entered,
+        release=release,
+    )
+    # An auth failure is still a 200 with the error body
+    assert response.status_code == 200
+    assert response.json() == error
+    _resolve(mock_web_service, attr).assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ('method', 'path', 'body', 'call', 'reply'),
+    CONSUMER_ROUTES,
+)
+async def test_consumer_route_service_call_off_loop(
+    mock_diaspora_service: DiasporaService,
+    *,
+    mock_web_service: MagicMock,
+    mock_consumer_service: MagicMock,
+    method: str,
+    path: str,
+    body: Any,
+    call: str,
+    reply: tuple[Any, int],
+) -> None:
+    """A slow consumer call leaves the loop free; the reply is unchanged."""
+    _setup_consumer_mocks(mock_web_service)
+    blocking, entered, release = _blocking(reply)
+    getattr(mock_consumer_service, call).side_effect = blocking
+    response = await _request_while_blocked(
+        mock_diaspora_service,
+        method=method,
+        path=path,
+        body=body,
+        blocking=blocking,
+        entered=entered,
+        release=release,
+    )
+    reply_body, reply_status = reply
+    assert response.status_code == reply_status
+    if reply_status == 204:
+        assert response.content == b''
+    else:
+        assert response.json() == reply_body
+
+
+@pytest.mark.parametrize(
+    ('method', 'path', 'body', 'call', 'reply'),
+    CONSUMER_ROUTES,
+)
+async def test_consumer_route_auth_off_loop(
+    mock_diaspora_service: DiasporaService,
+    *,
+    mock_auth_manager: MagicMock,
+    mock_consumer_service: MagicMock,
+    method: str,
+    path: str,
+    body: Any,
+    call: str,
+    reply: tuple[Any, int],
+) -> None:
+    """Slow token introspection in a consumer route leaves the loop free."""
+    error = {'status': 'error', 'reason': 'Token is inactive.'}
+    blocking, entered, release = _blocking(error)
+    mock_auth_manager.validate_access_token.side_effect = blocking
+    response = await _request_while_blocked(
+        mock_diaspora_service,
+        method=method,
+        path=path,
+        body=body,
+        blocking=blocking,
+        entered=entered,
+        release=release,
+    )
+    assert response.status_code == 401
+    assert response.json() == error
+    getattr(mock_consumer_service, call).assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ('method', 'path', 'body', 'call', 'reply'),
+    CONSUMER_ROUTES,
+)
+async def test_consumer_route_namespace_lookup_off_loop(
+    mock_diaspora_service: DiasporaService,
+    *,
+    mock_web_service: MagicMock,
+    mock_consumer_service: MagicMock,
+    method: str,
+    path: str,
+    body: Any,
+    call: str,
+    reply: tuple[Any, int],
+) -> None:
+    """A slow namespace lookup leaves the loop free; its 404 is unchanged."""
+    blocking, entered, release = _blocking([])
+    ns_db = mock_web_service.namespace_service.dynamodb
+    ns_db.get_user_namespaces.side_effect = blocking
+    response = await _request_while_blocked(
+        mock_diaspora_service,
+        method=method,
+        path=path,
+        body=body,
+        blocking=blocking,
+        entered=entered,
+        release=release,
+    )
+    assert response.status_code == 404
+    assert response.json() == {
+        'error_code': 40401,
+        'message': f'Namespace {CONSUMER_NS} not found for user',
+    }
+    getattr(mock_consumer_service, call).assert_not_called()
+
+
+# ============================================================================
+# HTTP Tests - Replies through the routes
+# ============================================================================
+
+
+async def _send(
+    service: DiasporaService,
+    method: str,
+    path: str,
+    body: Any = None,
+) -> httpx.Response:
+    """Send one request to the app, with valid-looking auth headers."""
+    transport = httpx.ASGITransport(app=service.app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url='http://test',
+    ) as client:
+        return await client.request(
+            method,
+            path,
+            json=body,
+            headers=HTTP_HEADERS,
+        )
+
+
+@pytest.mark.parametrize(
+    ('body', 'message'),
+    (
+        (
+            {'topic_pattern': 't.*'},
+            'topic_pattern is not supported; subscribe with a list of topics',
+        ),
+        ({'topics': []}, 'Must provide a non-empty list of topics'),
+        ({}, 'Must provide a non-empty list of topics'),
+    ),
+)
+async def test_subscribe_route_refuses_unsupported_bodies(
+    mock_diaspora_service: DiasporaService,
+    *,
+    mock_web_service: MagicMock,
+    mock_consumer_service: MagicMock,
+    body: dict[str, Any],
+    message: str,
+) -> None:
+    """The subscribe route keeps its 422 replies."""
+    _setup_consumer_mocks(mock_web_service)
+    response = await _send(
+        mock_diaspora_service,
+        'POST',
+        f'{_INST}/subscription',
+        body,
+    )
+    assert response.status_code == 422
+    assert response.json() == {'error_code': 42204, 'message': message}
+    mock_consumer_service.subscribe.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ('path', 'body', 'call'),
+    (
+        (f'{_INST}/subscription', {'topics': ['t1', 'zz']}, 'subscribe'),
+        (
+            f'{_INST}/assignments',
+            {'partitions': [{'topic': 'zz', 'partition': 0}]},
+            'assign_partitions',
+        ),
+    ),
+)
+async def test_routes_refuse_topics_outside_namespace(
+    mock_diaspora_service: DiasporaService,
+    *,
+    mock_web_service: MagicMock,
+    mock_consumer_service: MagicMock,
+    path: str,
+    body: dict[str, Any],
+    call: str,
+) -> None:
+    """Subscribe and assign keep their 404 for unknown topics."""
+    _setup_consumer_mocks(mock_web_service)
+    response = await _send(mock_diaspora_service, 'POST', path, body)
+    assert response.status_code == 404
+    assert response.json() == {
+        'error_code': 40401,
+        'message': f'Topics not found in namespace {CONSUMER_NS}: zz',
+    }
+    getattr(mock_consumer_service, call).assert_not_called()
+
+
+async def test_busy_instance_reply_passes_through(
+    mock_diaspora_service: DiasporaService,
+    *,
+    mock_web_service: MagicMock,
+    mock_consumer_service: MagicMock,
+) -> None:
+    """A busy instance's 409 reaches the client as the service gave it."""
+    _setup_consumer_mocks(mock_web_service)
+    busy = {
+        'error_code': 40904,
+        'message': 'Consumer instance is busy with another request.',
+    }
+    mock_consumer_service.commit_offsets.return_value = (busy, 409)
+    response = await _send(mock_diaspora_service, 'POST', f'{_INST}/offsets')
+    assert response.status_code == 409
+    assert response.json() == busy
+
+
+@pytest.mark.parametrize(
+    ('query', 'expected_ms'),
+    (
+        ('', 5000),
+        ('?timeout=1000', 1000),
+        ('?timeout=30000', 30000),
+        ('?timeout=30001', 30000),
+        ('?timeout=600000', 30000),
+    ),
+)
+async def test_fetch_timeout_is_capped(
+    mock_diaspora_service: DiasporaService,
+    *,
+    mock_web_service: MagicMock,
+    mock_consumer_service: MagicMock,
+    query: str,
+    expected_ms: int,
+) -> None:
+    """Fetch waits at most 30 s; a larger timeout is clamped, not refused."""
+    _setup_consumer_mocks(mock_web_service)
+    mock_consumer_service.poll_records.return_value = ([], 200)
+    response = await _send(
+        mock_diaspora_service,
+        'GET',
+        f'{_INST}/records{query}',
+    )
+    assert response.status_code == 200
+    assert response.json() == []
+    kwargs = mock_consumer_service.poll_records.call_args.kwargs
+    assert kwargs['timeout_ms'] == expected_ms
+
+
+def test_fetch_timeout_cap_is_documented(
+    mock_diaspora_service: DiasporaService,
+) -> None:
+    """The fetch timeout's description states the cap."""
+    schema = mock_diaspora_service.app.openapi()
+    params = schema['paths'][
+        '/api/v3/{namespace}/consumers/{group_name}'
+        '/instances/{instance_id}/records'
+    ]['get']['parameters']
+    timeout = next(p for p in params if p['name'] == 'timeout')
+    assert '30000' in timeout['description']

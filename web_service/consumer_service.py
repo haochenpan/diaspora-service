@@ -12,6 +12,8 @@ import os
 import threading
 import time
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
 
 from kafka import KafkaConsumer
@@ -25,6 +27,13 @@ logger = logging.getLogger(__name__)
 # Default idle timeout: 5 minutes
 DEFAULT_CONSUMER_TIMEOUT_MS = 300_000
 REAPER_INTERVAL_SECONDS = 30
+# Longest a commit, a committed-offsets lookup or a close waits on the
+# cluster; without a timeout kafka-python retries until it succeeds
+CONSUMER_OPERATION_TIMEOUT_MS = 10_000
+# Longest a request waits for an instance that another request is using
+# (a fetch holds it for up to its timeout) before it is told to retry;
+# longer than the default fetch wait, so that never yields a 409
+INSTANCE_LOCK_TIMEOUT_S = 10.0
 
 
 class ManagedConsumer:
@@ -58,6 +67,9 @@ class ManagedConsumer:
         self.format_type = format_type
         self.lock = threading.Lock()
         self.last_access = time.monotonic()
+        # Set, under the lock, once the consumer is closed; a request that
+        # was waiting for the lock then finds the instance gone
+        self.closed = False
 
     def touch(self) -> None:
         """Update last access time."""
@@ -121,6 +133,12 @@ class ConsumerService:
             ManagedConsumer,
         ] = {}
         self._global_lock = threading.Lock()
+        # Keys of instances whose KafkaConsumer is being built outside the
+        # global lock; a create of the same name meanwhile gets 409
+        self._pending: set[tuple[str, str, str, str]] = set()
+        # Set by shutdown_all; creates from then on are refused
+        self._closing = False
+        self.lock_timeout_s = INSTANCE_LOCK_TIMEOUT_S
         self._reaper_thread = threading.Thread(
             target=self._reap_expired_consumers,
             daemon=True,
@@ -179,6 +197,19 @@ class ConsumerService:
             return kafka_topic[len(prefix) :]
         return kafka_topic
 
+    @staticmethod
+    def _shutting_down() -> tuple[dict[str, Any], int]:
+        """The reply to a create once shutdown has begun."""
+        return (
+            {
+                'error_code': 50002,
+                'message': (
+                    'Failed to create consumer: service is shutting down'
+                ),
+            },
+            500,
+        )
+
     def _get_consumer(
         self,
         subject: str,
@@ -195,6 +226,55 @@ class ConsumerService:
         )
         with self._global_lock:
             return self._consumers.get(key)
+
+    @contextmanager
+    def _locked(
+        self,
+        managed: ManagedConsumer,
+    ) -> Iterator[tuple[dict[str, Any], int] | None]:
+        """Hold the instance's lock, or yield the error reply if it can't.
+
+        Waits at most lock_timeout_s for another request on the same
+        instance, then yields a 409 reply; yields a 404 reply if the
+        instance was closed while waiting. Yields None once the lock is
+        held, and releases it on exit.
+        """
+        if not managed.lock.acquire(timeout=self.lock_timeout_s):
+            yield (
+                {
+                    'error_code': 40904,
+                    'message': (
+                        'Consumer instance is busy with another request.'
+                    ),
+                },
+                409,
+            )
+            return
+        try:
+            if managed.closed:
+                yield (
+                    {
+                        'error_code': 40403,
+                        'message': 'Consumer instance not found',
+                    },
+                    404,
+                )
+            else:
+                yield None
+        finally:
+            managed.lock.release()
+
+    @staticmethod
+    def _close(managed: ManagedConsumer, error_message: str) -> None:
+        """Close the instance's consumer; the caller holds its lock."""
+        managed.closed = True
+        try:
+            managed.consumer.close(
+                autocommit=False,
+                timeout_ms=CONSUMER_OPERATION_TIMEOUT_MS,
+            )
+        except Exception:
+            logger.exception(error_message, managed.instance_id)
 
     # --- Consumer lifecycle ---
 
@@ -234,8 +314,13 @@ class ConsumerService:
         )
         kafka_group_id = self._kafka_group_id(namespace, group_name)
 
+        # Reserve the name, then build the consumer outside the global
+        # lock: its bootstrap waits on the cluster, and every request on
+        # every instance takes the global lock
         with self._global_lock:
-            if key in self._consumers:
+            if self._closing:
+                return self._shutting_down()
+            if key in self._consumers or key in self._pending:
                 return (
                     {
                         'error_code': 40902,
@@ -246,7 +331,10 @@ class ConsumerService:
                     },
                     409,
                 )
+            self._pending.add(key)
 
+        managed: ManagedConsumer | None = None
+        try:
             kwargs: dict[str, Any] = {
                 'bootstrap_servers': self.bootstrap_servers,
                 'group_id': kafka_group_id,
@@ -285,7 +373,19 @@ class ConsumerService:
                 instance_id=instance_id,
                 format_type=format_type,
             )
-            self._consumers[key] = managed
+        finally:
+            # Swap the reservation for the instance, or drop it if the
+            # build failed or shutdown began meanwhile
+            with self._global_lock:
+                self._pending.discard(key)
+                closing = self._closing
+                if managed is not None and not closing:
+                    self._consumers[key] = managed
+
+        if closing and managed is not None:
+            with managed.lock:
+                self._close(managed, 'Error closing consumer %s at shutdown')
+            return self._shutting_down()
 
         return (
             {
@@ -316,8 +416,12 @@ class ConsumerService:
             group_name,
             instance_id,
         )
-        with self._global_lock:
-            managed = self._consumers.pop(key, None)
+        managed = self._get_consumer(
+            subject,
+            namespace,
+            group_name,
+            instance_id,
+        )
         if managed is None:
             return (
                 {
@@ -326,14 +430,13 @@ class ConsumerService:
                 },
                 404,
             )
-        with managed.lock:
-            try:
-                managed.consumer.close(autocommit=False)
-            except Exception:
-                logger.exception(
-                    'Error closing consumer %s',
-                    instance_id,
-                )
+        with self._locked(managed) as error:
+            if error:
+                return error
+            with self._global_lock:
+                if self._consumers.get(key) is managed:
+                    del self._consumers[key]
+            self._close(managed, 'Error closing consumer %s')
         return (None, 204)
 
     # --- Subscription ---
@@ -377,7 +480,9 @@ class ConsumerService:
                 422,
             )
 
-        with managed.lock:
+        with self._locked(managed) as error:
+            if error:
+                return error
             managed.touch()
             try:
                 kafka_topics = [
@@ -420,7 +525,9 @@ class ConsumerService:
                 },
                 404,
             )
-        with managed.lock:
+        with self._locked(managed) as error:
+            if error:
+                return error
             managed.touch()
             sub = managed.consumer.subscription() or set()
             user_topics = sorted(
@@ -456,7 +563,9 @@ class ConsumerService:
                 },
                 404,
             )
-        with managed.lock:
+        with self._locked(managed) as error:
+            if error:
+                return error
             managed.touch()
             try:
                 managed.consumer.unsubscribe()
@@ -501,7 +610,9 @@ class ConsumerService:
                 },
                 404,
             )
-        with managed.lock:
+        with self._locked(managed) as error:
+            if error:
+                return error
             managed.touch()
             try:
                 raw = managed.consumer.poll(
@@ -571,7 +682,9 @@ class ConsumerService:
                 },
                 404,
             )
-        with managed.lock:
+        with self._locked(managed) as error:
+            if error:
+                return error
             managed.touch()
             try:
                 if offsets:
@@ -589,9 +702,14 @@ class ConsumerService:
                             None,
                             None,
                         )
-                    managed.consumer.commit(offsets=kafka_offsets)
+                    managed.consumer.commit(
+                        offsets=kafka_offsets,
+                        timeout_ms=CONSUMER_OPERATION_TIMEOUT_MS,
+                    )
                 else:
-                    managed.consumer.commit()
+                    managed.consumer.commit(
+                        timeout_ms=CONSUMER_OPERATION_TIMEOUT_MS,
+                    )
             except Exception as e:
                 return (
                     {
@@ -629,9 +747,13 @@ class ConsumerService:
                 },
                 404,
             )
-        with managed.lock:
+        with self._locked(managed) as error:
+            if error:
+                return error
             managed.touch()
             results = []
+            # One deadline for all the partitions asked for
+            deadline = time.monotonic() + CONSUMER_OPERATION_TIMEOUT_MS / 1000
             try:
                 for p in partitions:
                     tp = TopicPartition(
@@ -641,7 +763,14 @@ class ConsumerService:
                         ),
                         p['partition'],
                     )
-                    committed = managed.consumer.committed(tp)
+                    remaining_ms = max(
+                        0,
+                        int((deadline - time.monotonic()) * 1000),
+                    )
+                    committed = managed.consumer.committed(
+                        tp,
+                        timeout_ms=remaining_ms,
+                    )
                     results.append(
                         {
                             'topic': p['topic'],
@@ -691,7 +820,9 @@ class ConsumerService:
                 },
                 404,
             )
-        with managed.lock:
+        with self._locked(managed) as error:
+            if error:
+                return error
             managed.touch()
             try:
                 tps = [
@@ -741,7 +872,9 @@ class ConsumerService:
                 },
                 404,
             )
-        with managed.lock:
+        with self._locked(managed) as error:
+            if error:
+                return error
             managed.touch()
             assigned = managed.consumer.assignment() or set()
             partitions = sorted(
@@ -789,7 +922,9 @@ class ConsumerService:
                 },
                 404,
             )
-        with managed.lock:
+        with self._locked(managed) as error:
+            if error:
+                return error
             managed.touch()
             try:
                 for o in offsets:
@@ -838,7 +973,9 @@ class ConsumerService:
                 },
                 404,
             )
-        with managed.lock:
+        with self._locked(managed) as error:
+            if error:
+                return error
             managed.touch()
             try:
                 tps = [
@@ -889,7 +1026,9 @@ class ConsumerService:
                 },
                 404,
             )
-        with managed.lock:
+        with self._locked(managed) as error:
+            if error:
+                return error
             managed.touch()
             try:
                 tps = [
@@ -919,36 +1058,63 @@ class ConsumerService:
         """Background thread to clean up idle consumers."""
         while True:
             time.sleep(REAPER_INTERVAL_SECONDS)
-            expired_keys: list[tuple[str, str, str, str]] = []
-            with self._global_lock:
-                for key, managed in self._consumers.items():
-                    if managed.is_expired(self.timeout_ms):
-                        expired_keys.append(key)
-                for key in expired_keys:
-                    managed = self._consumers.pop(key)
-                    if managed:
-                        try:
-                            managed.consumer.close(
-                                autocommit=False,
-                            )
-                        except Exception:
-                            logger.exception(
-                                'Error closing expired consumer',
-                            )
-                        logger.info(
-                            'Reaped expired consumer: %s in group %s',
-                            managed.instance_id,
-                            managed.group_name,
-                        )
+            self._reap_once()
+
+    def _reap_once(self) -> None:
+        """Close the consumers idle for longer than the timeout.
+
+        Each is closed under its own lock and outside the global lock. An
+        instance still serving a request (a fetch longer than the idle
+        timeout) is kept for a later round rather than closed mid-request.
+        """
+        with self._global_lock:
+            candidates = [
+                (key, managed)
+                for key, managed in self._consumers.items()
+                if managed.is_expired(self.timeout_ms)
+            ]
+        for key, managed in candidates:
+            if not managed.lock.acquire(timeout=self.lock_timeout_s):
+                continue
+            try:
+                # A request may have used it since the scan, or a delete
+                # removed it
+                with self._global_lock:
+                    reap = self._consumers.get(
+                        key,
+                    ) is managed and managed.is_expired(self.timeout_ms)
+                    if reap:
+                        del self._consumers[key]
+                if not reap:
+                    continue
+                self._close(managed, 'Error closing expired consumer %s')
+                logger.info(
+                    'Reaped expired consumer: %s in group %s',
+                    managed.instance_id,
+                    managed.group_name,
+                )
+            finally:
+                managed.lock.release()
 
     def shutdown_all(self) -> None:
-        """Close all consumers. Called on application shutdown."""
+        """Close all consumers. Called on application shutdown.
+
+        Each is closed under its own lock and outside the global lock; one
+        still busy after lock_timeout_s is left unclosed. A create still
+        building its consumer closes it instead of registering it.
+        """
         with self._global_lock:
-            for _key, managed in list(self._consumers.items()):
-                try:
-                    managed.consumer.close(autocommit=False)
-                except Exception:
-                    logger.exception(
-                        'Error closing consumer on shutdown',
-                    )
+            self._closing = True
+            consumers = list(self._consumers.values())
             self._consumers.clear()
+        for managed in consumers:
+            if not managed.lock.acquire(timeout=self.lock_timeout_s):
+                logger.warning(
+                    'Consumer %s busy at shutdown; not closed',
+                    managed.instance_id,
+                )
+                continue
+            try:
+                self._close(managed, 'Error closing consumer %s on shutdown')
+            finally:
+                managed.lock.release()

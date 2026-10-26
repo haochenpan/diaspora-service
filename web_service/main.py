@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.metadata as importlib_metadata
 import os
 from collections.abc import AsyncIterator
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -35,6 +36,10 @@ from .services import KafkaService
 from .services import NamespaceService
 from .services import parse_max_topics_per_namespace
 from .services import WebService
+
+# Fetch wait when the request names none, and the longest it may name
+DEFAULT_FETCH_TIMEOUT_MS = 5_000
+MAX_FETCH_TIMEOUT_MS = 30_000
 
 
 class DiasporaService:
@@ -156,9 +161,12 @@ class DiasporaService:
         token: str = Header(..., alias='authorization'),
     ) -> dict[str, Any]:
         """Create an IAM user for the authenticated subject."""
-        if err := self.auth.validate_access_token(subject, token):
-            return err
-        return self.web_service.create_user(subject)
+        return await run_in_threadpool(
+            self._authorized,
+            subject,
+            token,
+            self.web_service.create_user,
+        )
 
     async def delete_user(
         self,
@@ -166,9 +174,12 @@ class DiasporaService:
         token: str = Header(..., alias='authorization'),
     ) -> dict[str, Any]:
         """Delete an IAM user for the authenticated subject."""
-        if err := self.auth.validate_access_token(subject, token):
-            return err
-        return self.web_service.delete_user(subject)
+        return await run_in_threadpool(
+            self._authorized,
+            subject,
+            token,
+            self.web_service.delete_user,
+        )
 
     async def create_key(
         self,
@@ -176,9 +187,12 @@ class DiasporaService:
         token: str = Header(..., alias='authorization'),
     ) -> dict[str, Any]:
         """Create an access key for an existing IAM user."""
-        if err := self.auth.validate_access_token(subject, token):
-            return err
-        return self.web_service.create_key(subject)
+        return await run_in_threadpool(
+            self._authorized,
+            subject,
+            token,
+            self.web_service.create_key,
+        )
 
     async def delete_key(
         self,
@@ -186,9 +200,12 @@ class DiasporaService:
         token: str = Header(..., alias='authorization'),
     ) -> dict[str, Any]:
         """Delete access keys for a user."""
-        if err := self.auth.validate_access_token(subject, token):
-            return err
-        return self.web_service.delete_key(subject)
+        return await run_in_threadpool(
+            self._authorized,
+            subject,
+            token,
+            self.web_service.delete_key,
+        )
 
     async def create_topic(
         self,
@@ -286,11 +303,28 @@ class DiasporaService:
         token: str = Header(..., alias='authorization'),
     ) -> dict[str, Any]:
         """List all namespaces owned by a user and their topics."""
+        return await run_in_threadpool(
+            self._authorized,
+            subject,
+            token,
+            self.web_service.namespace_service.list_namespace_and_topics,
+        )
+
+    def _authorized(
+        self,
+        subject: str,
+        token: str,
+        action: Callable[[str], dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Run action(subject) if the token belongs to the subject.
+
+        Token introspection and the action both block, so route handlers
+        call this in the threadpool: on the event loop they would stall
+        every other request and the worker's heartbeat to gunicorn.
+        """
         if err := self.auth.validate_access_token(subject, token):
             return err
-        return self.web_service.namespace_service.list_namespace_and_topics(
-            subject,
-        )
+        return action(subject)
 
     # --- Lifespan ---
 
@@ -301,7 +335,7 @@ class DiasporaService:
     ) -> AsyncIterator[None]:
         """Application lifespan: clean up consumers on shutdown."""
         yield
-        self.consumer_service.shutdown_all()
+        await run_in_threadpool(self.consumer_service.shutdown_all)
 
     # --- Consumer helpers ---
 
@@ -352,6 +386,41 @@ class DiasporaService:
                 ),
             }
         return None
+
+    def _check_access(
+        self,
+        subject: str,
+        token: str,
+        namespace: str,
+    ) -> Response | None:
+        """Check the token and the namespace for a consumer request.
+
+        Returns:
+            The 401 or 404 response if a check fails, None if both pass
+        """
+        if err := self.auth.validate_access_token(subject, token):
+            return JSONResponse(content=err, status_code=401)
+        if err := self._validate_namespace(subject, namespace):
+            return JSONResponse(content=err, status_code=404)
+        return None
+
+    def _serve_consumer(
+        self,
+        subject: str,
+        token: str,
+        namespace: str,
+        serve: Callable[[], Response],
+    ) -> Response:
+        """Check access to a consumer request, then serve it.
+
+        Token introspection, the namespace lookup and the consumer calls
+        all block, so async route handlers call this in the threadpool: on
+        the event loop they would stall every other request and the
+        worker's heartbeat to gunicorn.
+        """
+        if err := self._check_access(subject, token, namespace):
+            return err
+        return serve()
 
     _NO_CONTENT = 204
 
@@ -461,22 +530,28 @@ class DiasporaService:
         token: str = Header(..., alias='authorization'),
     ) -> Response:
         """Create a consumer instance in a consumer group."""
-        if err := self.auth.validate_access_token(subject, token):
-            return JSONResponse(content=err, status_code=401)
-        if err := self._validate_namespace(subject, namespace):
-            return JSONResponse(content=err, status_code=404)
-        resp_body, status = self.consumer_service.create_consumer(
-            subject=subject,
-            namespace=namespace,
-            group_name=group_name,
-            name=body.name,
-            format_type=body.format,
-            auto_offset_reset=body.auto_offset_reset,
-            auto_commit_enable=body.auto_commit_enable,
-            fetch_min_bytes=body.fetch_min_bytes,
-            consumer_request_timeout_ms=(body.consumer_request_timeout_ms),
+
+        def serve() -> Response:
+            resp_body, status = self.consumer_service.create_consumer(
+                subject=subject,
+                namespace=namespace,
+                group_name=group_name,
+                name=body.name,
+                format_type=body.format,
+                auto_offset_reset=body.auto_offset_reset,
+                auto_commit_enable=body.auto_commit_enable,
+                fetch_min_bytes=body.fetch_min_bytes,
+                consumer_request_timeout_ms=(body.consumer_request_timeout_ms),
+            )
+            return self._consumer_response(resp_body, status)
+
+        return await run_in_threadpool(
+            self._serve_consumer,
+            subject,
+            token,
+            namespace,
+            serve,
         )
-        return self._consumer_response(resp_body, status)
 
     async def delete_consumer_instance(
         self,
@@ -487,17 +562,23 @@ class DiasporaService:
         token: str = Header(..., alias='authorization'),
     ) -> Response:
         """Destroy a consumer instance."""
-        if err := self.auth.validate_access_token(subject, token):
-            return JSONResponse(content=err, status_code=401)
-        if err := self._validate_namespace(subject, namespace):
-            return JSONResponse(content=err, status_code=404)
-        resp_body, status = self.consumer_service.delete_consumer(
-            subject=subject,
-            namespace=namespace,
-            group_name=group_name,
-            instance_id=instance_id,
+
+        def serve() -> Response:
+            resp_body, status = self.consumer_service.delete_consumer(
+                subject=subject,
+                namespace=namespace,
+                group_name=group_name,
+                instance_id=instance_id,
+            )
+            return self._consumer_response(resp_body, status)
+
+        return await run_in_threadpool(
+            self._serve_consumer,
+            subject,
+            token,
+            namespace,
+            serve,
         )
-        return self._consumer_response(resp_body, status)
 
     async def subscribe_consumer(
         self,
@@ -510,42 +591,48 @@ class DiasporaService:
         token: str = Header(..., alias='authorization'),
     ) -> Response:
         """Subscribe consumer to a list of topics."""
-        if err := self.auth.validate_access_token(subject, token):
-            return JSONResponse(content=err, status_code=401)
-        if err := self._validate_namespace(subject, namespace):
-            return JSONResponse(content=err, status_code=404)
-        if body.topic_pattern is not None:
-            return JSONResponse(
-                content={
-                    'error_code': 42204,
-                    'message': (
-                        'topic_pattern is not supported; '
-                        'subscribe with a list of topics'
-                    ),
-                },
-                status_code=422,
+
+        def serve() -> Response:
+            if body.topic_pattern is not None:
+                return JSONResponse(
+                    content={
+                        'error_code': 42204,
+                        'message': (
+                            'topic_pattern is not supported; '
+                            'subscribe with a list of topics'
+                        ),
+                    },
+                    status_code=422,
+                )
+            if not body.topics:
+                return JSONResponse(
+                    content={
+                        'error_code': 42204,
+                        'message': 'Must provide a non-empty list of topics',
+                    },
+                    status_code=422,
+                )
+            if err := self._validate_topics_in_namespace(
+                namespace,
+                body.topics,
+            ):
+                return JSONResponse(content=err, status_code=404)
+            resp_body, status = self.consumer_service.subscribe(
+                subject=subject,
+                namespace=namespace,
+                group_name=group_name,
+                instance_id=instance_id,
+                topics=body.topics,
             )
-        if not body.topics:
-            return JSONResponse(
-                content={
-                    'error_code': 42204,
-                    'message': 'Must provide a non-empty list of topics',
-                },
-                status_code=422,
-            )
-        if err := self._validate_topics_in_namespace(
+            return self._consumer_response(resp_body, status)
+
+        return await run_in_threadpool(
+            self._serve_consumer,
+            subject,
+            token,
             namespace,
-            body.topics,
-        ):
-            return JSONResponse(content=err, status_code=404)
-        resp_body, status = self.consumer_service.subscribe(
-            subject=subject,
-            namespace=namespace,
-            group_name=group_name,
-            instance_id=instance_id,
-            topics=body.topics,
+            serve,
         )
-        return self._consumer_response(resp_body, status)
 
     async def get_consumer_subscription(
         self,
@@ -556,17 +643,23 @@ class DiasporaService:
         token: str = Header(..., alias='authorization'),
     ) -> Response:
         """Get the current subscribed list of topics."""
-        if err := self.auth.validate_access_token(subject, token):
-            return JSONResponse(content=err, status_code=401)
-        if err := self._validate_namespace(subject, namespace):
-            return JSONResponse(content=err, status_code=404)
-        resp_body, status = self.consumer_service.get_subscription(
-            subject=subject,
-            namespace=namespace,
-            group_name=group_name,
-            instance_id=instance_id,
+
+        def serve() -> Response:
+            resp_body, status = self.consumer_service.get_subscription(
+                subject=subject,
+                namespace=namespace,
+                group_name=group_name,
+                instance_id=instance_id,
+            )
+            return self._consumer_response(resp_body, status)
+
+        return await run_in_threadpool(
+            self._serve_consumer,
+            subject,
+            token,
+            namespace,
+            serve,
         )
-        return self._consumer_response(resp_body, status)
 
     async def unsubscribe_consumer(
         self,
@@ -577,17 +670,23 @@ class DiasporaService:
         token: str = Header(..., alias='authorization'),
     ) -> Response:
         """Unsubscribe from topics currently subscribed."""
-        if err := self.auth.validate_access_token(subject, token):
-            return JSONResponse(content=err, status_code=401)
-        if err := self._validate_namespace(subject, namespace):
-            return JSONResponse(content=err, status_code=404)
-        resp_body, status = self.consumer_service.unsubscribe(
-            subject=subject,
-            namespace=namespace,
-            group_name=group_name,
-            instance_id=instance_id,
+
+        def serve() -> Response:
+            resp_body, status = self.consumer_service.unsubscribe(
+                subject=subject,
+                namespace=namespace,
+                group_name=group_name,
+                instance_id=instance_id,
+            )
+            return self._consumer_response(resp_body, status)
+
+        return await run_in_threadpool(
+            self._serve_consumer,
+            subject,
+            token,
+            namespace,
+            serve,
         )
-        return self._consumer_response(resp_body, status)
 
     def fetch_consumer_records(
         self,
@@ -597,7 +696,13 @@ class DiasporaService:
         *,
         subject: str = Header(..., alias='subject'),
         token: str = Header(..., alias='authorization'),
-        timeout: int | None = Query(None),
+        timeout: int | None = Query(
+            None,
+            description=(
+                'Milliseconds to wait for records (default 5000). Values '
+                'above 30000 are treated as 30000.'
+            ),
+        ),
         max_bytes: int | None = Query(None),
     ) -> Response:
         """Fetch data for subscribed topics or assigned partitions.
@@ -605,19 +710,22 @@ class DiasporaService:
         Uses def (not async def) so FastAPI runs it in a threadpool,
         avoiding blocking the event loop during consumer.poll().
         """
-        if err := self.auth.validate_access_token(subject, token):
-            return JSONResponse(content=err, status_code=401)
-        if err := self._validate_namespace(subject, namespace):
-            return JSONResponse(content=err, status_code=404)
-        resp_body, status = self.consumer_service.poll_records(
-            subject=subject,
-            namespace=namespace,
-            group_name=group_name,
-            instance_id=instance_id,
-            timeout_ms=timeout or 5000,
-            max_bytes=max_bytes,
-        )
-        return self._consumer_response(resp_body, status)
+
+        def serve() -> Response:
+            resp_body, status = self.consumer_service.poll_records(
+                subject=subject,
+                namespace=namespace,
+                group_name=group_name,
+                instance_id=instance_id,
+                timeout_ms=min(
+                    timeout or DEFAULT_FETCH_TIMEOUT_MS,
+                    MAX_FETCH_TIMEOUT_MS,
+                ),
+                max_bytes=max_bytes,
+            )
+            return self._consumer_response(resp_body, status)
+
+        return self._serve_consumer(subject, token, namespace, serve)
 
     async def commit_consumer_offsets(
         self,
@@ -630,21 +738,27 @@ class DiasporaService:
         token: str = Header(..., alias='authorization'),
     ) -> Response:
         """Commit offsets for the consumer."""
-        if err := self.auth.validate_access_token(subject, token):
-            return JSONResponse(content=err, status_code=401)
-        if err := self._validate_namespace(subject, namespace):
-            return JSONResponse(content=err, status_code=404)
-        offsets = None
-        if body and body.offsets:
-            offsets = [o.model_dump() for o in body.offsets]
-        resp_body, status = self.consumer_service.commit_offsets(
-            subject=subject,
-            namespace=namespace,
-            group_name=group_name,
-            instance_id=instance_id,
-            offsets=offsets,
+
+        def serve() -> Response:
+            offsets = None
+            if body and body.offsets:
+                offsets = [o.model_dump() for o in body.offsets]
+            resp_body, status = self.consumer_service.commit_offsets(
+                subject=subject,
+                namespace=namespace,
+                group_name=group_name,
+                instance_id=instance_id,
+                offsets=offsets,
+            )
+            return self._consumer_response(resp_body, status)
+
+        return await run_in_threadpool(
+            self._serve_consumer,
+            subject,
+            token,
+            namespace,
+            serve,
         )
-        return self._consumer_response(resp_body, status)
 
     async def get_committed_offsets(
         self,
@@ -657,15 +771,19 @@ class DiasporaService:
         token: str = Header(..., alias='authorization'),
     ) -> Response:
         """Get last committed offsets for given partitions."""
-        if err := self.auth.validate_access_token(subject, token):
-            return JSONResponse(content=err, status_code=401)
-        if err := self._validate_namespace(subject, namespace):
-            return JSONResponse(content=err, status_code=404)
+        if err := await run_in_threadpool(
+            self._check_access,
+            subject,
+            token,
+            namespace,
+        ):
+            return err
         # Confluent sends partitions in the GET request body
         raw_body = await request.json()
         req = OffsetsGetRequest(**raw_body)
         partitions = [p.model_dump() for p in req.partitions]
-        resp_body, status = self.consumer_service.get_committed(
+        resp_body, status = await run_in_threadpool(
+            self.consumer_service.get_committed,
             subject=subject,
             namespace=namespace,
             group_name=group_name,
@@ -685,26 +803,32 @@ class DiasporaService:
         token: str = Header(..., alias='authorization'),
     ) -> Response:
         """Manually assign partitions to this consumer."""
-        if err := self.auth.validate_access_token(subject, token):
-            return JSONResponse(content=err, status_code=401)
-        if err := self._validate_namespace(subject, namespace):
-            return JSONResponse(content=err, status_code=404)
-        # Validate topics exist in namespace
-        topics = list({p.topic for p in body.partitions})
-        if err := self._validate_topics_in_namespace(
+
+        def serve() -> Response:
+            # Validate topics exist in namespace
+            topics = list({p.topic for p in body.partitions})
+            if err := self._validate_topics_in_namespace(
+                namespace,
+                topics,
+            ):
+                return JSONResponse(content=err, status_code=404)
+            partitions = [p.model_dump() for p in body.partitions]
+            resp_body, status = self.consumer_service.assign_partitions(
+                subject=subject,
+                namespace=namespace,
+                group_name=group_name,
+                instance_id=instance_id,
+                partitions=partitions,
+            )
+            return self._consumer_response(resp_body, status)
+
+        return await run_in_threadpool(
+            self._serve_consumer,
+            subject,
+            token,
             namespace,
-            topics,
-        ):
-            return JSONResponse(content=err, status_code=404)
-        partitions = [p.model_dump() for p in body.partitions]
-        resp_body, status = self.consumer_service.assign_partitions(
-            subject=subject,
-            namespace=namespace,
-            group_name=group_name,
-            instance_id=instance_id,
-            partitions=partitions,
+            serve,
         )
-        return self._consumer_response(resp_body, status)
 
     async def get_consumer_assignments(
         self,
@@ -715,17 +839,23 @@ class DiasporaService:
         token: str = Header(..., alias='authorization'),
     ) -> Response:
         """Get the list of partitions assigned to this consumer."""
-        if err := self.auth.validate_access_token(subject, token):
-            return JSONResponse(content=err, status_code=401)
-        if err := self._validate_namespace(subject, namespace):
-            return JSONResponse(content=err, status_code=404)
-        resp_body, status = self.consumer_service.get_assignments(
-            subject=subject,
-            namespace=namespace,
-            group_name=group_name,
-            instance_id=instance_id,
+
+        def serve() -> Response:
+            resp_body, status = self.consumer_service.get_assignments(
+                subject=subject,
+                namespace=namespace,
+                group_name=group_name,
+                instance_id=instance_id,
+            )
+            return self._consumer_response(resp_body, status)
+
+        return await run_in_threadpool(
+            self._serve_consumer,
+            subject,
+            token,
+            namespace,
+            serve,
         )
-        return self._consumer_response(resp_body, status)
 
     async def seek_consumer_positions(
         self,
@@ -738,19 +868,25 @@ class DiasporaService:
         token: str = Header(..., alias='authorization'),
     ) -> Response:
         """Override fetch offsets for the next set of records."""
-        if err := self.auth.validate_access_token(subject, token):
-            return JSONResponse(content=err, status_code=401)
-        if err := self._validate_namespace(subject, namespace):
-            return JSONResponse(content=err, status_code=404)
-        offsets = [o.model_dump() for o in body.offsets]
-        resp_body, status = self.consumer_service.seek(
-            subject=subject,
-            namespace=namespace,
-            group_name=group_name,
-            instance_id=instance_id,
-            offsets=offsets,
+
+        def serve() -> Response:
+            offsets = [o.model_dump() for o in body.offsets]
+            resp_body, status = self.consumer_service.seek(
+                subject=subject,
+                namespace=namespace,
+                group_name=group_name,
+                instance_id=instance_id,
+                offsets=offsets,
+            )
+            return self._consumer_response(resp_body, status)
+
+        return await run_in_threadpool(
+            self._serve_consumer,
+            subject,
+            token,
+            namespace,
+            serve,
         )
-        return self._consumer_response(resp_body, status)
 
     async def seek_consumer_beginning(
         self,
@@ -763,19 +899,25 @@ class DiasporaService:
         token: str = Header(..., alias='authorization'),
     ) -> Response:
         """Seek to the first offset for given partitions."""
-        if err := self.auth.validate_access_token(subject, token):
-            return JSONResponse(content=err, status_code=401)
-        if err := self._validate_namespace(subject, namespace):
-            return JSONResponse(content=err, status_code=404)
-        partitions = [p.model_dump() for p in body.partitions]
-        resp_body, status = self.consumer_service.seek_to_beginning(
-            subject=subject,
-            namespace=namespace,
-            group_name=group_name,
-            instance_id=instance_id,
-            partitions=partitions,
+
+        def serve() -> Response:
+            partitions = [p.model_dump() for p in body.partitions]
+            resp_body, status = self.consumer_service.seek_to_beginning(
+                subject=subject,
+                namespace=namespace,
+                group_name=group_name,
+                instance_id=instance_id,
+                partitions=partitions,
+            )
+            return self._consumer_response(resp_body, status)
+
+        return await run_in_threadpool(
+            self._serve_consumer,
+            subject,
+            token,
+            namespace,
+            serve,
         )
-        return self._consumer_response(resp_body, status)
 
     async def seek_consumer_end(
         self,
@@ -788,19 +930,25 @@ class DiasporaService:
         token: str = Header(..., alias='authorization'),
     ) -> Response:
         """Seek to the last offset for given partitions."""
-        if err := self.auth.validate_access_token(subject, token):
-            return JSONResponse(content=err, status_code=401)
-        if err := self._validate_namespace(subject, namespace):
-            return JSONResponse(content=err, status_code=404)
-        partitions = [p.model_dump() for p in body.partitions]
-        resp_body, status = self.consumer_service.seek_to_end(
-            subject=subject,
-            namespace=namespace,
-            group_name=group_name,
-            instance_id=instance_id,
-            partitions=partitions,
+
+        def serve() -> Response:
+            partitions = [p.model_dump() for p in body.partitions]
+            resp_body, status = self.consumer_service.seek_to_end(
+                subject=subject,
+                namespace=namespace,
+                group_name=group_name,
+                instance_id=instance_id,
+                partitions=partitions,
+            )
+            return self._consumer_response(resp_body, status)
+
+        return await run_in_threadpool(
+            self._serve_consumer,
+            subject,
+            token,
+            namespace,
+            serve,
         )
-        return self._consumer_response(resp_body, status)
 
 
 service = DiasporaService()
