@@ -19,6 +19,8 @@ from kafka.errors import KafkaTimeoutError
 from kafka.structs import OffsetAndMetadata
 from kafka.structs import TopicPartition
 
+from tests.live_identity import live_namespace
+from tests.live_identity import permissions_boundary_arn
 from web_service.consumer_service import _encode_value
 from web_service.consumer_service import CONSUMER_OPERATION_TIMEOUT_MS
 from web_service.consumer_service import ConsumerService
@@ -1914,6 +1916,7 @@ def real_web_service() -> Any:
         account_id=account_id or '',
         region=region or '',
         cluster_name=cluster_name or '',
+        permissions_boundary_arn=permissions_boundary_arn(),
     )
     kafka_service = KafkaService(
         bootstrap_servers=os.getenv('DEFAULT_SERVERS'),
@@ -1953,12 +1956,6 @@ def consumer_service_real() -> ConsumerService:
         bootstrap_servers=bootstrap_servers,
         region=region,
     )
-
-
-@pytest.fixture
-def random_subject() -> str:
-    """Generate a random subject for each test."""
-    return f'test-subject-{os.urandom(8).hex()}'
 
 
 @pytest.fixture
@@ -2055,7 +2052,7 @@ def test_create_consumer_instance_real(
     cleanup_consumer_and_user: Any,
 ) -> None:
     """Test create_consumer against real MSK."""
-    namespace = f'ns-{os.urandom(4).hex()}'
+    namespace = live_namespace()
     group_name = f'grp-{os.urandom(4).hex()}'
     instance_name = f'inst-{os.urandom(4).hex()}'
 
@@ -2096,7 +2093,7 @@ def test_create_consumer_conflict_real(
     cleanup_consumer_and_user: Any,
 ) -> None:
     """Test create_consumer conflict (duplicate name) against real MSK."""
-    namespace = f'ns-{os.urandom(4).hex()}'
+    namespace = live_namespace()
     group_name = f'grp-{os.urandom(4).hex()}'
     instance_name = f'inst-{os.urandom(4).hex()}'
 
@@ -2140,7 +2137,7 @@ def test_delete_consumer_real(
     cleanup_consumer_and_user: Any,
 ) -> None:
     """Test delete_consumer against real MSK."""
-    namespace = f'ns-{os.urandom(4).hex()}'
+    namespace = live_namespace()
     group_name = f'grp-{os.urandom(4).hex()}'
     instance_name = f'inst-{os.urandom(4).hex()}'
 

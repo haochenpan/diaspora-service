@@ -21,22 +21,32 @@ jobs:
     uses: ./.github/workflows/unit-tests.yml
 
   # The integration set runs against the live AWS account and MSK cluster,
-  # so it runs only on main, nightly and by hand, one run at a time.
+  # so it runs only on main, nightly and by hand, one run at a time. After
+  # the nightly run it also sweeps what live runs left behind, in the same
+  # job, so a queued run never cancels the sweep or the other way round.
   live:
     name: live
     if: >-
       github.event_name == 'schedule'
       || github.event_name == 'workflow_dispatch'
       || (github.event_name == 'push' && github.ref == 'refs/heads/main')
-    timeout-minutes: 20
+    timeout-minutes: 40
     runs-on: ubuntu-latest
     concurrency:
       group: live-tests
       cancel-in-progress: false
 
     env:
-      AWS_ACCESS_KEY_ID: ${{ secrets.DOCKER_AWS_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.DOCKER_AWS_SECRET_ACCESS_KEY }}
+      # The live tests' own identity when both of its secrets are set,
+      # else the service's. The permissions boundary exists only for the
+      # former.
+      AWS_ACCESS_KEY_ID: ${{ secrets.LIVE_TESTS_AWS_ACCESS_KEY_ID && secrets.LIVE_TESTS_AWS_SECRET_ACCESS_KEY && secrets.LIVE_TESTS_AWS_ACCESS_KEY_ID || secrets.DOCKER_AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.LIVE_TESTS_AWS_ACCESS_KEY_ID && secrets.LIVE_TESTS_AWS_SECRET_ACCESS_KEY || secrets.DOCKER_AWS_SECRET_ACCESS_KEY }}
+      IAM_USER_PERMISSIONS_BOUNDARY_ARN: ${{ secrets.LIVE_TESTS_AWS_ACCESS_KEY_ID && secrets.LIVE_TESTS_AWS_SECRET_ACCESS_KEY && format('arn:aws:iam::{0}:policy/diaspora-test/test-user-boundary', secrets.DOCKER_AWS_ACCOUNT_ID) || '' }}
+      # The tables the tests write; the sweep reads the service's tables.
+      KEYS_TABLE_NAME: test-diaspora-keys-table
+      USERS_TABLE_NAME: test-diaspora-users-table
+      NAMESPACE_TABLE_NAME: test-diaspora-namespace-table
       CLIENT_ID: ${{ secrets.DOCKER_CLIENT_ID }}
       CLIENT_SECRET: ${{ secrets.DOCKER_CLIENT_SECRET }}
       CLIENT_SCOPE: ${{ secrets.DOCKER_CLIENT_SCOPE }}
@@ -79,46 +89,16 @@ jobs:
       # live cluster, so they stop after the install.
       - name: Run live tests
         if: env.CLIENT_ID != ''
+        timeout-minutes: 20
         run: pytest tests/ -m integration -vv -s
 
       - name: Skip live tests
         if: env.CLIENT_ID == ''
         run: echo "::notice::No secrets in this run, so the live tests were skipped."
 
-  # After the nightly live run, whether it passed or failed (not when it
-  # was cancelled), delete the resources live runs left behind. It shares
-  # the live tests' concurrency group, so it never runs beside a live run.
-  sweep:
-    name: sweep
-    needs: live
-    if: ${{ !cancelled() && github.event_name == 'schedule' }}
-    timeout-minutes: 15
-    runs-on: ubuntu-latest
-    concurrency:
-      group: live-tests
-      cancel-in-progress: false
-
-    env:
-      AWS_ACCESS_KEY_ID: ${{ secrets.DOCKER_AWS_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.DOCKER_AWS_SECRET_ACCESS_KEY }}
-      CLIENT_ID: ${{ secrets.DOCKER_CLIENT_ID }}
-      DEFAULT_SERVERS: ${{ secrets.DOCKER_DEFAULT_SERVERS }}
-      AWS_ACCOUNT_REGION: ${{ secrets.DOCKER_AWS_ACCOUNT_REGION }}
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Set up Python ${{ env.PYTHON_VERSION }}
-        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Install Packages
-        run: |
-          python -m pip install --upgrade pip setuptools
-          python -m pip install -e .
-
+      # After the nightly live run, whether it passed or failed (not when
+      # it was cancelled), delete the resources live runs left behind.
       - name: Delete leftover test resources
-        if: env.CLIENT_ID != ''
+        if: ${{ !cancelled() && github.event_name == 'schedule' && env.CLIENT_ID != '' }}
+        timeout-minutes: 15
         run: python scripts/sweep_test_resources.py --apply

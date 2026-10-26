@@ -74,6 +74,9 @@ class DiasporaService:
             account_id=account_id,
             region=region,
             cluster_name=cluster_name,
+            permissions_boundary_arn=os.getenv(
+                'IAM_USER_PERMISSIONS_BOUNDARY_ARN',
+            ),
         )
 
         kafka_service = KafkaService(

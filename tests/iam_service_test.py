@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 
+from tests.live_identity import permissions_boundary_arn
 from web_service.services import IAMService
 
 # ============================================================================
@@ -58,13 +59,8 @@ def iam_service() -> IAMService:
         account_id=account_id or '',
         region=region or '',
         cluster_name=cluster_name or '',
+        permissions_boundary_arn=permissions_boundary_arn(),
     )
-
-
-@pytest.fixture
-def random_subject() -> str:
-    """Generate a random subject for each test."""
-    return f'test-subject-{os.urandom(8).hex()}'
 
 
 @pytest.fixture
