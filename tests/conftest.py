@@ -22,6 +22,13 @@ LIVE_TEST_MODULES = frozenset(
 )
 
 _NETWORK_FAMILIES = (socket.AF_INET, socket.AF_INET6)
+_LOOKUPS = (
+    'getaddrinfo',
+    'gethostbyname',
+    'gethostbyname_ex',
+    'gethostbyaddr',
+    'getnameinfo',
+)
 
 
 # Configure pytest to ignore deprecation warnings from external libraries
@@ -88,12 +95,13 @@ def _block_network_outside_integration(
             raise _refuse(f'connect to {address!r}')
         return real_connect_ex(sock, address)
 
-    def _getaddrinfo(host: Any, *args: Any, **kwargs: Any) -> Any:
+    def _lookup(host: Any, *args: Any, **kwargs: Any) -> Any:
         raise _refuse(f'DNS lookup of {host!r}')
 
     monkeypatch.setattr(socket.socket, 'connect', _connect)
     monkeypatch.setattr(socket.socket, 'connect_ex', _connect_ex)
-    monkeypatch.setattr(socket, 'getaddrinfo', _getaddrinfo)
+    for name in _LOOKUPS:
+        monkeypatch.setattr(socket, name, _lookup)
     yield
     if attempts:
         pytest.fail(
