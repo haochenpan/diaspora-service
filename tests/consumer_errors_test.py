@@ -13,7 +13,9 @@ import json
 import threading
 import time
 from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
+from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 from unittest.mock import patch
 
@@ -22,6 +24,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 from kafka import KafkaConsumer
+from kafka.client_async import KafkaClient
 from kafka.errors import BrokerNotAvailableError
 from kafka.errors import CommitFailedError
 from kafka.errors import CoordinatorNotAvailableError
@@ -35,16 +38,23 @@ from kafka.errors import SaslAuthenticationFailedError
 from kafka.errors import ThrottlingQuotaExceededError
 from kafka.errors import TopicAuthorizationFailedError
 from kafka.errors import UnknownTopicOrPartitionError
-from kafka.protocol.commit import OffsetCommitRequest
+from kafka.errors import UnsupportedVersionError
+from kafka.future import Future
+from kafka.protocol.commit import OffsetCommitResponse
+from kafka.structs import OffsetAndMetadata
 from kafka.structs import TopicPartition
+from starlette.responses import JSONResponse
 
 from web_service import main
+from web_service.consumer_records import FetchReply
 from web_service.consumer_routes import MAX_BODY_BYTES
 from web_service.consumer_service import FETCH_MAX_BYTES
+from web_service.consumer_service import InstanceLock
 from web_service.consumer_service import kafka_failure
 from web_service.consumer_service import MAX_INSTANCES
 from web_service.consumer_service import MAX_INSTANCES_PER_SUBJECT
 from web_service.consumer_service import MAX_PARTITION_FETCH_BYTES
+from web_service.consumer_service import REPLY_MAX_BYTES
 from web_service.main import DiasporaService
 
 SUBJECT = '123e4567-e89b-12d3-a456-426614174000'
@@ -170,7 +180,7 @@ def test_a_subject_may_hold_eight_instances(client: TestClient) -> None:
     assert _create(client, 'one-more').status_code == 200
 
 
-def test_the_service_holds_at_most_100_instances(
+def test_the_service_holds_at_most_16_instances(
     service: DiasporaService,
 ) -> None:
     consumers = service.consumer_service
@@ -189,7 +199,7 @@ def test_the_service_holds_at_most_100_instances(
     body, status = consumers.create_consumer('another', NAMESPACE, GROUP)
     assert status == 429
     assert body['error_code'] == 42901
-    assert 'The service holds 100 consumer instances' in body['message']
+    assert 'The service holds 16 consumer instances' in body['message']
 
 
 def test_an_instance_being_built_counts_against_the_limit(
@@ -368,62 +378,6 @@ async def test_lifespan_sets_the_shared_threadpool(
             assert limiter.total_tokens == main.SHARED_THREADS
 
 
-async def test_fetches_run_on_their_own_limiter(
-    service: DiasporaService,
-) -> None:
-    """At most FETCH_MAX_CONCURRENT fetches poll at once; others wait."""
-    running = 0
-    most = 0
-    lock = threading.Lock()
-    turns = threading.Semaphore(0)
-
-    def poll(**kwargs: Any) -> tuple[list[Any], int]:
-        nonlocal running, most
-        with lock:
-            running += 1
-            most = max(most, running)
-        turns.acquire(timeout=5)
-        with lock:
-            running -= 1
-        return [], 200
-
-    count = main.FETCH_MAX_CONCURRENT + 3
-    transport = httpx.ASGITransport(app=service.app)
-    with patch.object(
-        service.consumer_service,
-        'poll_records',
-        side_effect=poll,
-    ):
-        async with httpx.AsyncClient(
-            transport=transport,
-            base_url='http://test',
-        ) as client:
-            fetches = [
-                asyncio.create_task(
-                    client.get(f'{_inst()}/records', headers=HEADERS),
-                )
-                for _ in range(count)
-            ]
-            deadline = time.monotonic() + 5
-            while running < main.FETCH_MAX_CONCURRENT and (
-                time.monotonic() < deadline
-            ):
-                await asyncio.sleep(0.01)
-            await asyncio.sleep(0.2)
-            assert running == main.FETCH_MAX_CONCURRENT
-            # The shared pool still serves other routes meanwhile
-            other = await client.get(
-                f'{_inst("none")}/assignments',
-                headers=HEADERS,
-            )
-            assert other.status_code == 404
-            for _ in range(count):
-                turns.release()
-            responses = await asyncio.gather(*fetches)
-    assert most == main.FETCH_MAX_CONCURRENT
-    assert [r.status_code for r in responses] == [200] * count
-
-
 # ============================================================================
 # Errors: shape and client mistakes
 # ============================================================================
@@ -511,6 +465,7 @@ def test_unhandled_error_hides_its_text(
     service: DiasporaService,
     client: TestClient,
 ) -> None:
+    _create(client)
     with patch.object(
         service.consumer_service,
         'get_assignments',
@@ -539,7 +494,7 @@ def test_instance_not_found_is_404(client: TestClient) -> None:
     assert response.status_code == 404
     assert response.json() == {
         'error_code': 40403,
-        'message': 'Consumer instance not found',
+        'message': 'Consumer instance not found.',
     }
 
 
@@ -707,52 +662,6 @@ def test_partition_other_than_0_is_404(
     assert response.json()['error_code'] == 40402
 
 
-def test_commit_sends_offsets_kafka_python_can_encode(
-    service: DiasporaService,
-    client: TestClient,
-) -> None:
-    """The offsets committed encode in kafka-python's OffsetCommitRequest.
-
-    MSK's Kafka 3.8 takes version 7, the highest kafka-python sends, which
-    needs an integer leader epoch and a string metadata.
-    """
-    _create(client)
-    _send(
-        client,
-        'POST',
-        f'{_inst()}/assignments',
-        {'partitions': [{'topic': 't1', 'partition': 0}]},
-    )
-    consumer = _consumer(service)
-    with patch.object(
-        consumer._coordinator,
-        'commit_offsets_sync',
-    ) as commit:
-        response = _send(
-            client,
-            'POST',
-            f'{_inst()}/offsets',
-            {'offsets': [{'topic': 't1', 'partition': 0, 'offset': 5}]},
-        )
-    assert response.status_code == 200
-    ((offsets,), _) = commit.call_args
-    request = OffsetCommitRequest[7](
-        'group',
-        1,
-        'member',
-        None,
-        [
-            (
-                tp.topic,
-                [(tp.partition, o.offset, o.leader_epoch, o.metadata)],
-            )
-            for tp, o in offsets.items()
-        ],
-    )
-    assert request.encode()
-    assert offsets[_kafka_tp()].offset == 5
-
-
 def test_commit_failed_is_409(
     service: DiasporaService,
     client: TestClient,
@@ -842,21 +751,94 @@ def test_broker_unreachable_at_create_is_503(
 
 
 @pytest.mark.parametrize(
-    'body',
+    ('body', 'message'),
     (
-        {'fetch.min.bytes': 'many'},
-        # kafka-python refuses a request timeout under its fetch wait
-        {'consumer.request.timeout.ms': '100'},
+        (
+            {'auto.offset.reset': 'smallest'},
+            'auto.offset.reset must be earliest, latest or none',
+        ),
+        (
+            {'auto.offset.reset': 'Earliest'},
+            'auto.offset.reset must be earliest, latest or none',
+        ),
+        (
+            {'auto.commit.enable': 'yes'},
+            'auto.commit.enable must be true or false',
+        ),
+        (
+            {'fetch.min.bytes': 'many'},
+            'fetch.min.bytes must be a whole number of at least 0',
+        ),
+        (
+            {'fetch.min.bytes': -1},
+            'fetch.min.bytes must be a whole number of at least 0',
+        ),
+        (
+            {'consumer.request.timeout.ms': '-5'},
+            'consumer.request.timeout.ms must be a whole number of at least 0',
+        ),
+        (
+            {'consumer.request.timeout.ms': 'soon'},
+            'consumer.request.timeout.ms must be a whole number of at least 0',
+        ),
     ),
 )
 def test_invalid_consumer_config_is_422(
     client: TestClient,
+    built: list[dict[str, Any]],
     body: dict[str, Any],
+    message: str,
 ) -> None:
+    """Each setting is checked as Confluent checks it, before any build."""
     response = _create(client, **body)
     assert response.status_code == 422
-    assert response.json()['error_code'] == 42204
+    assert response.json() == {
+        'error_code': 42204,
+        'message': f'Invalid consumer configuration: {message}',
+    }
+    assert built == []
     # The name is free again
+    assert _create(client).status_code == 200
+
+
+@pytest.mark.parametrize(
+    'body',
+    (
+        {'auto.offset.reset': 'none', 'auto.commit.enable': 'TRUE'},
+        {'fetch.min.bytes': 1024, 'consumer.request.timeout.ms': 2000},
+        {'fetch.min.bytes': '1024', 'consumer.request.timeout.ms': '2000'},
+    ),
+)
+def test_valid_consumer_config_is_accepted(
+    client: TestClient,
+    body: dict[str, Any],
+) -> None:
+    assert _create(client, **body).status_code == 200
+
+
+def test_half_built_consumer_is_closed(
+    client: TestClient,
+    built: list[dict[str, Any]],
+) -> None:
+    """A KafkaConsumer that raises after building its client closes it."""
+    closed: list[Any] = []
+    real_close = KafkaClient.close
+
+    def close(self: KafkaClient, *args: Any, **kwargs: Any) -> None:
+        closed.append(self)
+        real_close(self, *args, **kwargs)
+
+    with (
+        patch.object(KafkaClient, 'close', close),
+        patch(
+            'kafka.consumer.group.ConsumerCoordinator',
+            side_effect=RuntimeError('late failure'),
+        ),
+    ):
+        response = _create(client)
+    assert response.status_code == 500
+    assert len(built) == 1
+    assert len(closed) == 1
     assert _create(client).status_code == 200
 
 
@@ -876,8 +858,8 @@ def test_schema_formats_are_refused(
     assert response.json() == {
         'error_code': 422,
         'message': (
-            f'body.format: format {fmt} needs a schema registry; Octopus '
-            'runs no schema registry, so use binary or json'
+            'body.format: avro, jsonschema and protobuf need a schema '
+            'registry, which Octopus does not run; use binary or json'
         ),
     }
     assert built == []
@@ -888,7 +870,7 @@ def test_unknown_format_is_refused(client: TestClient) -> None:
     assert response.status_code == 422
     assert response.json() == {
         'error_code': 422,
-        'message': 'body.format: Invalid format type xml; use binary or json',
+        'message': 'body.format: Invalid format type; use binary or json',
     }
 
 
@@ -905,3 +887,653 @@ def test_binary_and_json_are_accepted_in_any_case(
     assert _create(client, format=fmt).status_code == 200
     key = (SUBJECT, NAMESPACE, GROUP, 'i1')
     assert service.consumer_service._consumers[key].format_type == stored
+
+
+# ============================================================================
+# Fetches: fairness, waits and reply size
+# ============================================================================
+
+
+def _subject(i: int) -> str:
+    return f'00000000-0000-0000-0000-{i:012d}'
+
+
+def _headers(subject: str) -> dict[str, str]:
+    return {**HEADERS, 'subject': subject}
+
+
+def _records(subject: str, name: str, query: str = '') -> str:
+    return f'{BASE}/{GROUP}/instances/{name}/records{query}'
+
+
+class _Blocked:
+    """A fetch_records that blocks until released, counting its callers."""
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.running = 0
+        self.most = 0
+        self.calls: list[dict[str, Any]] = []
+        self.release = threading.Event()
+
+    def __call__(self, *args: Any, **kwargs: Any) -> tuple[FetchReply, int]:
+        with self.lock:
+            self.running += 1
+            self.most = max(self.most, self.running)
+            self.calls.append(kwargs)
+        self.release.wait(timeout=10)
+        with self.lock:
+            self.running -= 1
+        return FetchReply([]), 200
+
+    async def until_running(self, count: int) -> None:
+        deadline = time.monotonic() + 5
+        while self.running < count and time.monotonic() < deadline:
+            await asyncio.sleep(0.01)
+        assert self.running == count
+
+
+def _instances(service: DiasporaService, subjects: int) -> None:
+    """Two instances, a and b, for each of the first subjects."""
+    for i in range(subjects):
+        for name in ('a', 'b'):
+            _, status = service.consumer_service.create_consumer(
+                _subject(i),
+                NAMESPACE,
+                GROUP,
+                name=name,
+            )
+            assert status == 200
+
+
+def _client(service: DiasporaService) -> httpx.AsyncClient:
+    return httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=service.app),
+        base_url='http://test',
+        timeout=30,
+    )
+
+
+async def test_fetches_take_one_of_the_slots(service: DiasporaService) -> None:
+    """At most FETCH_MAX_CONCURRENT fetches run; the others wait a turn."""
+    slots = main.FETCH_MAX_CONCURRENT
+    count = slots + 3
+    _instances(service, subjects=(count + 1) // 2)
+    blocked = _Blocked()
+    with patch.object(
+        service.consumer_service,
+        'fetch_records',
+        side_effect=blocked,
+    ):
+        async with _client(service) as client:
+            fetches = [
+                asyncio.create_task(
+                    client.get(
+                        _records(_subject(i // 2), 'ab'[i % 2]),
+                        params={'timeout': 10000},
+                        headers=_headers(_subject(i // 2)),
+                    ),
+                )
+                for i in range(count)
+            ]
+            await blocked.until_running(slots)
+            await asyncio.sleep(0.2)
+            assert blocked.running == slots
+            # The shared pool still serves other routes meanwhile
+            other = await client.get(
+                f'{_inst("none")}/assignments',
+                headers=HEADERS,
+            )
+            assert other.status_code == 404
+            blocked.release.set()
+            responses = await asyncio.gather(*fetches)
+    assert blocked.most == slots
+    assert [r.status_code for r in responses] == [200] * count
+
+
+async def test_a_subject_may_run_two_fetches(service: DiasporaService) -> None:
+    """A third fetch by one subject is refused at once, without a poll."""
+    _instances(service, subjects=1)
+    service.consumer_service.create_consumer(
+        _subject(0),
+        NAMESPACE,
+        GROUP,
+        name='c',
+    )
+    blocked = _Blocked()
+    headers = _headers(_subject(0))
+    with patch.object(
+        service.consumer_service,
+        'fetch_records',
+        side_effect=blocked,
+    ):
+        async with _client(service) as client:
+            running = [
+                asyncio.create_task(
+                    client.get(_records(_subject(0), name), headers=headers),
+                )
+                for name in ('a', 'b')
+            ]
+            await blocked.until_running(main.FETCH_MAX_PER_SUBJECT)
+            started = time.monotonic()
+            third = await client.get(
+                _records(_subject(0), 'c'),
+                headers=headers,
+            )
+            assert time.monotonic() - started < 1
+            # Another subject is not held back
+            other = asyncio.create_task(
+                client.get(
+                    _records(_subject(1), 'a'),
+                    headers=_headers(_subject(1)),
+                ),
+            )
+            blocked.release.set()
+            await asyncio.gather(*running)
+    assert third.status_code == 429
+    assert third.headers['retry-after'] == '1'
+    assert third.json() == {
+        'error_code': 42901,
+        'message': (
+            'You have 2 fetches in progress, the most one user may; retry '
+            'when one finishes'
+        ),
+    }
+    assert len(blocked.calls) == 2
+    assert (await other).status_code == 404
+
+
+async def test_a_slot_wait_is_bounded_by_the_timeout(
+    service: DiasporaService,
+) -> None:
+    """A fetch that finds no slot within its timeout gets 429, unpolled."""
+    slots = main.FETCH_MAX_CONCURRENT
+    _instances(service, subjects=slots // 2 + 1)
+    blocked = _Blocked()
+    with patch.object(
+        service.consumer_service,
+        'fetch_records',
+        side_effect=blocked,
+    ):
+        async with _client(service) as client:
+            hogs = [
+                asyncio.create_task(
+                    client.get(
+                        _records(_subject(i // 2), 'ab'[i % 2]),
+                        headers=_headers(_subject(i // 2)),
+                    ),
+                )
+                for i in range(slots)
+            ]
+            await blocked.until_running(slots)
+            late = _subject(slots // 2)
+            started = time.monotonic()
+            refused = await client.get(
+                _records(late, 'a'),
+                params={'timeout': 300},
+                headers=_headers(late),
+            )
+            waited = time.monotonic() - started
+            blocked.release.set()
+            await asyncio.gather(*hogs)
+    assert refused.status_code == 429
+    assert refused.headers['retry-after'] == '1'
+    assert refused.json()['error_code'] == 42901
+    assert 0.25 < waited < 1.5
+    assert len(blocked.calls) == slots
+
+
+async def test_the_slot_wait_comes_off_the_poll(
+    service: DiasporaService,
+) -> None:
+    """A fetch that waited for a slot polls only for what is left."""
+    slots = main.FETCH_MAX_CONCURRENT
+    _instances(service, subjects=slots // 2 + 1)
+    blocked = _Blocked()
+    with patch.object(
+        service.consumer_service,
+        'fetch_records',
+        side_effect=blocked,
+    ):
+        async with _client(service) as client:
+            hogs = [
+                asyncio.create_task(
+                    client.get(
+                        _records(_subject(i // 2), 'ab'[i % 2]),
+                        headers=_headers(_subject(i // 2)),
+                    ),
+                )
+                for i in range(slots)
+            ]
+            await blocked.until_running(slots)
+            late = _subject(slots // 2)
+            waiting = asyncio.create_task(
+                client.get(
+                    _records(late, 'a'),
+                    params={'timeout': 3000},
+                    headers=_headers(late),
+                ),
+            )
+            await asyncio.sleep(1)
+            blocked.release.set()
+            await asyncio.gather(*hogs)
+            assert (await waiting).status_code == 200
+    late_call = blocked.calls[-1]
+    assert 1000 < 3000 - late_call['timeout_ms'] < 2000
+
+
+async def test_a_busy_or_missing_instance_is_answered_at_once(
+    service: DiasporaService,
+) -> None:
+    """Neither waits for the instance's lock nor for a slot."""
+    _instances(service, subjects=1)
+    managed = service.consumer_service._consumers[
+        (_subject(0), NAMESPACE, GROUP, 'a')
+    ]
+    managed.lock.acquire()
+    try:
+        async with _client(service) as client:
+            started = time.monotonic()
+            busy = await client.get(
+                _records(_subject(0), 'a'),
+                headers=_headers(_subject(0)),
+            )
+            missing = await client.get(
+                _records(_subject(0), 'none'),
+                headers=_headers(_subject(0)),
+            )
+            assert time.monotonic() - started < 1
+    finally:
+        managed.lock.release()
+    assert (busy.status_code, busy.json()['error_code']) == (409, 40904)
+    assert (missing.status_code, missing.json()['error_code']) == (404, 40403)
+
+
+async def test_a_fetch_whose_client_left_does_not_poll(
+    service: DiasporaService,
+) -> None:
+    _instances(service, subjects=1)
+    request = MagicMock()
+    request.is_disconnected = AsyncMock(return_value=True)
+    with patch.object(service.consumer_service, 'fetch_records') as fetch:
+        response = await service.fetch_consumer_records(
+            NAMESPACE,
+            GROUP,
+            'a',
+            request=request,
+            subject=_subject(0),
+            token=HEADERS['authorization'],
+            timeout=None,
+            max_bytes=None,
+        )
+    fetch.assert_not_called()
+    assert response.status_code == 400
+    # The instance and the slot are free again
+    key = (_subject(0), NAMESPACE, GROUP, 'a')
+    assert not service.consumer_service._consumers[key].lock.locked()
+    assert service.fetch_slots.borrowed_tokens == 0
+    assert service.fetching == {}
+
+
+@pytest.mark.parametrize(
+    ('query', 'created', 'wait_ms', 'max_records'),
+    (
+        ('', {}, 5000, None),
+        ('?timeout=-1', {}, 5000, None),
+        ('?timeout=0', {}, 5000, None),
+        ('?timeout=-1', {'consumer.request.timeout.ms': 1200}, 1200, None),
+        ('', {'consumer.request.timeout.ms': '90000'}, 30000, None),
+        # The instance's wait does not cap a fetch's own timeout
+        ('?timeout=4000', {'consumer.request.timeout.ms': 1200}, 4000, None),
+        ('?max_bytes=0', {}, 5000, None),
+        ('?max_bytes=-1', {}, 5000, None),
+        ('?max_bytes=7', {}, 5000, 7),
+    ),
+)
+def test_fetch_waits_and_record_counts(
+    service: DiasporaService,
+    client: TestClient,
+    *,
+    query: str,
+    created: dict[str, Any],
+    wait_ms: int,
+    max_records: int | None,
+) -> None:
+    """Values Confluent takes as its defaults do here too, rather than 500."""
+    assert _create(client, **created).status_code == 200
+    _send(
+        client,
+        'POST',
+        f'{_inst()}/assignments',
+        {'partitions': [{'topic': 't1', 'partition': 0}]},
+    )
+    with patch.object(_consumer(service), 'poll', return_value={}) as poll:
+        response = client.get(f'{_inst()}/records{query}', headers=HEADERS)
+    assert response.status_code == 200
+    assert response.json() == []
+    kwargs = poll.call_args.kwargs
+    assert wait_ms - 500 < kwargs['timeout_ms'] <= wait_ms
+    assert kwargs['max_records'] == max_records
+
+
+async def test_requests_waiting_for_an_instance_hold_no_thread(
+    service: DiasporaService,
+) -> None:
+    """Requests queued on a busy instance wait on the event loop."""
+    _instances(service, subjects=2)
+    busy = service.consumer_service._consumers[
+        (_subject(0), NAMESPACE, GROUP, 'a')
+    ]
+    busy.lock.acquire()
+    threads = anyio.to_thread.current_default_thread_limiter()
+    async with _client(service) as client:
+        waiting = [
+            asyncio.create_task(
+                client.get(
+                    f'{BASE}/{GROUP}/instances/a/assignments',
+                    headers=_headers(_subject(0)),
+                ),
+            )
+            for _ in range(60)
+        ]
+        await asyncio.sleep(0.5)
+        assert threads.borrowed_tokens == 0
+        started = time.monotonic()
+        other = await client.get(
+            f'{BASE}/{GROUP}/instances/a/assignments',
+            headers=_headers(_subject(1)),
+        )
+        assert time.monotonic() - started < 1
+        assert other.status_code == 200
+        busy.lock.release()
+        replies = await asyncio.gather(*waiting)
+    assert [r.status_code for r in replies] == [200] * 60
+
+
+async def test_instance_lock_wakes_a_loop_waiter_from_a_thread() -> None:
+    lock = InstanceLock()
+    assert lock.acquire(blocking=False)
+    threading.Timer(0.05, lock.release).start()
+    started = time.monotonic()
+    assert await lock.acquire_async(5)
+    assert time.monotonic() - started < 1
+    assert not await lock.acquire_async(0.05)
+    lock.release()
+    assert lock.acquire(timeout=0.1)
+    lock.release()
+
+
+def test_reaper_skips_an_instance_a_request_holds(
+    service: DiasporaService,
+) -> None:
+    consumers = service.consumer_service
+    _instances(service, subjects=1)
+    key = (_subject(0), NAMESPACE, GROUP, 'a')
+    managed = consumers._consumers[key]
+    managed.last_access = 0
+    managed.lock.acquire()
+    try:
+        started = time.monotonic()
+        consumers._reap_once()
+        # It does not wait for the lock either
+        assert time.monotonic() - started < 1
+        assert key in consumers._consumers
+    finally:
+        managed.lock.release()
+    consumers._reap_once()
+    assert key not in consumers._consumers
+
+
+def _fetched(
+    *values: bytes | None,
+    topic: str = 't1',
+) -> dict[TopicPartition, list[Any]]:
+    record = MagicMock
+    return {
+        _kafka_tp(topic): [
+            record(key=None, value=v, offset=i) for i, v in enumerate(values)
+        ],
+    }
+
+
+@pytest.mark.parametrize('fmt', ('binary', 'json'))
+@pytest.mark.parametrize(
+    'value',
+    (
+        b'plain text',
+        b'\x00\x01\x1f quotes " and \\ \n\t\r\x08\x0c',
+        'h\u00e9llo \u2028 \U0001f600 \u0000'.encode(),
+        b'\x80\xff not utf-8',
+        b'',
+        None,
+        bytes(range(256)) * 300,
+        ('\u00e9' * 40000 + '\U0001f600').encode(),
+    ),
+)
+def test_reply_is_what_jsonresponse_writes(
+    service: DiasporaService,
+    client: TestClient,
+    fmt: str,
+    value: bytes | None,
+) -> None:
+    """The reply's bytes and size match JSONResponse for the same records."""
+    _create(client, format=fmt)
+    managed = service.consumer_service._consumers[
+        (SUBJECT, NAMESPACE, GROUP, 'i1')
+    ]
+    reply = service.consumer_service._reply(
+        NAMESPACE,
+        managed,
+        _fetched(value, b'second', topic='t1'),
+    )
+    expected = JSONResponse([r.as_dict() for r in reply.records]).body
+    assert reply.body() == expected
+    assert reply.size == len(expected)
+    assert b''.join(reply.chunks()) == expected
+
+
+def test_reply_stops_at_its_cap_and_rewinds(
+    service: DiasporaService,
+    client: TestClient,
+) -> None:
+    """Past REPLY_MAX_BYTES the records left out are fetched again."""
+    _create(client)
+    _send(
+        client,
+        'POST',
+        f'{_inst()}/assignments',
+        {
+            'partitions': [
+                {'topic': 't1', 'partition': 0},
+                {'topic': 't2', 'partition': 0},
+            ],
+        },
+    )
+    managed = service.consumer_service._consumers[
+        (SUBJECT, NAMESPACE, GROUP, 'i1')
+    ]
+    # Each record is about 0.7 MiB as base64
+    big = b'x' * (512 * 1024)
+    raw = {**_fetched(big, big, big, big), **_fetched(big, topic='t2')}
+    with patch.object(managed.consumer, 'seek') as seek:
+        reply = service.consumer_service._reply(NAMESPACE, managed, raw)
+    assert [(r.topic, r.offset) for r in reply.records] == [
+        ('t1', 0),
+        ('t1', 1),
+    ]
+    assert reply.size <= REPLY_MAX_BYTES
+    assert sorted(c.args for c in seek.call_args_list) == [
+        (_kafka_tp('t1'), 2),
+        (_kafka_tp('t2'), 0),
+    ]
+
+
+def test_a_large_first_record_is_returned_alone(
+    service: DiasporaService,
+    client: TestClient,
+) -> None:
+    """The first record goes out however large, so a fetch always moves on."""
+    _create(client, format='json')
+    _send(
+        client,
+        'POST',
+        f'{_inst()}/assignments',
+        {'partitions': [{'topic': 't1', 'partition': 0}]},
+    )
+    # Control characters take six bytes each as JSON
+    value = b'\x00' * (1024 * 1024)
+    raw = _fetched(value, b'next')
+    with (
+        patch.object(_consumer(service), 'poll', return_value=raw),
+        patch.object(_consumer(service), 'seek') as seek,
+    ):
+        response = client.get(f'{_inst()}/records', headers=HEADERS)
+    assert response.status_code == 200
+    # Written a piece at a time, so it has no length
+    assert 'content-length' not in response.headers
+    assert response.json() == [
+        {
+            'topic': 't1',
+            'key': None,
+            'value': '\x00' * (1024 * 1024),
+            'partition': 0,
+            'offset': 0,
+        },
+    ]
+    assert len(response.content) > REPLY_MAX_BYTES
+    seek.assert_called_once_with(_kafka_tp(), 1)
+
+
+# ============================================================================
+# Commits, through kafka-python's own request builder
+# ============================================================================
+
+
+@pytest.fixture
+def kafka38(built: list[dict[str, Any]]) -> Iterator[None]:
+    """Consumers that take the broker for Kafka 3.8, as MSK's is."""
+    with patch(
+        'web_service.consumer_service.KafkaConsumer',
+        side_effect=lambda **config: KafkaConsumer(
+            **config,
+            api_version=(3, 8, 0),
+        ),
+    ):
+        yield
+
+
+@contextmanager
+def _commits(service: DiasporaService) -> Iterator[list[Any]]:
+    """Capture the OffsetCommit requests the consumer sends, as encoded.
+
+    Only the network is stubbed: the coordinator is known and ready, and
+    the client encodes each request, as BrokerConnection.send does, and
+    answers it with success.
+    """
+    consumer = _consumer(service)
+    coordinator, kafka_client = consumer._coordinator, consumer._client
+    sent: list[Any] = []
+
+    def send(node_id: int, request: Any, **kwargs: Any) -> Future:
+        request.encode()
+        sent.append(request)
+        topics = [
+            (topic, [(p[0], 0) for p in parts])
+            for topic, parts in request.topics
+        ]
+        return Future().success(
+            OffsetCommitResponse[request.API_VERSION](0, topics),
+        )
+
+    with (
+        patch.object(
+            coordinator,
+            'ensure_coordinator_ready',
+            return_value=True,
+        ),
+        patch.object(coordinator, 'coordinator_unknown', return_value=False),
+        patch.object(coordinator, 'coordinator', return_value=0),
+        patch.object(kafka_client, 'ready', return_value=True),
+        patch.object(kafka_client, 'send', side_effect=send),
+        patch.object(kafka_client, 'poll', return_value=[]),
+    ):
+        yield sent
+
+
+def test_commit_of_an_offset_commits_the_next(
+    service: DiasporaService,
+    client: TestClient,
+    kafka38: None,
+) -> None:
+    """As Confluent's REST Proxy does, offset N commits N + 1."""
+    _create(client)
+    _send(
+        client,
+        'POST',
+        f'{_inst()}/assignments',
+        {'partitions': [{'topic': 't1', 'partition': 0}]},
+    )
+    with _commits(service) as sent:
+        response = _send(
+            client,
+            'POST',
+            f'{_inst()}/offsets',
+            {'offsets': [{'topic': 't1', 'partition': 0, 'offset': 5}]},
+        )
+    assert response.status_code == 200
+    (request,) = sent
+    assert request.API_VERSION == 7
+    assert request.topics == [(f'{NAMESPACE}.t1', [(0, 6, -1, '')])]
+
+
+def test_commit_of_everything_commits_the_positions(
+    service: DiasporaService,
+    client: TestClient,
+    kafka38: None,
+) -> None:
+    """A commit without offsets commits the next records, not one more."""
+    _create(client)
+    _send(
+        client,
+        'POST',
+        f'{_inst()}/assignments',
+        {'partitions': [{'topic': 't1', 'partition': 0}]},
+    )
+    _send(
+        client,
+        'POST',
+        f'{_inst()}/positions',
+        {'offsets': [{'topic': 't1', 'partition': 0, 'offset': 6}]},
+    )
+    with _commits(service) as sent:
+        response = client.post(f'{_inst()}/offsets', headers=HEADERS)
+    assert response.status_code == 200
+    (request,) = sent
+    assert request.topics == [(f'{NAMESPACE}.t1', [(0, 6, -1, '')])]
+
+
+def test_committed_offset_is_the_next_record(
+    service: DiasporaService,
+    client: TestClient,
+) -> None:
+    """After a commit of offset 5, GET offsets answers 6, as Confluent's."""
+    _create(client)
+    consumer = _consumer(service)
+    with patch.object(
+        consumer._coordinator,
+        'fetch_committed_offsets',
+        return_value={_kafka_tp(): OffsetAndMetadata(6, '', -1)},
+    ):
+        response = _send(
+            client,
+            'GET',
+            f'{_inst()}/offsets',
+            {'partitions': [{'topic': 't1', 'partition': 0}]},
+        )
+    assert response.status_code == 200
+    assert response.json()['offsets'][0]['offset'] == 6
+
+
+def test_unsupported_version_is_400(client: TestClient) -> None:
+    body, status = kafka_failure(UnsupportedVersionError(), 'commit offsets')
+    assert (status, body['error_code']) == (400, 40002)

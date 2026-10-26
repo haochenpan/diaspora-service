@@ -22,7 +22,7 @@ from kafka.structs import TopicPartition
 
 from tests.live_identity import live_namespace
 from tests.live_identity import permissions_boundary_arn
-from web_service.consumer_service import _encode_value
+from web_service.consumer_records import EncodedField
 from web_service.consumer_service import CONSUMER_OPERATION_TIMEOUT_MS
 from web_service.consumer_service import ConsumerService
 from web_service.consumer_service import ManagedConsumer
@@ -136,32 +136,32 @@ def populated_service_json(
 
 
 def test_encode_value_binary_format() -> None:
-    """Test _encode_value with binary format returns base64."""
-    result = _encode_value(b'hello', 'binary')
+    """Test EncodedField with binary format returns base64."""
+    result = EncodedField.of(b'hello', 'binary').decoded()
     assert result == base64.b64encode(b'hello').decode('ascii')
 
 
 def test_encode_value_json_format_utf8() -> None:
-    """Test _encode_value with json format returns UTF-8 string."""
-    result = _encode_value(b'{"key": "value"}', 'json')
+    """Test EncodedField with json format returns UTF-8 string."""
+    result = EncodedField.of(b'{"key": "value"}', 'json').decoded()
     assert result == '{"key": "value"}'
 
 
 def test_encode_value_json_format_non_utf8_fallback() -> None:
-    """Test _encode_value with json format falls back to base64."""
+    """Test EncodedField with json format falls back to base64."""
     data = b'\x80\x81\x82'
-    result = _encode_value(data, 'json')
+    result = EncodedField.of(data, 'json').decoded()
     assert result == base64.b64encode(data).decode('ascii')
 
 
 def test_encode_value_none_binary() -> None:
-    """Test _encode_value with None and binary format returns None."""
-    assert _encode_value(None, 'binary') is None
+    """Test EncodedField with None and binary format returns None."""
+    assert EncodedField.of(None, 'binary').decoded() is None
 
 
 def test_encode_value_none_json() -> None:
-    """Test _encode_value with None and json format returns None."""
-    assert _encode_value(None, 'json') is None
+    """Test EncodedField with None and json format returns None."""
+    assert EncodedField.of(None, 'json').decoded() is None
 
 
 # ============================================================================
@@ -403,11 +403,16 @@ def test_create_consumer_optional_params(
             group_name=GROUP_NAME,
             name='opt-inst',
             fetch_min_bytes='1024',
-            consumer_request_timeout_ms='30000',
+            consumer_request_timeout_ms='20000',
         )
     call_kwargs = mock_kc_class.call_args[1]
     assert call_kwargs['fetch_min_bytes'] == 1024
-    assert call_kwargs['request_timeout_ms'] == 30000
+    # The proxy's own wait for records, not the Kafka consumer's
+    assert 'request_timeout_ms' not in call_kwargs
+    managed = consumer_service._consumers[
+        (SUBJECT, NAMESPACE, GROUP_NAME, 'opt-inst')
+    ]
+    assert managed.default_wait_ms == 20000
 
 
 def test_create_consumer_auto_commit_enable(
@@ -885,7 +890,8 @@ def test_commit_offsets_with_explicit_offsets(
     call_kwargs = mock_kafka_consumer.commit.call_args[1]
     tp = TopicPartition(f'{NAMESPACE}.t1', 0)
     assert tp in call_kwargs['offsets']
-    assert call_kwargs['offsets'][tp] == OffsetAndMetadata(42, '', -1)
+    # As in Confluent's REST Proxy, the group's offset is the next record
+    assert call_kwargs['offsets'][tp] == OffsetAndMetadata(43, '', -1)
     assert call_kwargs['timeout_ms'] == CONSUMER_OPERATION_TIMEOUT_MS
 
 
@@ -1789,12 +1795,13 @@ def test_shutdown_during_create_closes_the_new_consumer(
     assert results == [
         (
             {
-                'error_code': 50002,
+                'error_code': 503,
                 'message': (
-                    'Failed to create consumer: service is shutting down'
+                    'Failed to create consumer: the service is shutting '
+                    'down; retry'
                 ),
             },
-            500,
+            503,
         ),
     ]
     built.close.assert_called_once_with(
@@ -1818,10 +1825,12 @@ def test_create_after_shutdown_is_refused(
             name='late',
         )
     mock_kc.assert_not_called()
-    assert status == 500
+    assert status == 503
     assert body == {
-        'error_code': 50002,
-        'message': 'Failed to create consumer: service is shutting down',
+        'error_code': 503,
+        'message': (
+            'Failed to create consumer: the service is shutting down; retry'
+        ),
     }
     assert consumer_service._consumers == {}
 

@@ -11,6 +11,9 @@ import asyncio
 import json
 import os
 import threading
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
@@ -27,6 +30,9 @@ from web_service.consumer_models import PartitionOffset
 from web_service.consumer_models import SeekPartitionsRequest
 from web_service.consumer_models import SeekRequest
 from web_service.consumer_models import SubscriptionRequest
+from web_service.consumer_records import EncodedField
+from web_service.consumer_records import EncodedRecord
+from web_service.consumer_records import FetchReply
 from web_service.main import DiasporaService
 
 # ============================================================================
@@ -51,8 +57,46 @@ def mock_web_service() -> MagicMock:
 
 @pytest.fixture
 def mock_consumer_service() -> MagicMock:
-    """Create a mock ConsumerService for unit tests."""
-    return MagicMock()
+    """Create a mock ConsumerService for unit tests.
+
+    Its hold yields an instance whose lock the request holds, with the
+    service's default fetch wait.
+    """
+    service = MagicMock()
+
+    @asynccontextmanager
+    async def hold(
+        key: tuple[str, str, str, str],
+        *,
+        wait: bool = True,
+    ) -> AsyncIterator[Any]:
+        yield SimpleNamespace(default_wait_ms=None)
+
+    service.hold.side_effect = hold
+    return service
+
+
+def _fetch_request() -> MagicMock:
+    """A request whose client is still connected."""
+    request = MagicMock()
+    request.is_disconnected = AsyncMock(return_value=False)
+    return request
+
+
+def _reply(*values: bytes) -> FetchReply:
+    """A fetch reply of binary records of topic t1."""
+    return FetchReply(
+        [
+            EncodedRecord(
+                topic='t1',
+                key=EncodedField.of(None, 'binary'),
+                value=EncodedField.of(value, 'binary'),
+                partition=0,
+                offset=i,
+            )
+            for i, value in enumerate(values)
+        ],
+    )
 
 
 @pytest.fixture
@@ -766,6 +810,7 @@ async def test_fetch_consumer_records_auth_failure(
     """Test fetch_consumer_records returns 401 on auth failure ."""
     _setup_auth_failure(mock_auth_manager)
     response = await mock_diaspora_service.fetch_consumer_records(
+        request=_fetch_request(),
         namespace=CONSUMER_NS,
         group_name=CONSUMER_GROUP,
         instance_id=CONSUMER_INST,
@@ -1074,6 +1119,7 @@ async def test_fetch_consumer_records_namespace_failure(
     """Test fetch_consumer_records returns 404 on namespace failure."""
     _setup_namespace_failure(mock_web_service)
     response = await mock_diaspora_service.fetch_consumer_records(
+        request=_fetch_request(),
         namespace=CONSUMER_NS,
         group_name=CONSUMER_GROUP,
         instance_id=CONSUMER_INST,
@@ -1522,19 +1568,12 @@ async def test_fetch_consumer_records_success(
 ) -> None:
     """Test fetch_consumer_records success path ."""
     _setup_namespace_success(mock_web_service)
-    mock_consumer_service.poll_records.return_value = (
-        [
-            {
-                'topic': 't1',
-                'key': None,
-                'value': 'aGVsbG8=',
-                'partition': 0,
-                'offset': 0,
-            },
-        ],
+    mock_consumer_service.fetch_records.return_value = (
+        _reply(b'hello'),
         200,
     )
     response = await mock_diaspora_service.fetch_consumer_records(
+        request=_fetch_request(),
         namespace=CONSUMER_NS,
         group_name=CONSUMER_GROUP,
         instance_id=CONSUMER_INST,
@@ -1544,9 +1583,15 @@ async def test_fetch_consumer_records_success(
         max_bytes=None,
     )
     assert response.status_code == 200
-    resp_body = _response_json(response)
-    assert isinstance(resp_body, list)
-    assert len(resp_body) == 1
+    assert _response_json(response) == [
+        {
+            'topic': 't1',
+            'key': None,
+            'value': 'aGVsbG8=',
+            'partition': 0,
+            'offset': 0,
+        },
+    ]
 
 
 @pytest.mark.asyncio
@@ -1559,8 +1604,9 @@ async def test_fetch_consumer_records_default_timeout(
 ) -> None:
     """Test fetch_consumer_records uses default timeout=5000."""
     _setup_namespace_success(mock_web_service)
-    mock_consumer_service.poll_records.return_value = ([], 200)
+    mock_consumer_service.fetch_records.return_value = (_reply(), 200)
     await mock_diaspora_service.fetch_consumer_records(
+        request=_fetch_request(),
         namespace=CONSUMER_NS,
         group_name=CONSUMER_GROUP,
         instance_id=CONSUMER_INST,
@@ -1569,14 +1615,16 @@ async def test_fetch_consumer_records_default_timeout(
         timeout=None,
         max_bytes=None,
     )
-    mock_consumer_service.poll_records.assert_called_once_with(
-        subject=valid_subject,
-        namespace=CONSUMER_NS,
-        group_name=CONSUMER_GROUP,
-        instance_id=CONSUMER_INST,
-        timeout_ms=5000,
-        max_bytes=None,
+    call = mock_consumer_service.fetch_records.call_args
+    assert call.args == (
+        valid_subject,
+        CONSUMER_NS,
+        CONSUMER_GROUP,
+        CONSUMER_INST,
     )
+    assert call.kwargs['max_records'] is None
+    # The time the request took so far comes off its wait
+    assert 5000 - 500 < call.kwargs['timeout_ms'] <= 5000
 
 
 @pytest.mark.asyncio
@@ -1589,8 +1637,9 @@ async def test_fetch_consumer_records_custom_timeout(
 ) -> None:
     """Test fetch_consumer_records with custom timeout and max_bytes."""
     _setup_namespace_success(mock_web_service)
-    mock_consumer_service.poll_records.return_value = ([], 200)
+    mock_consumer_service.fetch_records.return_value = (_reply(), 200)
     await mock_diaspora_service.fetch_consumer_records(
+        request=_fetch_request(),
         namespace=CONSUMER_NS,
         group_name=CONSUMER_GROUP,
         instance_id=CONSUMER_INST,
@@ -1599,14 +1648,16 @@ async def test_fetch_consumer_records_custom_timeout(
         timeout=10000,
         max_bytes=1048576,
     )
-    mock_consumer_service.poll_records.assert_called_once_with(
-        subject=valid_subject,
-        namespace=CONSUMER_NS,
-        group_name=CONSUMER_GROUP,
-        instance_id=CONSUMER_INST,
-        timeout_ms=10000,
-        max_bytes=1048576,
+    call = mock_consumer_service.fetch_records.call_args
+    assert call.args == (
+        valid_subject,
+        CONSUMER_NS,
+        CONSUMER_GROUP,
+        CONSUMER_INST,
     )
+    assert call.kwargs['max_records'] == 1048576
+    # The time the request took so far comes off its wait
+    assert 10000 - 500 < call.kwargs['timeout_ms'] <= 10000
 
 
 @pytest.mark.asyncio
@@ -1873,7 +1924,7 @@ CONSUMER_ROUTES: list[tuple[str, str, Any, str, tuple[Any, int]]] = [
         ({'topics': ['t1']}, 200),
     ),
     ('DELETE', f'{_INST}/subscription', None, 'unsubscribe', (None, 204)),
-    ('GET', f'{_INST}/records', None, 'poll_records', ([], 200)),
+    ('GET', f'{_INST}/records', None, 'fetch_records', (_reply(), 200)),
     ('POST', f'{_INST}/offsets', _OFFSETS, 'commit_offsets', (None, 200)),
     (
         'GET',
@@ -2074,6 +2125,8 @@ async def test_consumer_route_service_call_off_loop(
     assert response.status_code == reply_status
     if reply_status == 204:
         assert response.content == b''
+    elif isinstance(reply_body, FetchReply):
+        assert response.json() == [r.as_dict() for r in reply_body.records]
     else:
         assert response.json() == reply_body
 
@@ -2276,7 +2329,7 @@ async def test_fetch_timeout_is_capped(
 ) -> None:
     """Fetch waits at most 30 s; a larger timeout is clamped, not refused."""
     _setup_consumer_mocks(mock_web_service)
-    mock_consumer_service.poll_records.return_value = ([], 200)
+    mock_consumer_service.fetch_records.return_value = (_reply(), 200)
     response = await _send(
         mock_diaspora_service,
         'GET',
@@ -2284,8 +2337,8 @@ async def test_fetch_timeout_is_capped(
     )
     assert response.status_code == 200
     assert response.json() == []
-    kwargs = mock_consumer_service.poll_records.call_args.kwargs
-    assert kwargs['timeout_ms'] == expected_ms
+    kwargs = mock_consumer_service.fetch_records.call_args.kwargs
+    assert expected_ms - 500 < kwargs['timeout_ms'] <= expected_ms
 
 
 def test_fetch_timeout_cap_is_documented(
