@@ -61,6 +61,35 @@ def test_create_user_and_policy_iam_exception() -> None:
         assert 'Failed to create user and policy' in result['message']
 
 
+def test_iam_failure_message_leaves_out_iams_text(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """IAM's text, which names the account, goes to the log only."""
+    iam_service = IAMService(
+        account_id='123456789012',
+        region='us-east-1',
+        cluster_name='test-cluster',
+    )
+    text = 'User: arn:aws:iam::123456789012:user/svc is not authorized'
+    with (
+        patch.object(
+            iam_service.iam,
+            'create_user',
+            side_effect=Exception(text),
+        ),
+        caplog.at_level(logging.WARNING, logger='web_service.services'),
+    ):
+        result = iam_service.create_user_and_policy('test-subject')
+    assert result == {
+        'status': 'failure',
+        'message': (
+            'Failed to create user and policy: '
+            'IAM did not complete the request'
+        ),
+    }
+    assert text in caplog.text
+
+
 def test_create_user_and_policy_policy_creation_failure() -> None:
     """Test create_user_and_policy handles policy creation failure."""
     iam_service = IAMService(
@@ -1589,7 +1618,9 @@ def test_delete_key_iam_fails() -> None:
     mock_iam = MagicMock()
     mock_iam.delete_access_keys.return_value = {
         'status': 'failure',
-        'message': 'Failed to delete access keys: throttled',
+        'message': (
+            'Failed to delete access keys: IAM did not complete the request'
+        ),
     }
     mock_namespace = MagicMock(spec=NamespaceService)
     mock_namespace.dynamodb = MagicMock()
@@ -1603,7 +1634,7 @@ def test_delete_key_iam_fails() -> None:
 
     assert result['status'] == 'failure'
     assert 'Failed to delete IAM access keys' in result['message']
-    assert 'throttled' in result['message']
+    assert 'IAM did not complete the request' in result['message']
     mock_namespace.dynamodb.delete_key.assert_not_called()
 
 
@@ -1612,7 +1643,9 @@ def test_create_key_old_key_delete_fails() -> None:
     mock_iam = MagicMock()
     mock_iam.delete_access_keys.return_value = {
         'status': 'failure',
-        'message': 'Failed to delete access keys: throttled',
+        'message': (
+            'Failed to delete access keys: IAM did not complete the request'
+        ),
     }
     mock_namespace = MagicMock(spec=NamespaceService)
     mock_namespace.dynamodb = MagicMock()

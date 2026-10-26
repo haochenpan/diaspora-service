@@ -100,6 +100,19 @@ def _topic_cap_warning(namespace: str, count: int, cap: int) -> str:
     )
 
 
+def _iam_failure(action: str, error: Exception) -> dict[str, Any]:
+    """The reply for a failed IAM call; the error goes to the log.
+
+    The reply leaves out IAM's text, which can name the account and the
+    service's identity.
+    """
+    logger.warning('Failed to %s: %r', action, error)
+    return {
+        'status': 'failure',
+        'message': f'Failed to {action}: IAM did not complete the request',
+    }
+
+
 class IAMService:
     """Service for managing IAM users and policies."""
 
@@ -225,10 +238,7 @@ class IAMService:
                 'message': f'User and policy created for {subject}',
             }
         except Exception as e:
-            return {
-                'status': 'failure',
-                'message': f'Failed to create user and policy: {e!s}',
-            }
+            return _iam_failure('create user and policy', e)
 
     def get_user_policy(self, subject: str) -> tuple[str, Any]:
         """Return the user policy's default version and its document.
@@ -366,10 +376,7 @@ class IAMService:
                 'message': f'IAM user deleted for {subject}',
             }
         except Exception as e:
-            return {
-                'status': 'failure',
-                'message': f'Failed to delete user and policy: {e!s}',
-            }
+            return _iam_failure('delete user and policy', e)
 
     def create_access_key(self, subject: str) -> dict[str, Any]:
         """Create an access key for a user.
@@ -392,10 +399,7 @@ class IAMService:
                 'create_date': key['CreateDate'].isoformat(),
             }
         except Exception as e:
-            return {
-                'status': 'failure',
-                'message': f'Failed to create access key: {e!s}',
-            }
+            return _iam_failure('create access key', e)
 
     def delete_access_keys(self, subject: str) -> dict[str, Any]:
         """Delete all access keys for a user.
@@ -428,10 +432,7 @@ class IAMService:
                 'message': f'Access keys deleted for {subject}',
             }
         except Exception as e:
-            return {
-                'status': 'failure',
-                'message': f'Failed to delete access keys: {e!s}',
-            }
+            return _iam_failure('delete access keys', e)
 
 
 # Global namespaces tracking key
