@@ -113,5 +113,3 @@ nav:
       - Examples: web/examples.md
   - Kafka Console:
       - Introduction: kafka-console/intro.md
-  - Grafana Console:
-      - Introduction: grafana-console/intro.md
