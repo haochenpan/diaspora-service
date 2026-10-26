@@ -179,16 +179,21 @@ class IAMService:
         Returns:
             Dictionary with status (success/failure) and message
         """
-        create_user_args = {'Path': '/msk-users/', 'UserName': subject}
-        if self.permissions_boundary_arn:
-            create_user_args['PermissionsBoundary'] = (
-                self.permissions_boundary_arn
-            )
         try:
             with contextlib.suppress(
                 self.iam.exceptions.EntityAlreadyExistsException,
             ):
-                self.iam.create_user(**create_user_args)
+                if self.permissions_boundary_arn:
+                    self.iam.create_user(
+                        Path='/msk-users/',
+                        UserName=subject,
+                        PermissionsBoundary=self.permissions_boundary_arn,
+                    )
+                else:
+                    self.iam.create_user(
+                        Path='/msk-users/',
+                        UserName=subject,
+                    )
 
             with contextlib.suppress(
                 self.iam.exceptions.EntityAlreadyExistsException,
