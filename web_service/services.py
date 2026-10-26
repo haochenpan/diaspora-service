@@ -1413,6 +1413,21 @@ class WebService:
     def create_user(self, subject: str) -> dict[str, Any]:
         """Create a user in IAM and create its default namespace.
 
+        Serialized with the other user and key operations by the global
+        lock.
+
+        Args:
+            subject: User subject ID
+
+        Returns:
+            Dictionary with status, message, and user/namespace information
+        """
+        with self._global_lock:
+            return self._create_user(subject)
+
+    def _create_user(self, subject: str) -> dict[str, Any]:
+        """Create a user and its default namespace; the caller holds the lock.
+
         Args:
             subject: User subject ID
 
@@ -1595,8 +1610,9 @@ class WebService:
                     'fresh': False,
                 }
 
-            # Ensure user and namespace exist (idempotent)
-            user_result = self.create_user(subject)
+            # Ensure user and namespace exist (idempotent); the lock is
+            # already held, so call the unlocked form
+            user_result = self._create_user(subject)
             if user_result['status'] != 'success':
                 return {
                     'status': 'failure',
@@ -1650,31 +1666,35 @@ class WebService:
 
         Deletes access key from both IAM and DynamoDB.
 
+        Serialized with create_key by the global lock, so a key revoked
+        here is never cached by a create_key running at the same time.
+
         Args:
             subject: User subject ID
 
         Returns:
             Dictionary with status and message
         """
-        # Delete access keys in IAM (idempotent); on failure keep the
-        # cached key, since the IAM key is still valid
-        iam_result = self.iam_service.delete_access_keys(subject)
-        if iam_result['status'] != 'success':
+        with self._global_lock:
+            # Delete access keys in IAM (idempotent); on failure keep the
+            # cached key, since the IAM key is still valid
+            iam_result = self.iam_service.delete_access_keys(subject)
+            if iam_result['status'] != 'success':
+                return {
+                    'status': 'failure',
+                    'message': (
+                        f'Failed to delete IAM access keys: '
+                        f'{iam_result["message"]}'
+                    ),
+                }
+
+            # Delete key from DynamoDB (idempotent)
+            self.namespace_service.dynamodb.delete_key(subject)
+
             return {
-                'status': 'failure',
-                'message': (
-                    f'Failed to delete IAM access keys: '
-                    f'{iam_result["message"]}'
-                ),
+                'status': 'success',
+                'message': f'Access key deleted for {subject}',
             }
-
-        # Delete key from DynamoDB (idempotent)
-        self.namespace_service.dynamodb.delete_key(subject)
-
-        return {
-            'status': 'success',
-            'message': f'Access key deleted for {subject}',
-        }
 
     def create_topic(
         self,

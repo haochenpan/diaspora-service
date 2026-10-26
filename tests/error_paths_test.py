@@ -1322,7 +1322,7 @@ def test_create_key_iam_fails() -> None:
     )
 
     # Mock create_user to succeed
-    with patch.object(web_service, 'create_user') as mock_create_user:
+    with patch.object(web_service, '_create_user') as mock_create_user:
         mock_create_user.return_value = {
             'status': 'success',
             'message': 'User created',
@@ -1360,7 +1360,7 @@ def test_create_key_dynamodb_storage_fails() -> None:
         namespace_service=mock_namespace,
     )
 
-    with patch.object(web_service, 'create_user') as mock_create_user:
+    with patch.object(web_service, '_create_user') as mock_create_user:
         mock_create_user.return_value = {
             'status': 'success',
             'message': 'User created',
@@ -1620,7 +1620,7 @@ def test_create_key_old_key_delete_fails() -> None:
         namespace_service=mock_namespace,
     )
 
-    with patch.object(web_service, 'create_user') as mock_create_user:
+    with patch.object(web_service, '_create_user') as mock_create_user:
         mock_create_user.return_value = {
             'status': 'success',
             'message': 'User created',
@@ -2156,3 +2156,124 @@ def test_delete_access_keys_second_key_fails() -> None:
         assert result['status'] == 'failure'
         assert 'Failed to delete access keys' in result['message']
         stubber.assert_no_pending_responses()
+
+
+def _iam_success() -> MagicMock:
+    """An IAM service mock whose calls all succeed."""
+    mock_iam = MagicMock()
+    mock_iam.create_user_and_policy.return_value = {'status': 'success'}
+    mock_iam.delete_access_keys.return_value = {'status': 'success'}
+    mock_iam.create_access_key.return_value = {
+        'status': 'success',
+        'access_key': 'AKIAIOSFODNN7EXAMPLE',  # pragma: allowlist secret
+        'secret_key': 'test-secret',  # pragma: allowlist secret
+        'create_date': '2024-01-01T00:00:00',
+    }
+    return mock_iam
+
+
+def test_delete_key_waits_for_create_key() -> None:
+    """A delete_key during create_key runs after it, so no revoked key stays.
+
+    Without the lock, the delete would clear the cache before create_key
+    stores the key it made, and the next create_key would return that
+    revoked key as an existing one.
+    """
+    mock_iam = _iam_success()
+    mock_db = MagicMock()
+    mock_db.get_key.return_value = None
+    mock_namespace = MagicMock(spec=NamespaceService)
+    mock_namespace.dynamodb = mock_db
+    web_service = WebService(
+        iam_service=mock_iam,
+        kafka_service=MagicMock(),
+        namespace_service=mock_namespace,
+    )
+    order: list[str] = []
+    mock_db.store_key.side_effect = lambda **_kw: order.append('store')
+    mock_db.delete_key.side_effect = lambda _s: order.append('delete')
+
+    in_create = threading.Event()
+    release = threading.Event()
+
+    def _slow_create_access_key(_subject: str) -> dict[str, str]:
+        in_create.set()
+        release.wait(timeout=5)
+        return _iam_success().create_access_key.return_value
+
+    mock_iam.create_access_key.side_effect = _slow_create_access_key
+
+    with patch.object(web_service, '_create_user') as mock_create_user:
+        mock_create_user.return_value = {'status': 'success'}
+        creator = threading.Thread(
+            target=web_service.create_key,
+            args=('test-subject',),
+        )
+        creator.start()
+        assert in_create.wait(timeout=5)
+        deleter = threading.Thread(
+            target=web_service.delete_key,
+            args=('test-subject',),
+        )
+        deleter.start()
+        deleter.join(timeout=0.2)
+        # The delete is held back while create_key runs
+        assert deleter.is_alive()
+        assert order == []
+        release.set()
+        creator.join(timeout=5)
+        deleter.join(timeout=5)
+
+    assert order == ['store', 'delete']
+
+
+def test_create_user_takes_the_service_lock() -> None:
+    """create_user waits while another user or key operation runs."""
+    mock_iam = _iam_success()
+    namespace_service = NamespaceService(dynamodb_service=MagicMock())
+    web_service = WebService(
+        iam_service=mock_iam,
+        kafka_service=MagicMock(),
+        namespace_service=namespace_service,
+    )
+    web_service._global_lock.acquire()
+    try:
+        worker = threading.Thread(
+            target=web_service.create_user,
+            args=('test-subject',),
+        )
+        worker.start()
+        worker.join(timeout=0.2)
+        assert worker.is_alive()
+        mock_iam.create_user_and_policy.assert_not_called()
+    finally:
+        web_service._global_lock.release()
+    worker.join(timeout=5)
+    assert not worker.is_alive()
+    mock_iam.create_user_and_policy.assert_called_once_with('test-subject')
+
+
+def test_create_key_creating_the_user_does_not_deadlock() -> None:
+    """create_key creates the user under the lock it already holds."""
+    mock_iam = _iam_success()
+    mock_db = MagicMock()
+    mock_db.get_key.return_value = None
+    namespace_service = NamespaceService(dynamodb_service=mock_db)
+    web_service = WebService(
+        iam_service=mock_iam,
+        kafka_service=MagicMock(),
+        namespace_service=namespace_service,
+    )
+    results: list[dict[str, object]] = []
+    worker = threading.Thread(
+        target=lambda: results.append(web_service.create_key('test-subject')),
+    )
+    worker.start()
+    worker.join(timeout=5)
+    assert not worker.is_alive(), 'create_key deadlocked'
+    assert results[0]['status'] == 'success'
+    assert results[0]['fresh'] is True
+    mock_iam.create_user_and_policy.assert_called_once_with('test-subject')
+    # Both locks are free afterwards
+    assert not web_service._global_lock.locked()
+    assert not namespace_service._global_lock.locked()
