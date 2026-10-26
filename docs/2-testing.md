@@ -148,19 +148,7 @@ hex digits, which never starts with `ns-test`.
 Run these with an administrator's credentials, at a time when no live run
 is in progress.
 
-First, with the service's keys, delete everything earlier live runs left
-behind, whatever its age. The identity cannot see or delete the topics
-named the way the tests used to name them, and the test users named that
-way have no permissions boundary. The sweep reads the region and the
-bootstrap servers from `AWS_ACCOUNT_REGION` and `DEFAULT_SERVERS`. Without
-`--apply` it lists what it would delete:
-
-```bash
-python scripts/sweep_test_resources.py --min-age-hours 0
-python scripts/sweep_test_resources.py --apply --min-age-hours 0
-```
-
-Then create the boundary, the identity's policy, the user and its access
+First create the boundary, the identity's policy, the user and its access
 key. Fill in the account ID, region, MSK cluster name and the cluster's
 UUID (the last part of its ARN, from `aws kafka list-clusters-v2`):
 
@@ -191,7 +179,20 @@ aws iam create-access-key --user-name diaspora-live-tests
 Do not name the user `test-subject-*`, or its policy would let it manage
 itself.
 
-Store the key's `AccessKeyId` and `SecretAccessKey` as the repository
+Just before storing the key, delete with the service's keys everything
+earlier live runs left behind, whatever its age. Until the secrets are
+set, live runs use the service's keys and create test users without a
+boundary, and the identity cannot see or delete the topics named the way
+the tests used to name them. The sweep reads the region and the bootstrap
+servers from `AWS_ACCOUNT_REGION` and `DEFAULT_SERVERS`. Without `--apply`
+it lists what it would delete:
+
+```bash
+python scripts/sweep_test_resources.py --min-age-hours 0
+python scripts/sweep_test_resources.py --apply --min-age-hours 0
+```
+
+Then store the key's `AccessKeyId` and `SecretAccessKey` as the repository
 secrets. Each command prompts for the value, which keeps the key out of
 the shell history:
 
