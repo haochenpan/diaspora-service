@@ -11,7 +11,7 @@ dependencies = [
     "fastapi",
     "globus_sdk",
     "gunicorn",
-    "kafka-python>=2.1.3,<3",
+    "kafka-python>=2.1.3,<4",
     "pydantic",
     "uvicorn",
     "uvicorn-worker",

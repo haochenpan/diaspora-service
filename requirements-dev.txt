@@ -107,7 +107,7 @@ jmespath==1.1.0
     #   -c requirements.txt
     #   boto3
     #   botocore
-kafka-python==2.3.2
+kafka-python==3.0.11
     # via
     #   -c requirements.txt
     #   diaspora-service (pyproject.toml)
@@ -168,7 +168,7 @@ pytest-cov==7.1.0
     # via diaspora-service (pyproject.toml)
 pytest-mock==3.17.0
     # via diaspora-service (pyproject.toml)
-python-dateutil==2.9.0.post0
+python-dateutil==3.0.0
     # via
     #   -c requirements.txt
     #   botocore
