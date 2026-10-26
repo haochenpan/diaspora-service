@@ -84,7 +84,7 @@ curl -X POST "https://diaspora-web-service.qpp943wkvr7b2.us-east-1.cs.amazonligh
 | `message` of a failure | Cause |
 | --- | --- |
 | `Failed to create IAM user: Failed to create user and policy: <IAM error>` | IAM refused a call |
-| `Failed to create namespace: Namespace already taken: <namespace>` | Another user holds the default namespace's name; the service deletes the IAM user it made |
+| `Failed to create namespace: Namespace already taken: <namespace>` | Another user holds the default namespace's name; the service deletes the IAM user |
 
 ### Delete user
 
@@ -211,10 +211,10 @@ curl -X POST "https://diaspora-web-service.qpp943wkvr7b2.us-east-1.cs.amazonligh
 | --- | --- |
 | `Name must be between 3 and 32 characters` | The topic name is too short or too long |
 | `Name can only contain letters, numbers, dash, and underscore` | The topic name has another character, such as a dot |
-| `Name cannot start or end with hyphen or underscore` | |
+| `Name cannot start or end with hyphen or underscore` | The topic name starts or ends with `-` or `_` |
 | `Namespace <namespace> not found for <subject>` | The user does not hold the namespace |
 | `Namespace <namespace> already holds 50 topics, the most allowed is 50; delete a topic to create another.` | The namespace is at the limit |
-| `Namespace <namespace> holds <n> topics, more than the 50 allowed; delete <k> topics to create another.` | The namespace is past the limit, which was lowered after it was filled |
+| `Namespace <namespace> holds <n> topics, more than the 50 allowed; delete <k> topic(s) to create another.` | The namespace is past the limit, which was lowered after it was filled |
 | `Failed to create Kafka topic: Failed to create Kafka topic <namespace>.<topic> after 3 attempts: the Kafka cluster did not complete it; retry shortly` | The cluster did not create the topic |
 
 The name is checked before the namespace.

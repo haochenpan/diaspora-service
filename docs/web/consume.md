@@ -191,6 +191,7 @@ The consumer routes follow the paths, bodies, statuses and codes of Confluent's 
 | `consumer.request.timeout.ms` | The wait of a fetch that names no `timeout`, 5000 ms if not set, capped at 30000 ms; not passed to the Kafka consumer | The same, with the proxy's own default and no cap | The 30 s cap on every fetch wait |
 | `fetch.min.bytes` | Passed to the Kafka consumer, so each broker waits for that many bytes before it replies | The least bytes the proxy gathers for a reply before the wait ends | The service gathers no records past one poll of the Kafka consumer |
 | Commit of offset N | The group commits N + 1, the next record to read | The same | kafka-python's `commit` takes the next record to read, so the service adds the 1 |
+
 ## The earlier `/api/v3` consumer routes
 
 The consumer routes of earlier versions, under `/api/v3/{namespace}/consumers`, are removed, and a request to them is refused with 404, or with 405 for a group named `recreate`, whose path is the topic recreate route's. Clients use `/api/v2/consumers`, which acts in the caller's default namespace.

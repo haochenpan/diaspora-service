@@ -645,7 +645,7 @@ class DiasporaService:
         subject: str = Header(..., alias='subject'),
         token: str = Header(..., alias='authorization'),
     ) -> dict[str, Any]:
-        """Create an access key for an existing IAM user."""
+        """Return the stored access key, or create the user and a key."""
         return await run_in_threadpool(
             self._authorized,
             subject,

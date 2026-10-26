@@ -29,7 +29,8 @@ APP_DESCRIPTION = (
     'with a `message`, or `error` with a `reason` when the token check '
     'fails. The Producer and Consumer routes answer an HTTP status that '
     'says what happened, and a failure\'s body is `{"error_code", '
-    '"message"}`.\n\n'
+    '"message"}`, except a produce route\'s failed token check, which '
+    'answers 401 with `status` and `reason`.\n\n'
     f'Reference: {DOCS_URL}'
 )
 
@@ -155,7 +156,7 @@ CREATE_TOPIC = RouteText(
     'creates the Kafka topic if the cluster lacks it. Fails for a name '
     'that breaks the rule, a namespace the user does not hold, or a topic '
     'the cluster does not create after 3 attempts, which is then removed '
-    'from the namespace.' + _FAILS_WITH_STATUS,
+    'from the namespace if this create added it.' + _FAILS_WITH_STATUS,
 )
 
 DELETE_TOPIC = RouteText(
