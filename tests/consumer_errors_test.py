@@ -180,6 +180,9 @@ def test_instances_are_built_with_the_fetch_limits(
     assert _create(client).status_code == 200
     assert built[0]['fetch_max_bytes'] == FETCH_MAX_BYTES
     assert built[0]['max_partition_fetch_bytes'] == MAX_PARTITION_FETCH_BYTES
+    # Longer than the idle timeout and a reaper round, so the instance is
+    # still in its group when the reaper commits and closes it
+    assert built[0]['max_poll_interval_ms'] == 300_000 + 30_000 + 60_000
 
 
 def test_a_subject_may_hold_four_instances(client: TestClient) -> None:

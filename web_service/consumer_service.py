@@ -57,15 +57,19 @@ logger = logging.getLogger(__name__)
 # Default idle timeout: 5 minutes
 DEFAULT_CONSUMER_TIMEOUT_MS = 300_000
 REAPER_INTERVAL_SECONDS = 30
+# Time beyond the idle timeout and a reaper round that an instance may go
+# without a poll before kafka-python takes it out of its group: enough for
+# the reaper to wait for the instance's lock and commit
+POLL_SLACK_MS = 60_000
 # Longest a commit or a committed-offsets lookup waits on the cluster;
 # without a timeout kafka-python retries until it succeeds
 CONSUMER_OPERATION_TIMEOUT_MS = 10_000
 # When an instance with auto-commit is closed (by a delete, the reaper or
 # shutdown), the longest the commit of its positions waits, and then the
-# longest kafka-python's close waits for each of its two steps: stopping
+# longest kafka-python's close waits for its two steps together: stopping
 # the heartbeat thread and leaving the group
 CLOSE_COMMIT_TIMEOUT_MS = 5_000
-CLOSE_TIMEOUT_MS = 2_000
+CLOSE_TIMEOUT_MS = 4_000
 # Longest shutdown waits for all the instances together, which it closes
 # at once, each commit and close within what is left of it. The service's
 # shutdown closes the producer at the same time, so both fit in the time
@@ -1068,6 +1072,15 @@ class ConsumerService:
             ),
             'fetch_max_bytes': FETCH_MAX_BYTES,
             'max_partition_fetch_bytes': MAX_PARTITION_FETCH_BYTES,
+            # kafka-python's default (300 s, the default idle timeout) has
+            # the heartbeat thread leave the group before the reaper closes
+            # an idle instance, so the commit at close would fail. Longer,
+            # the instance stays in its group until the reaper closes it.
+            'max_poll_interval_ms': (
+                self.timeout_ms
+                + REAPER_INTERVAL_SECONDS * 1000
+                + POLL_SLACK_MS
+            ),
         }
         if fetch_min_bytes is not None:
             kwargs['fetch_min_bytes'] = fetch_min_bytes
