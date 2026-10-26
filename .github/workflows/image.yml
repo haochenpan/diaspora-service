@@ -1,0 +1,79 @@
+name: image
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # Builds the image as deployment.yml does and starts it with the unit
+  # tests' placeholders, so a pull request that breaks the image fails
+  # here and not in the deploy. Pushes nothing.
+  image:
+    name: image
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build the image
+        run: |
+          docker build -t diaspora-service -f web_service/Dockerfile \
+              --build-arg GIT_SHA="$GITHUB_SHA" .
+
+      # The service makes no AWS call at start, so placeholders let it
+      # serve / and /openapi.json
+      - name: Start the container
+        run: |
+          docker run -d --name service -p 127.0.0.1:8000:8000 \
+              -e AWS_ACCESS_KEY_ID=dummy-not-real \
+              -e AWS_SECRET_ACCESS_KEY=dummy-not-real \
+              -e SERVER_CLIENT_ID=00000000-0000-0000-0000-000000000000 \
+              -e SERVER_SECRET=dummy-not-real \
+              -e AWS_ACCOUNT_ID=000000000000 \
+              -e AWS_ACCOUNT_REGION=us-east-1 \
+              -e MSK_CLUSTER_NAME=dummy \
+              diaspora-service
+
+      - name: Check the running service
+        run: |
+          for _ in $(seq 30); do
+            if curl -fsS -o /dev/null http://127.0.0.1:8000/; then
+              break
+            fi
+            sleep 1
+          done
+          curl -fsS -o /dev/null http://127.0.0.1:8000/
+
+          version=$(curl -fsS http://127.0.0.1:8000/openapi.json | jq -r .info.version)
+          echo "Version: $version"
+          case "$version" in
+            *"+${GITHUB_SHA:0:12}") ;;
+            *) echo "::error::The version does not name the commit"; exit 1 ;;
+          esac
+
+          uid=$(docker exec service id -u)
+          echo "User ID: $uid"
+          if [ "$uid" = "0" ]; then
+            echo "::error::The container runs as root"
+            exit 1
+          fi
+
+      # docker stop sends SIGTERM and waits up to 40 s before SIGKILL;
+      # gunicorn stops the worker and exits with 0 within its 30 s
+      - name: Stop the container
+        run: |
+          docker stop --time 40 service
+          code=$(docker inspect -f '{{.State.ExitCode}}' service)
+          echo "Exit code: $code"
+          [ "$code" = "0" ]
+
+      - name: Show the container log
+        if: always()
+        run: docker logs service || true

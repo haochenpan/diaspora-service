@@ -72,6 +72,7 @@ coverage report
 | `tests.yml` | `unit` | unit | pull requests; pushes to `main`, `test-me-*` and tags; nightly; manual dispatch | none |
 | `tests.yml` | `live` | live, then the sweep (nightly only) | pushes to `main`, nightly, manual dispatch | the live tests' AWS keys, or the service's while those are not set |
 | `deployment.yml` | `unit` | unit | before every deploy | none |
+| `image.yml` | `image` | builds the image, starts it with placeholders and checks `/`, the version and the user | pull requests, manual dispatch | none |
 
 - The deploy job in `deployment.yml` waits for its `unit` job, so a failing
   unit test on `main` stops the deploy.
