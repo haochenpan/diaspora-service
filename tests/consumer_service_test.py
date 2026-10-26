@@ -6,6 +6,7 @@ The live tests of the consumer routes are in consumer_live_test.py.
 from __future__ import annotations
 
 import base64
+import json
 import logging
 import threading
 import time
@@ -22,7 +23,7 @@ from kafka.structs import OffsetAndMetadata
 from kafka.structs import TopicPartition
 
 from web_service.consumer_records import EncodedField
-from web_service.consumer_records import NotJSON
+from web_service.consumer_records import NotText
 from web_service.consumer_service import CLOSE_COMMIT_TIMEOUT_MS
 from web_service.consumer_service import CLOSE_TIMEOUT_MS
 from web_service.consumer_service import CONSUMER_OPERATION_TIMEOUT_MS
@@ -155,29 +156,38 @@ def test_encode_value_json_format_utf8() -> None:
 @pytest.mark.parametrize(
     'data',
     (
-        b'\x80\x81\x82',
         b'plain text',
         b'{"a": 1} {"b": 2}',
         b'NaN',
         b'',
         b'[' * 100_000,
+        'h\u00e9llo " \\ \n \u2028 \U0001f600'.encode(),
     ),
 )
-def test_encode_value_json_format_not_json(data: bytes) -> None:
-    """Test EncodedField with json format refuses what is not JSON."""
-    with pytest.raises(NotJSON, match='not one JSON value'):
+def test_encode_value_json_format_text(data: bytes) -> None:
+    """A json instance returns UTF-8 text that is not JSON as a string."""
+    field = EncodedField.of(data, 'json')
+    assert field.decoded() == data.decode()
+    body = b''.join(field.pieces())
+    assert json.loads(body) == data.decode()
+    assert body == json.dumps(data.decode(), ensure_ascii=False).encode()
+    assert field.size == len(body)
+
+
+@pytest.mark.parametrize('data', (b'\x80\x81\x82', b'{"a": "\xff"}'))
+def test_encode_value_json_format_not_utf8(data: bytes) -> None:
+    """A json instance cannot return bytes that are not UTF-8."""
+    with pytest.raises(NotText, match='is not UTF-8 text'):
         EncodedField.of(data, 'json')
 
 
 def test_encode_value_json_format_check_is_bounded() -> None:
-    """A value whose check would cost too much memory is not checked."""
+    """A value whose check would cost too much memory is returned as text."""
     data = b'[' + b'[],' * 500_000 + b'[]]'
-    with (
-        patch('web_service.consumer_records.json.JSONDecoder') as decoder,
-        pytest.raises(NotJSON, match='too large'),
-    ):
-        EncodedField.of(data, 'json')
+    with patch('web_service.consumer_records.json.JSONDecoder') as decoder:
+        field = EncodedField.of(data, 'json')
     decoder.assert_not_called()
+    assert field.decoded() == data.decode()
 
 
 def test_encode_value_json_format_whitespace_and_scalars() -> None:

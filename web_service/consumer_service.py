@@ -49,7 +49,7 @@ from kafka.structs import TopicPartition
 from web_service.consumer_records import EncodedField
 from web_service.consumer_records import EncodedRecord
 from web_service.consumer_records import FetchReply
-from web_service.consumer_records import NotJSON
+from web_service.consumer_records import NotText
 from web_service.services import MSKTokenProvider
 
 logger = logging.getLogger(__name__)
@@ -186,8 +186,8 @@ def _not_decodable(topic: str, partition: int, offset: int, why: str) -> Reply:
         RECORD_NOT_DECODABLE,
         f'The key or value of the record at offset {offset} of topic '
         f'{topic}, partition {partition}, {why}. A json instance returns '
-        'only JSON: seek past the record, or read it with a binary '
-        'instance.',
+        'only JSON and UTF-8 text: seek past the record, or read it with '
+        'a binary instance.',
     )
 
 
@@ -1230,7 +1230,7 @@ class ConsumerService:
                         msg,
                         managed.format_type,
                     )
-                except NotJSON as e:
+                except NotText as e:
                     logger.warning(
                         'Instance %s cannot return offset %d of %s, whose '
                         'key or value %s',
@@ -1270,7 +1270,8 @@ class ConsumerService:
         """A fetched record as the reply holds it.
 
         Raises:
-            NotJSON: In the json format, if its key or value is not JSON
+            NotText: In the json format, if its key or value is neither
+                JSON nor UTF-8 text
         """
         return EncodedRecord(
             topic=topic,

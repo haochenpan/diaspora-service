@@ -9,6 +9,7 @@ they do in the service. Nothing here uses the network.
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import threading
 import time
@@ -47,9 +48,11 @@ from kafka.structs import TopicPartition
 from starlette.responses import JSONResponse
 
 from web_service import main
+from web_service.consumer_records import CHUNK_BYTES
 from web_service.consumer_records import EncodedField
 from web_service.consumer_records import EncodedRecord
 from web_service.consumer_records import FetchReply
+from web_service.consumer_records import PIECE_BYTES
 from web_service.consumer_routes import MAX_BODY_BYTES
 from web_service.consumer_routes import negotiate_records
 from web_service.consumer_service import FETCH_MAX_BYTES
@@ -1413,6 +1416,35 @@ def test_reply_is_what_jsonresponse_writes(
     assert b''.join(reply.chunks()) == expected
 
 
+def test_a_large_header_is_written_a_piece_at_a_time() -> None:
+    """A header value of 8 MiB is never encoded whole."""
+    value = bytes(range(256)) * (32 * 1024)
+    record = EncodedRecord(
+        topic='t1',
+        key=EncodedField.of(None, 'binary'),
+        value=EncodedField.of(b'v', 'binary'),
+        partition=0,
+        offset=0,
+        headers=(('big', value), ('none', None), ('', b'')),
+    )
+    reply = FetchReply([record])
+    with patch(
+        'web_service.consumer_records.base64.b64encode',
+        wraps=base64.b64encode,
+    ) as encode:
+        chunks = list(reply.chunks())
+    assert max(len(c) for c in chunks) < CHUNK_BYTES + 128 * 1024
+    assert max(len(c.args[0]) for c in encode.call_args_list) <= PIECE_BYTES
+    body = b''.join(chunks)
+    assert reply.size == len(body)
+    assert json.loads(body) == [record.as_dict()]
+    assert json.loads(body)[0]['headers'] == [
+        {'name': 'big', 'value': base64.b64encode(value).decode()},
+        {'name': 'none', 'value': None},
+        {'name': '', 'value': ''},
+    ]
+
+
 @pytest.mark.parametrize(
     'value',
     (
@@ -2425,6 +2457,27 @@ def test_a_fetch_in_another_format_is_refused(
     assert again.status_code == 200
 
 
+def test_a_json_instance_returns_text_as_a_string(
+    service: DiasporaService,
+    client: TestClient,
+) -> None:
+    """A STRING-typed value is text, not JSON, and comes back as a string."""
+    _assigned_v2(client, 'json', 't1')
+    raw = _v2_fetched(b'job done', b'"job done"', b'{"a": 1} trailing')
+    with patch.object(_v2_consumer(service), 'poll', return_value=raw):
+        response = client.get(
+            f'{_v2_inst()}/records',
+            headers={**HEADERS, 'accept': JSON_RECORDS},
+        )
+    assert response.status_code == 200
+    # A client cannot tell "job done" produced as JSON from text
+    assert [r['value'] for r in response.json()] == [
+        'job done',
+        'job done',
+        '{"a": 1} trailing',
+    ]
+
+
 def test_a_json_fetch_has_the_json_type(
     service: DiasporaService,
     client: TestClient,
@@ -2514,7 +2567,7 @@ def test_max_bytes_counts_the_bytes_of_keys_and_values(
         seek.assert_not_called()
 
 
-def test_a_first_record_that_is_not_json_is_408(
+def test_a_first_record_that_is_not_utf8_is_408(
     service: DiasporaService,
     client: TestClient,
 ) -> None:
@@ -2524,7 +2577,7 @@ def test_a_first_record_that_is_not_json_is_408(
         patch.object(
             consumer,
             'poll',
-            return_value=_v2_fetched(b'not json', b'{}'),
+            return_value=_v2_fetched(b'\xff\xfe', b'{}'),
         ),
         patch.object(consumer, 'seek') as seek,
     ):
@@ -2537,8 +2590,8 @@ def test_a_first_record_that_is_not_json_is_408(
         'error_code': 40801,
         'message': (
             'The key or value of the record at offset 0 of topic t1, '
-            'partition 0, is not one JSON value in UTF-8. A json instance '
-            'returns only JSON: seek past the record, or read it with a '
+            'partition 0, is not UTF-8 text. A json instance returns only '
+            'JSON and UTF-8 text: seek past the record, or read it with a '
             'binary instance.'
         ),
     }
@@ -2546,7 +2599,7 @@ def test_a_first_record_that_is_not_json_is_408(
     seek.assert_called_once_with(TopicPartition(f'{V2_NAMESPACE}.t1', 0), 0)
 
 
-def test_a_record_that_is_not_json_ends_only_its_partition(
+def test_a_record_that_is_not_utf8_ends_only_its_partition(
     service: DiasporaService,
     client: TestClient,
 ) -> None:
