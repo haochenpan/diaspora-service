@@ -7,11 +7,11 @@ WORKDIR /diaspora-web-service
 # The locked dependencies first, so a change to the code alone reuses this
 # layer
 COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --root-user-action=ignore -r requirements.txt
 
 COPY pyproject.toml ./
 COPY web_service web_service
-RUN pip install --no-cache-dir --no-deps .
+RUN pip install --no-cache-dir --root-user-action=ignore --no-deps .
 
 RUN useradd --create-home diaspora
 USER diaspora
