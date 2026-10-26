@@ -67,13 +67,11 @@ from web_service.main import DiasporaService
 
 SUBJECT = '123e4567-e89b-12d3-a456-426614174000'
 HEADERS = {'subject': SUBJECT, 'authorization': 'Bearer ' + 'a' * 50}
-NAMESPACE = 'ns-test123'
+# The consumer routes take the caller's default namespace
+NAMESPACE = 'ns-426614174000'
 TOPICS = ['t1', 't2']
 GROUP = 'g'
-BASE = f'/api/v3/{NAMESPACE}/consumers'
-# The v2 routes take the caller's default namespace
 V2 = '/api/v2/consumers'
-V2_NAMESPACE = 'ns-426614174000'
 JSON_RECORDS = 'application/vnd.kafka.json.v2+json'
 TOKEN_INACTIVE = {'status': 'error', 'reason': 'Token is inactive.'}
 
@@ -103,15 +101,15 @@ def built() -> Iterator[list[dict[str, Any]]]:
 def service(built: list[dict[str, Any]]) -> Iterator[DiasporaService]:
     """A DiasporaService with a real ConsumerService and mocked AWS.
 
-    The token check passes, and the subject owns NAMESPACE and its
-    default namespace, V2_NAMESPACE, which hold TOPICS. The reaper thread
+    The token check passes, and the subject owns its default namespace,
+    NAMESPACE, which holds TOPICS. The reaper thread
     never starts.
     """
     auth = MagicMock()
     auth.validate_access_token.return_value = None
     web_service = MagicMock()
     ns_db = web_service.namespace_service.dynamodb
-    ns_db.get_user_namespaces.return_value = [NAMESPACE, V2_NAMESPACE]
+    ns_db.get_user_namespaces.return_value = [NAMESPACE]
     ns_db.get_namespace_topics.return_value = TOPICS
     with (
         patch('web_service.main.AuthManager', return_value=auth),
@@ -135,14 +133,14 @@ def client(service: DiasporaService) -> TestClient:
 
 def _create(client: TestClient, name: str = 'i1', **body: Any) -> Any:
     return client.post(
-        f'{BASE}/{GROUP}',
+        f'{V2}/{GROUP}',
         json={'name': name, **body},
         headers=HEADERS,
     )
 
 
 def _inst(name: str = 'i1') -> str:
-    return f'{BASE}/{GROUP}/instances/{name}'
+    return f'{V2}/{GROUP}/instances/{name}'
 
 
 def _send(
@@ -196,7 +194,7 @@ def test_a_subject_may_hold_four_instances(client: TestClient) -> None:
     assert _create(client, 'one-more').status_code == 200
 
 
-def test_the_service_holds_at_most_16_instances(
+def test_the_service_holds_at_most_max_instances(
     service: DiasporaService,
 ) -> None:
     consumers = service.consumer_service
@@ -215,7 +213,7 @@ def test_the_service_holds_at_most_16_instances(
     body, status = consumers.create_consumer('another', NAMESPACE, GROUP)
     assert status == 429
     assert body['error_code'] == 42901
-    assert 'The service holds 16 consumer instances' in body['message']
+    assert 'The service holds 12 consumer instances' in body['message']
 
 
 def test_an_instance_being_built_counts_against_the_limit(
@@ -894,6 +892,17 @@ def test_half_built_consumer_is_closed(
     assert _create(client).status_code == 200
 
 
+def test_consumers_never_have_the_cluster_create_a_topic(
+    client: TestClient,
+    service: DiasporaService,
+) -> None:
+    """A consumer's metadata requests ask the cluster to create no topic."""
+    assert _create(client).status_code == 200
+    (managed,) = service.consumer_service._consumers.values()
+    network = managed.consumer._client
+    assert network.config['allow_auto_create_topics'] is False
+
+
 # ============================================================================
 # Formats
 # ============================================================================
@@ -947,7 +956,8 @@ def test_binary_and_json_are_accepted_in_any_case(
 
 
 def _subject(i: int) -> str:
-    return f'00000000-0000-0000-0000-{i:012d}'
+    """A subject other than SUBJECT, with the same default namespace."""
+    return f'00000000-0000-0000-{i:04d}-426614174000'
 
 
 def _headers(subject: str) -> dict[str, str]:
@@ -955,7 +965,7 @@ def _headers(subject: str) -> dict[str, str]:
 
 
 def _records(subject: str, name: str, query: str = '') -> str:
-    return f'{BASE}/{GROUP}/instances/{name}/records{query}'
+    return f'{V2}/{GROUP}/instances/{name}/records{query}'
 
 
 def _one_record() -> FetchReply:
@@ -1320,7 +1330,7 @@ async def test_requests_waiting_for_an_instance_hold_no_thread(
         waiting = [
             asyncio.create_task(
                 client.get(
-                    f'{BASE}/{GROUP}/instances/a/assignments',
+                    f'{V2}/{GROUP}/instances/a/assignments',
                     headers=_headers(_subject(0)),
                 ),
             )
@@ -1330,7 +1340,7 @@ async def test_requests_waiting_for_an_instance_hold_no_thread(
         assert threads.borrowed_tokens == 0
         started = time.monotonic()
         other = await client.get(
-            f'{BASE}/{GROUP}/instances/a/assignments',
+            f'{V2}/{GROUP}/instances/a/assignments',
             headers=_headers(_subject(1)),
         )
         assert time.monotonic() - started < 1
@@ -2197,16 +2207,12 @@ def test_unsupported_version_is_400(client: TestClient) -> None:
 
 
 # ============================================================================
-# The v2 paths and their deprecated aliases
+# The v2 paths
 # ============================================================================
 
 
 def _v2_inst(name: str = 'i1') -> str:
     return f'{V2}/{GROUP}/instances/{name}'
-
-
-def _alias_inst(name: str = 'i1') -> str:
-    return f'/api/v3/{V2_NAMESPACE}/consumers/{GROUP}/instances/{name}'
 
 
 def test_a_v2_create_returns_the_v2_url(client: TestClient) -> None:
@@ -2217,51 +2223,24 @@ def test_a_v2_create_returns_the_v2_url(client: TestClient) -> None:
     )
     assert response.status_code == 200
     assert response.headers['content-type'] == 'application/vnd.kafka.v2+json'
-    assert 'deprecation' not in response.headers
     assert response.json() == {
         'instance_id': 'i1',
         'base_uri': f'http://testserver{_v2_inst()}',
     }
 
 
-def test_an_alias_create_returns_the_alias_url(client: TestClient) -> None:
-    response = client.post(
-        f'/api/v3/{V2_NAMESPACE}/consumers/{GROUP}',
-        json={'name': 'i1'},
-        headers=HEADERS,
-    )
-    assert response.status_code == 200
-    assert response.headers['deprecation'] == '@1792972800'
-    assert response.json()['base_uri'] == f'http://testserver{_alias_inst()}'
-
-
-def test_an_instance_is_the_same_through_either_prefix(
+def test_the_earlier_consumer_paths_are_gone(
     service: DiasporaService,
     client: TestClient,
 ) -> None:
-    """An instance made through v2 is used through the alias, and back."""
-    created = client.post(
-        f'{V2}/{GROUP}',
+    """The /api/v3/{namespace}/consumers routes are not served."""
+    response = client.post(
+        f'/api/v3/{NAMESPACE}/consumers/{GROUP}',
         json={'name': 'i1'},
         headers=HEADERS,
     )
-    assert created.status_code == 200
-    subscribed = _send(
-        client,
-        'POST',
-        f'{_alias_inst()}/subscription',
-        {'topics': ['t1']},
-    )
-    assert subscribed.status_code == 204
-    assert subscribed.headers['deprecation'] == '@1792972800'
-    got = client.get(f'{_v2_inst()}/subscription', headers=HEADERS)
-    assert got.json() == {'topics': ['t1']}
-    assert list(service.consumer_service._consumers) == [
-        (SUBJECT, V2_NAMESPACE, GROUP, 'i1'),
-    ]
-    assert client.delete(_alias_inst(), headers=HEADERS).status_code == 204
-    gone = client.get(f'{_v2_inst()}/subscription', headers=HEADERS)
-    assert (gone.status_code, gone.json()['error_code']) == (404, 40403)
+    assert response.status_code == 404
+    assert service.consumer_service._consumers == {}
 
 
 def test_v2_takes_the_callers_default_namespace(
@@ -2270,7 +2249,7 @@ def test_v2_takes_the_callers_default_namespace(
 ) -> None:
     """A subject without its default namespace cannot use the v2 paths."""
     ns_db = service.web_service.namespace_service.dynamodb
-    ns_db.get_user_namespaces.return_value = [NAMESPACE]
+    ns_db.get_user_namespaces.return_value = ['ns-other']
     response = client.post(
         f'{V2}/{GROUP}',
         json={'name': 'i1'},
@@ -2279,25 +2258,18 @@ def test_v2_takes_the_callers_default_namespace(
     assert response.status_code == 404
     assert response.json() == {
         'error_code': 40401,
-        'message': f'Namespace {V2_NAMESPACE} not found for user',
+        'message': f'Namespace {NAMESPACE} not found for user',
     }
     assert service.consumer_service._consumers == {}
 
 
-def test_openapi_marks_the_aliases_deprecated(client: TestClient) -> None:
+def test_openapi_lists_only_the_v2_consumer_routes(client: TestClient) -> None:
     paths = client.get('/openapi.json').json()['paths']
     v2 = {p: ops for p, ops in paths.items() if p.startswith(V2)}
-    aliases = {
-        p: ops
-        for p, ops in paths.items()
-        if p.startswith('/api/v3/{namespace}/consumers')
-    }
     assert sum(len(ops) for ops in v2.values()) == 13
-    assert sum(len(ops) for ops in aliases.values()) == 13
     for ops in v2.values():
         assert not any(op.get('deprecated') for op in ops.values())
-    for ops in aliases.values():
-        assert all(op.get('deprecated') for op in ops.values())
+    assert not [p for p in paths if '/consumers' in p and p not in v2]
 
 
 @pytest.mark.parametrize(
@@ -2484,7 +2456,7 @@ def _v2_fetched(
     headers: list[tuple[str, bytes | None]] | None = None,
 ) -> dict[TopicPartition, list[Any]]:
     return {
-        TopicPartition(f'{V2_NAMESPACE}.{topic}', 0): [
+        TopicPartition(f'{NAMESPACE}.{topic}', 0): [
             SimpleNamespace(key=None, value=v, offset=i, headers=headers or [])
             for i, v in enumerate(values)
         ],
@@ -2492,7 +2464,7 @@ def _v2_fetched(
 
 
 def _v2_consumer(service: DiasporaService) -> KafkaConsumer:
-    key = (SUBJECT, V2_NAMESPACE, GROUP, 'i1')
+    key = (SUBJECT, NAMESPACE, GROUP, 'i1')
     return service.consumer_service._consumers[key].consumer
 
 
@@ -2634,7 +2606,7 @@ def test_max_bytes_counts_the_bytes_of_keys_and_values(
     assert [r['offset'] for r in response.json()] == returned
     if len(returned) < 4:
         seek.assert_called_once_with(
-            TopicPartition(f'{V2_NAMESPACE}.t1', 0),
+            TopicPartition(f'{NAMESPACE}.t1', 0),
             len(returned),
         )
     else:
@@ -2670,7 +2642,7 @@ def test_a_first_record_that_is_not_utf8_is_408(
         ),
     }
     # The next fetch meets it again rather than losing it
-    seek.assert_called_once_with(TopicPartition(f'{V2_NAMESPACE}.t1', 0), 0)
+    seek.assert_called_once_with(TopicPartition(f'{NAMESPACE}.t1', 0), 0)
 
 
 def test_a_record_that_is_not_utf8_ends_only_its_partition(
@@ -2698,7 +2670,7 @@ def test_a_record_that_is_not_utf8_ends_only_its_partition(
         ('t2', 'a'),
         ('t2', 'b'),
     ]
-    seek.assert_called_once_with(TopicPartition(f'{V2_NAMESPACE}.t1', 0), 1)
+    seek.assert_called_once_with(TopicPartition(f'{NAMESPACE}.t1', 0), 1)
 
 
 def test_get_offsets_without_partitions_is_40402(client: TestClient) -> None:

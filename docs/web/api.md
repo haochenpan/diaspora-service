@@ -17,8 +17,9 @@ from diaspora_event_sdk import Client as GlobusClient
 c = GlobusClient()  # triggers Globus login flow on first use
 
 subject = c.subject_openid
-authorization = c.web_client.authorizer.get_authorization_header()
-namespace = f'ns-{subject.replace("-", "")[-12:]}'
+authorizer = c.authorizer or c.app.get_authorizer(c.DIASPORA_RESOURCE_SERVER)
+authorization = authorizer.get_authorization_header()
+namespace = c.namespace
 
 print(f'export SUBJECT="{subject}"')
 print(f'export AUTHORIZATION="{authorization}"')
@@ -294,11 +295,13 @@ An instance returns records as `binary` or `json`, named in `format` in any case
 
 Every topic has one partition, 0, and a request that names another partition is refused with 404. A seek or a commit with offsets takes only partitions assigned to the instance. A partition is assigned by `assignments`, or after a subscribe by the group once the instance has fetched. A seek or commit on any other partition is refused with 409. A seek to the beginning or end with an empty list seeks every assigned partition, and is refused with 409 if none is assigned. An instance either subscribes to topics or is assigned partitions: to switch, unsubscribe first, or the request is refused with 409.
 
-#### The deprecated `/api/v3` consumer routes
+A subscribe or an assign takes only topics the namespace holds, and refuses any other with 404 and 40401. A topic the namespace holds but the cluster does not list, such as one deleted while an instance reads it, is not created by the subscription or the assignment: the instance's fetches return no records from it.
 
-The consumer routes of earlier versions, under `/api/v3/{namespace}/consumers`, remain as deprecated aliases of the v2 routes, with the namespace in the path. They take the same bodies and give the same replies, and a create through them returns a `base_uri` under `/api/v3`. Their replies carry the header `Deprecation: @1792972800` (RFC 9745: deprecated since 26 October 2026), and the OpenAPI document marks them deprecated. An instance is the same instance through either prefix. A later version removes the aliases, so clients should move to `/api/v2/consumers`.
+#### The earlier `/api/v3` consumer routes
 
-Clients of the earlier routes see these changes:
+The consumer routes of earlier versions, under `/api/v3/{namespace}/consumers`, are removed, and a request to them is refused with 404, or with 405 for a group named `recreate`, whose path is the topic recreate route's. Clients use `/api/v2/consumers`, which acts in the caller's default namespace.
+
+A client of the earlier routes also sees these changes:
 
 - A request body with a content type other than a v2 type or `application/json` is refused with 415. `curl -d` without `-H "Content-Type: ..."` sends `application/x-www-form-urlencoded`, so it is refused.
 - A create with a group or name that breaks the rule above is refused with 422, including an empty name, which the earlier routes took.
@@ -325,12 +328,12 @@ After a 404 with 40403, the client creates the instance again with the same grou
 
 The consumer routes have these limits:
 
-- A user (`subject`) may hold 4 consumer instances, and the service 16 in all. A create past either is refused with 429.
+- A user (`subject`) may hold 4 consumer instances, and the service 12 in all. A create past either is refused with 429.
 - A request may list at most as many topics, partitions or offsets as a namespace may hold topics (50, set by `MAX_TOPICS_PER_NAMESPACE`); a longer list is refused with 422. A request body may be 64 KiB; a larger one is refused with 413 before it is read.
 - A fetch asks each broker for at most 1 MiB of records. A broker still returns a first record larger than that, so a fetch can read a record of up to 8 MiB from each broker.
 - A reply holds at most 2 MiB of JSON. The records past that are left for the next fetch, which returns them first. A fetch always returns its first record, however large: a reply over 2 MiB holds that record alone and is sent in chunks, without a `Content-Length`.
 - A user may have 2 fetches in progress. A fetch past those is refused at once with 429 and error code 42901.
-- The service polls for 3 fetches at once, in turns of at most half a second, which fetches take in the order they ask. A turn that finds nothing goes to the back of the line; a turn that finds records keeps its place until its reply is sent. So a fetch whose records are ready waits about half a second for every 3 fetches ahead of it: about 2.5 s behind 15 quiet long polls, the most there can be, since the service holds 16 instances and an instance serves one fetch at a time. Replies being sent hold their turns longer. The default wait of 5000 ms gets through behind 15 quiet long polls; a shorter `timeout` can be refused. A fetch that gets no turn within its wait for records is refused with 429 and 42901. Like the refusal for a user's third fetch, it carries `Retry-After: 1` and fetches nothing.
+- The service polls for 3 fetches at once, in turns of at most half a second, which fetches take in the order they ask. A turn that finds nothing goes to the back of the line; a turn that finds records keeps its place until its reply is sent. So a fetch whose records are ready waits about half a second for every 3 fetches ahead of it: about 1.5 s behind 11 quiet long polls, the most there can be, since the service holds 12 instances and an instance serves one fetch at a time. Replies being sent hold their turns longer. The default wait of 5000 ms gets through behind 11 quiet long polls; a shorter `timeout` can be refused. A fetch that gets no turn within its wait for records is refused with 429 and 42901. Like the refusal for a user's third fetch, it carries `Retry-After: 1` and fetches nothing.
 - A reply must be sent within 30 s. A reply whose sending has begun and takes longer is not fetched again: the service closes the connection, and the next fetch starts after the reply's records. A reply over 2 MiB holds one record of up to 8 MiB, which takes up to about 10.7 MiB as base64 and up to 48 MiB as the JSON string of text of control characters, so a client may need to read such a reply at 1.6 MiB/s or faster. In `binary`, the reply for an 8 MiB record is about 10.7 MiB, which needs about 0.36 MiB/s. The skipped records stay in the topic, and the positions route can seek back to them, to the offset after the last record the client received, until a commit without a body, or auto-commit, commits past them. `max_bytes` does not make a one-record reply smaller.
 - A reply the client did not receive is fetched again by the next fetch, unless it was already handed to the network or took more than 30 s to send. This covers a client that leaves while its fetch polls or while a reply is sent, and a reply that fails to encode. The service cannot tell whether a client read a reply it handed to the network whole, so such a reply counts as received, as a reply read by a Kafka consumer does.
 - When a reply is cut at 2 MiB or at `max_bytes`, the partitions take turns to come first in the next replies, so one partition's records cannot keep another's out. Within a partition, records keep their order.
@@ -356,7 +359,7 @@ Every error reply of a consumer route is `{"error_code": <int>, "message": <str>
 | 415 | 415 | The request's content type is not a v2 type or `application/json` |
 | 422 | 422 | A header or field is missing or invalid, a list is too long, or the format is not `binary` or `json` |
 | 42204 | 422 | At create, the name or a setting breaks its rule above; at subscribe, the list of topics is empty or `topic_pattern` is set |
-| 42901 | 429 | The user holds 4 instances or the service 16, the user has 2 fetches in progress, the fetch got no turn within its wait, or the cluster throttled the request |
+| 42901 | 429 | The user holds 4 instances or the service 12, the user has 2 fetches in progress, the fetch got no turn within its wait, or the cluster throttled the request |
 | 500 | 500 | An error inside the service |
 | 50002 | 500 | Kafka failed the request, or the service has no Kafka endpoint |
 | 50003 | 500 | A retriable Kafka error, or Kafka did not answer in time; retry |
@@ -370,7 +373,6 @@ The consumer routes follow the paths, bodies, statuses and codes of Confluent's 
 | Case | Octopus | Confluent | Why |
 | --- | --- | --- | --- |
 | Namespace and topic names | The routes act in the caller's default namespace; topics and groups are named without it | No namespaces | Each user's topics and groups are prefixed with the user's namespace |
-| `/api/v3/{namespace}/consumers` | Deprecated aliases of the v2 routes | No such routes | Clients of earlier versions keep working until a later version removes them |
 | Group and instance names | 1 to 128 letters, digits, dots, dashes or underscores, starting with a letter or digit; else 422, 42204 | No rule | Both are segments of `base_uri`, and clients drop a segment such as `..` |
 | Request content type `application/json` | Accepted | 415, 415 | Clients that send JSON as `application/json` keep working |
 | Record headers | Each record has `headers` | v2 records have none | The produce routes write headers, so the consumer routes return them |
@@ -381,7 +383,7 @@ The consumer routes follow the paths, bodies, statuses and codes of Confluent's 
 | Format `avro`, `jsonschema` or `protobuf` | Refused, 422, 422 | Decoded with a schema registry | Octopus runs no schema registry. Confluent refuses a format it does not know with 422, 422 |
 | Body not JSON | 400, 40003 | 400, 400 | The produce routes' code for the same case |
 | Body over 64 KiB | 413, 41301 | No limit of its own | It bounds the service's memory; the produce routes' code |
-| More than 4 instances for a user, or 16 in all | 429, 42901 | No limit | Each instance holds a Kafka client in the service's memory; 42901 is Confluent's code for too many requests |
+| More than 4 instances for a user, or 12 in all | 429, 42901 | No limit | Each instance holds a Kafka client in the service's memory; 42901 is Confluent's code for too many requests |
 | A list longer than a namespace's topics | 422, 422 | No limit | A namespace holds no more topics, each with one partition, so a longer list names a topic or partition twice or one that does not exist |
 | Token check failed | 401, 40101 | 401 from the web server's HTTP authentication, without a Confluent error code; Confluent's 40101 is for a failed Kafka authentication | A code where a client looks for one |
 | The service fails to authenticate to Kafka | 500, 50002 | 401, 40101 | The credentials are the service's, not the caller's |

@@ -13,6 +13,7 @@ To run only integration tests:
 
 from __future__ import annotations
 
+import logging
 import threading
 from unittest.mock import call
 from unittest.mock import MagicMock
@@ -439,8 +440,8 @@ def test_delete_topic_closes_admin_client_on_success() -> None:
         assert kwargs['timeout_ms'] == ADMIN_OPERATION_TIMEOUT_MS
 
 
-def test_create_topic_timeout_error() -> None:
-    """Test create_topic handles specific KafkaTimeoutError."""
+def test_create_topic_timeout_error(caplog: pytest.LogCaptureFixture) -> None:
+    """A create that times out logs the error and tells the client to retry."""
     kafka_service = KafkaService(
         bootstrap_servers='test-servers',
         region='us-east-1',
@@ -458,17 +459,19 @@ def test_create_topic_timeout_error() -> None:
             'Request timed out',
         )
 
-        result = kafka_service.create_topic('test-namespace', 'test-topic')
+        with caplog.at_level(logging.WARNING, logger='web_service'):
+            result = kafka_service.create_topic('test-namespace', 'test-topic')
 
-        assert result is not None
-        assert result['status'] == 'failure'
-        assert 'Failed to create Kafka topic' in result['message']
-        assert 'after 3 attempts' in result['message']
-        # Verify timeout error is included in message
-        assert (
-            'timed out' in result['message'].lower()
-            or 'timeout' in result['message'].lower()
-        )
+        assert result == {
+            'status': 'failure',
+            'message': (
+                'Failed to create Kafka topic test-namespace.test-topic '
+                'after 3 attempts: the Kafka cluster did not complete it; '
+                'retry shortly'
+            ),
+        }
+        # The error goes to the log, not to the client
+        assert 'Request timed out' in caplog.text
 
 
 def test_create_topic_bootstrap_servers_none() -> None:

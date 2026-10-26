@@ -1698,7 +1698,7 @@ def test_close_closes_producer_with_timeout(
 ) -> None:
     producer_service.send(KAFKA_TOPIC, [_record()], _deadline())
     producer_service.close()
-    assert fake_producer.close_calls == [PRODUCER_CLOSE_TIMEOUT_S]
+    assert fake_producer.close_calls == [PRODUCER_CLOSE_TIMEOUT_S / 2]
 
 
 def test_close_without_producer_builds_none(

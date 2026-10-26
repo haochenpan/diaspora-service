@@ -34,7 +34,8 @@ from web_service.producer_service import RETRY_AFTER_S
 
 SUBJECT = '123e4567-e89b-12d3-a456-426614174000'
 HEADERS = {'subject': SUBJECT, 'authorization': 'Bearer ' + 'a' * 50}
-NAMESPACE = 'ns-test123'
+# SUBJECT's default namespace, the one the consumer routes act in
+NAMESPACE = 'ns-426614174000'
 TOPIC = 't1'
 RECORDS = f'/api/v3/{NAMESPACE}/topics/{TOPIC}/records'
 BATCH = f'/api/v3/{NAMESPACE}/topics/{TOPIC}/records:batch'
@@ -382,7 +383,7 @@ async def test_produce_kafka_failure_reply(
 # ============================================================================
 
 CONSUMER_SUBSCRIBE = (
-    f'/api/v3/{NAMESPACE}/consumers/g/instances/i/subscription',
+    '/api/v2/consumers/g/instances/i/subscription',
     {'topics': [TOPIC]},
 )
 PRODUCE_ROUTES = (
@@ -1357,7 +1358,7 @@ async def test_shutdown_closes_producer(
         response = await _post(service, RECORDS, {'value': VALUE})
         assert response.status_code == 200
         assert fake_producer.close_calls == []
-    assert fake_producer.close_calls == [PRODUCER_CLOSE_TIMEOUT_S]
+    assert fake_producer.close_calls == [PRODUCER_CLOSE_TIMEOUT_S / 2]
     service.consumer_service.shutdown_all.assert_called_once_with()
 
 
