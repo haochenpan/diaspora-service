@@ -127,38 +127,49 @@ curl -X POST "https://diaspora-web-service.qpp943wkvr7b2.us-east-1.cs.amazonligh
     {"id": "1", "topic_name": "my-topic", "partition_id": 0, "offset": 13, "timestamp": "2026-10-26T15:04:05.456Z"}
   ],
   "failures": [
-    {"id": "2", "error_code": 40004, "message": "value type AVRO needs a schema registry, which Octopus does not run; use BINARY, JSON or STRING"}
+    {"id": "2", "error_code": 42206, "message": "value type AVRO needs a schema registry; Octopus runs no schema registry, so use BINARY, JSON or STRING"}
   ]
 }
 ```
 
+A produce request needs `Content-Type: application/json`; a `charset` parameter, if present, must be UTF-8. Any other content type is refused with 415.
+
 A record has the optional fields `key`, `value`, `headers`, `partition_id` and `timestamp`, and needs a key or a value:
 
-- `key` and `value` are `{"type": ..., "data": ...}`. `BINARY` data is base64 and is written decoded; `JSON` data is any JSON value, written compactly as UTF-8; `STRING` data is a string, written as UTF-8. Absent or null `data` writes a null key or value. Octopus runs no schema registry, so the `AVRO`, `PROTOBUF` and `JSONSCHEMA` types, the schema fields (`schema`, `schema_id`, `schema_version`, `subject`, `subject_name_strategy`) and a key or value without a `type` are refused.
-- `headers` is a list of `{"name": string, "value": base64 string or null}`; a null value is written as an empty one.
-- `partition_id` may only be 0: every topic has one partition.
+- `key` and `value` are `{"type": ..., "data": ...}`. `BINARY` data is base64 and is written decoded; `JSON` data is any JSON value, written compactly as UTF-8; `STRING` data is a string, written as UTF-8. Absent or null `data` writes a null key or value. Octopus runs no schema registry, so the `AVRO`, `PROTOBUF` and `JSONSCHEMA` types, the schema fields (`schema`, `schema_id`, `schema_version`, `subject`, `subject_name_strategy`) and a key or value without a `type` are refused with 422.
+- A record whose key and value are both null or absent is refused with 400: kafka-python, which the service sends with, cannot send one.
+- `headers` is a list of `{"name": string, "value": base64 string or null}`; a null value is written as an empty one, because kafka-python cannot send a null header value.
+- `partition_id` may only be 0: every topic has one partition, and any other partition is not found (404).
 - `timestamp` is ISO-8601 with a UTC offset (for example `2026-10-26T15:04:05.123Z`) and becomes the record's timestamp; without it, the record takes the time it is produced. The reply gives the record's timestamp in UTC.
 
-The single-record route takes exactly one record: a body that holds more than one JSON value is refused with 400. The batch route takes 1 to 500 entries, each a record with an `id` of 1 to 80 characters that is distinct within the batch. It answers 207 once the request is read, with each entry in `successes` or `failures`. A missing, invalid or repeated id, or more than 500 entries, refuses the whole batch with 400.
+The single-record route takes exactly one record: an empty body is refused with 422 and a body that holds more than one JSON value with 400. The batch route takes 1 to 500 entries, each a record with an `id` of 1 to 80 letters, digits, dashes or underscores that is distinct within the batch. It answers 207 once every entry has been acknowledged or has failed, within the request's 30 s, with each entry in `successes` or `failures`. An empty body, missing or empty `entries`, more than 500 entries, or a missing, invalid or repeated id refuses the whole batch with 422.
 
-A record holds at most 8 MiB once decoded (key, value and header names and values), and a request body at most 16 MiB. The records of a request share 30 s to be acknowledged: a record not acknowledged by then fails with 50002 and may still be written, so a retry can write it twice. The token, namespace and topic checks answer as on the consumer routes.
+A record holds at most 8 MiB (8,388,608 bytes), including about 100 bytes of Kafka's per-record overhead: its key, value and header names and values, once decoded, must fit in the rest. A request body holds at most 16 MiB. A body whose JSON would take too much memory to parse is refused with 413 before it is parsed. The service estimates the cost as 3 bytes for each byte of an ASCII body (9 for a body with other characters), plus 160 for each `{` or `[`, 32 for each `"` and 40 for each `,`, and refuses an estimate over 192 MiB. So a body of long strings passes up to the 16 MiB, a JSON array of four-digit numbers (`[1000,1000,...]`) too, one of single digits up to about 8 MiB, and one of empty objects or arrays (`[{},{},...]`) up to about 2.7 MiB.
+
+The service serves at most 8 produce requests at once, holding at most 48 MiB of their bodies. It counts a request by its `Content-Length`, or as 16 MiB if it sends none. A request over either limit is refused at once with 429 and `Retry-After: 1`, before its body is read.
+
+The 30 s of a request start when it arrives, and its records share them to be acknowledged. A record not sent by then fails with 50003 and is not written; a record sent but not acknowledged by then fails with 50003 and may still be written. A 200 or a success in a 207 does not rule out a second copy either: the producer is not idempotent and retries a failed write within the 30 s, so a write that reached the cluster but whose acknowledgement was lost can be written twice. Consumers that need each record once should carry an id in the record and drop repeats. While the service cannot reach the Kafka cluster, it answers 503 with `Retry-After: 1` for a few seconds before it tries again. The token, namespace and topic checks answer as on the consumer routes, with 401 or 404.
 
 | Code | Status | Meaning |
 | --- | --- | --- |
-| 40001 | 400 | The body is not one JSON object |
-| 40002 | 400 | The body holds more than one JSON value |
-| 40003 | 400 | A record field is invalid (bad base64, unknown type or field, timestamp without an offset, no key or value) |
-| 40004 | 400 | The record needs a schema registry |
-| 40005 | 400 | `partition_id` is not 0 |
-| 40006 | 400 | The topic name contains a dot |
-| 40007 | 400 | The batch's `entries` are missing, empty or more than 500 |
-| 40008 | 400 | A batch entry's `id` is missing, invalid or repeated |
+| 40002 | 400 | The topic name contains a dot |
+| 40003 | 400 | The body is not one JSON object in UTF-8 |
+| 40004 | 400 | The body holds more than one JSON value |
+| 40005 | 400 | A record field is invalid (bad base64, unknown type or field, timestamp without an offset, no key or value) |
 | 40401 | 404 | The namespace or topic is not found |
+| 40402 | 404 | `partition_id` is not 0 |
 | 41301 | 413 | The request body is over 16 MiB |
-| 41302 | 413 | A record is over 8 MiB once decoded |
-| 50002 | 500 | Kafka failed to write the record, or did not acknowledge it within 30 s |
+| 41302 | 413 | A record is over 8 MiB, counting Kafka's overhead |
+| 41303 | 413 | The body's JSON would take too much memory to parse |
+| 41501 | 415 | The body is not `Content-Type: application/json` in UTF-8 |
+| 42206 | 422 | The body is empty, or the record needs a schema registry |
+| 42208 | 422 | The batch is empty or over 500 entries, or an entry's `id` is missing, invalid or repeated |
+| 42901 | 429 | The service is serving as many produce requests or bytes as it holds; retry after `Retry-After` |
+| 50002 | 500 | Kafka refused the record, or the service is shutting down |
+| 50003 | 500 | A retriable Kafka error, or the record was not acknowledged within the request's 30 s; retry it |
+| 50302 | 503 | The service cannot reach the Kafka cluster; retry after `Retry-After` |
 
-In a batch, 40003, 40004, 40005, 41302 and 50002 fail the one entry and the others go on; the other codes refuse the whole request.
+In a batch, 40005, 40402, 41302, 42206, 50002, 50003 and 50302 fail the one entry and the others go on; the other codes refuse the whole request. Error messages do not include Kafka's own error text.
 
 ### Consumer
 
