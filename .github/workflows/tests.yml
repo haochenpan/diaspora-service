@@ -5,19 +5,34 @@ on:
     branches: [main, test-me-*]
     tags: '**'
   pull_request:
+  schedule:
+    # Nightly live tests, followed by the sweep of what they left behind.
+    - cron: '17 7 * * *'
   workflow_dispatch:
 
-jobs:
-  tests:
-    name: tests (${{ matrix.os }}, ${{ matrix.python }})
-    timeout-minutes: 20
+permissions:
+  contents: read
 
-    strategy:
-      matrix:
-        include:
-        - os: ubuntu-latest
-          python: '3.14'
-    runs-on: ${{ matrix.os }}
+env:
+  PYTHON_VERSION: '3.14'
+
+jobs:
+  unit:
+    uses: ./.github/workflows/unit-tests.yml
+
+  # The integration set runs against the live AWS account and MSK cluster,
+  # so it runs only on main, nightly and by hand, one run at a time.
+  live:
+    name: live
+    if: >-
+      github.event_name == 'schedule'
+      || github.event_name == 'workflow_dispatch'
+      || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    timeout-minutes: 20
+    runs-on: ubuntu-latest
+    concurrency:
+      group: live-tests
+      cancel-in-progress: false
 
     env:
       AWS_ACCESS_KEY_ID: ${{ secrets.DOCKER_AWS_ACCESS_KEY_ID }}
@@ -37,35 +52,73 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Set up Python ${{ matrix.python }}
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
         uses: actions/setup-python@v7
         with:
-          python-version: ${{ matrix.python }}
+          python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Get pip cache dir
         id: pip-cache-dir
-        run: echo "PIP_CACHE_DIR=$(pip cache dir)" >> $GITHUB_ENV
+        run: echo "PIP_CACHE_DIR=$(pip cache dir)" >> "$GITHUB_ENV"
 
       - name: Use pip cache
         id: pip-cache
         uses: actions/cache@v6
         with:
           path: ${{ env.PIP_CACHE_DIR }}
-          key: tests-${{ matrix.os }}-pip-${{ matrix.python }}-${{ hashFiles('pyproject.toml') }}
+          key: tests-${{ runner.os }}-pip-${{ env.PYTHON_VERSION }}-${{ hashFiles('pyproject.toml') }}
           restore-keys: |
-            tests-${{ matrix.os }}-pip-${{ matrix.python }}-
+            tests-${{ runner.os }}-pip-${{ env.PYTHON_VERSION }}-
 
       - name: Install Packages
         run: |
           python -m pip install --upgrade pip setuptools
           python -m pip install -e ".[dev]"
 
-      # Runs without the repository's secrets (Dependabot's, forks') can't
-      # reach the live cluster, so they stop after the install.
-      - name: Run Tests
+      # Runs without the repository's secrets (forks') can't reach the
+      # live cluster, so they stop after the install.
+      - name: Run live tests
         if: env.CLIENT_ID != ''
-        run: pytest tests/  -vv -s
+        run: pytest tests/ -m integration -vv -s
 
-      - name: Skip Tests
+      - name: Skip live tests
         if: env.CLIENT_ID == ''
-        run: echo "::notice::No secrets in this run, so the tests were skipped."
+        run: echo "::notice::No secrets in this run, so the live tests were skipped."
+
+  # After the nightly live run, whether it passed or failed (not when it
+  # was cancelled), delete the resources live runs left behind. It shares
+  # the live tests' concurrency group, so it never runs beside a live run.
+  sweep:
+    name: sweep
+    needs: live
+    if: ${{ !cancelled() && github.event_name == 'schedule' }}
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    concurrency:
+      group: live-tests
+      cancel-in-progress: false
+
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.DOCKER_AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.DOCKER_AWS_SECRET_ACCESS_KEY }}
+      CLIENT_ID: ${{ secrets.DOCKER_CLIENT_ID }}
+      DEFAULT_SERVERS: ${{ secrets.DOCKER_DEFAULT_SERVERS }}
+      AWS_ACCOUNT_REGION: ${{ secrets.DOCKER_AWS_ACCOUNT_REGION }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Packages
+        run: |
+          python -m pip install --upgrade pip setuptools
+          python -m pip install -e .
+
+      - name: Delete leftover test resources
+        if: env.CLIENT_ID != ''
+        run: python scripts/sweep_test_resources.py --apply

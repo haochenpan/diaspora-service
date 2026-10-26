@@ -18,7 +18,11 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  unit:
+    uses: ./.github/workflows/unit-tests.yml
+
   deploy-lightsail-containers:
+    needs: unit
     runs-on: ubuntu-latest
 
     strategy:

@@ -1,0 +1,64 @@
+name: unit-tests
+
+# The fast test set: every test not marked integration. It is called by
+# tests.yml on every push and pull request, and by deployment.yml before a
+# deploy. It gets no secrets.
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  # A fixed name, so the check keeps its name when the Python version
+  # changes.
+  pytest:
+    name: pytest
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+
+    # Placeholders that satisfy the service's start-up checks. No AWS
+    # credentials or config are read, and conftest.py fails any test here
+    # that opens a network connection.
+    env:
+      AWS_CONFIG_FILE: /dev/null
+      AWS_SHARED_CREDENTIALS_FILE: /dev/null
+      AWS_EC2_METADATA_DISABLED: 'true'
+      AWS_ACCESS_KEY_ID: dummy-not-real
+      AWS_SECRET_ACCESS_KEY: dummy-not-real  # pragma: allowlist secret
+      SERVER_CLIENT_ID: 00000000-0000-0000-0000-000000000000
+      SERVER_SECRET: dummy-not-real  # pragma: allowlist secret
+      AWS_ACCOUNT_ID: '000000000000'
+      AWS_ACCOUNT_REGION: us-east-1
+      MSK_CLUSTER_NAME: dummy
+      PYTHON_VERSION: '3.14'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Get pip cache dir
+        id: pip-cache-dir
+        run: echo "PIP_CACHE_DIR=$(pip cache dir)" >> "$GITHUB_ENV"
+
+      - name: Use pip cache
+        id: pip-cache
+        uses: actions/cache@v6
+        with:
+          path: ${{ env.PIP_CACHE_DIR }}
+          key: tests-${{ runner.os }}-pip-${{ env.PYTHON_VERSION }}-${{ hashFiles('pyproject.toml') }}
+          restore-keys: |
+            tests-${{ runner.os }}-pip-${{ env.PYTHON_VERSION }}-
+
+      - name: Install Packages
+        run: |
+          python -m pip install --upgrade pip setuptools
+          python -m pip install -e ".[dev]"
+
+      - name: Run unit tests
+        run: pytest tests/ -m "not integration" -vv
