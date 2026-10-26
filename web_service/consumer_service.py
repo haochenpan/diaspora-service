@@ -87,7 +87,9 @@ MAX_INSTANCES = 16
 # longest either may name
 DEFAULT_FETCH_WAIT_MS = 5_000
 MAX_FETCH_WAIT_MS = 30_000
-# auto.offset.reset values kafka-python and Confluent take
+# auto.offset.reset values Confluent takes, which the service takes in any
+# case. kafka-python takes them in any case too, but takes a value it does
+# not know as none, with only a log line, so the service checks them.
 OFFSET_RESETS = ('earliest', 'latest', 'none')
 
 # Error codes of the consumer routes: Confluent's, from kafka-rest's
@@ -278,15 +280,16 @@ def _check_settings(
     auto_commit_enable: str,
     fetch_min_bytes: int | str | None,
     consumer_request_timeout_ms: int | str | None,
-) -> Reply | tuple[int | None, int | None]:
+) -> Reply | tuple[str, int | None, int | None]:
     """Check a create's settings, as Confluent's REST Proxy does.
 
     Returns:
-        fetch.min.bytes and consumer.request.timeout.ms as numbers (None
-        when not given), or the 422 reply naming the first setting that
-        breaks its rule
+        auto.offset.reset in lower case, and fetch.min.bytes and
+        consumer.request.timeout.ms as numbers (None when not given), or
+        the 422 reply naming the first setting that breaks its rule
     """
-    if auto_offset_reset not in OFFSET_RESETS:
+    reset = auto_offset_reset.strip().lower()
+    if reset not in OFFSET_RESETS:
         return _invalid_config(
             'auto.offset.reset',
             'must be earliest, latest or none',
@@ -305,7 +308,7 @@ def _check_settings(
                 'must be a whole number of at least 0',
             )
         numbers.append(number)
-    return numbers[0], numbers[1]
+    return reset, numbers[0], numbers[1]
 
 
 class InstanceLock:
@@ -805,7 +808,7 @@ class ConsumerService:
         )
         if isinstance(settings[0], dict):
             return settings
-        min_bytes, wait_ms = settings
+        auto_offset_reset, min_bytes, wait_ms = settings
 
         instance_id = name or uuid.uuid4().hex[:12]
         key = self._consumer_key(

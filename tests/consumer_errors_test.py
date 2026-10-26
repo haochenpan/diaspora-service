@@ -758,7 +758,7 @@ def test_broker_unreachable_at_create_is_503(
             'auto.offset.reset must be earliest, latest or none',
         ),
         (
-            {'auto.offset.reset': 'Earliest'},
+            {'auto.offset.reset': 'largest'},
             'auto.offset.reset must be earliest, latest or none',
         ),
         (
@@ -814,6 +814,20 @@ def test_valid_consumer_config_is_accepted(
     body: dict[str, Any],
 ) -> None:
     assert _create(client, **body).status_code == 200
+
+
+@pytest.mark.parametrize(
+    ('given', 'passed'),
+    (('Earliest', 'earliest'), ('LATEST', 'latest'), (' none ', 'none')),
+)
+def test_offset_reset_is_taken_in_any_case(
+    client: TestClient,
+    built: list[dict[str, Any]],
+    given: str,
+    passed: str,
+) -> None:
+    assert _create(client, **{'auto.offset.reset': given}).status_code == 200
+    assert built[-1]['auto_offset_reset'] == passed
 
 
 def test_half_built_consumer_is_closed(
