@@ -60,9 +60,12 @@ def live_service(monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:
 
 
 @pytest.fixture
-def live_topic(live_service: Any) -> Iterator[tuple[str, str, str]]:
+def live_topic(
+    live_service: Any,
+    random_subject: str,
+) -> Iterator[tuple[str, str, str]]:
     """A user with a temporary topic; deleted with the user afterwards."""
-    subject = f'test-subject-{os.urandom(8).hex()}'
+    subject = random_subject
     web_service = live_service.web_service
     try:
         created = web_service.create_user(subject)
