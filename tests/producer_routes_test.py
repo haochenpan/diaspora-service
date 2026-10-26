@@ -1024,7 +1024,7 @@ async def test_stalled_bodies_hold_only_what_they_sent(
     assert _admitted(service) == (0, 0)
 
 
-async def test_bodies_past_the_byte_budget_get_429_mid_read(
+async def test_bodies_past_the_byte_budget_get_429(
     service: DiasporaService,
     fake_producer: FakeProducer,
 ) -> None:
@@ -1042,20 +1042,78 @@ async def test_bodies_past_the_byte_budget_get_429_mid_read(
     ]
     held = count * len(sent)
     await _until(lambda: service.produce_admission.body_bytes == held)
-    refused = await _post(
-        service,
-        RECORDS,
-        {'value': VALUE},
-        headers=_headers('user-new'),
-    )
-    assert refused.status_code == 429
-    assert refused.json()['error_code'] == 42901
-    assert 'bytes' in refused.json()['message']
+    # A declared length that does not fit is refused before the read, and
+    # an undeclared one once its bytes do not fit
+    for content_length, chunks_read in ((10, 0), (None, 1)):
+        status, body, read = await _call_asgi(
+            service,
+            RECORDS,
+            iter([b' ' * 10]),
+            content_length=content_length,
+        )
+        assert (status, body['error_code']) == (429, 42901)
+        assert 'bytes' in body['message']
+        assert read == chunks_read
     for request in stalled:
         await request.leave()
     assert _admitted(service) == (0, 0)
     served = await _post(service, RECORDS, {'value': VALUE})
     assert served.status_code == 200
+
+
+async def test_requests_past_the_limit_get_429_before_their_body(
+    service: DiasporaService,
+    fake_producer: FakeProducer,
+) -> None:
+    """With every place taken, a new body is refused unread."""
+    gate = _Gate()
+    fake_producer.gate = gate
+    async with _client(service) as client:
+        held = [
+            asyncio.create_task(
+                client.post(
+                    RECORDS,
+                    json={'value': VALUE},
+                    headers=_headers(f'user-{i}'),
+                ),
+            )
+            for i in range(PRODUCE_MAX_REQUESTS)
+        ]
+        await gate.until_waiting(PRODUCE_MAX_REQUESTS)
+        for content_length in (40, None):
+            status, body, read = await _call_asgi(
+                service,
+                RECORDS,
+                iter([b'{"value":{"type":"STRING","data":"x"}}']),
+                content_length=content_length,
+            )
+            assert (status, body['error_code']) == (429, 42901)
+            assert 'at once' in body['message']
+            assert read == 0
+        gate.release.set()
+        replies = await asyncio.gather(*held)
+    assert [r.status_code for r in replies] == [200] * PRODUCE_MAX_REQUESTS
+    assert _admitted(service) == (0, 0)
+
+
+async def test_declared_body_past_the_share_gets_429_before_it_is_read(
+    service: DiasporaService,
+    fake_producer: FakeProducer,
+) -> None:
+    service.produce_admission = ProduceAdmission(subject_max_body_bytes=1500)
+    stalled = _Stalled(service, [b' ' * 1000], content_length=1000)
+    await _until(lambda: _admitted(service) == (0, 1000))
+    status, body, read = await _call_asgi(
+        service,
+        RECORDS,
+        iter([b' ' * 600]),
+        content_length=600,
+    )
+    assert (status, body['error_code']) == (429, 42901)
+    assert 'one user may hold' in body['message']
+    assert read == 0
+    await stalled.leave()
+    assert _admitted(service) == (0, 0)
 
 
 @pytest.mark.parametrize('content_length', (None, 5000))

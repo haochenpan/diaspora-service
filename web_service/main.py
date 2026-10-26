@@ -1100,7 +1100,8 @@ class DiasporaService:
         once, counting only the bytes that have arrived, and one user at
         most 16 MiB in at most 2 requests; once read, a body takes one of
         8 places for parsing and sending. Past a limit it answers 429 with
-        `Retry-After`.
+        `Retry-After`, before the body is sent if every place is taken or
+        the Content-Length is more than the bytes free.
 
         Error codes: 40002 dot in the topic name, 40003 body not one JSON
         object, 40004 more than one JSON value, 40005 invalid record
@@ -1190,10 +1191,11 @@ class DiasporaService:
             topic,
         ):
             return err
-        # The body's bytes are reserved as they arrive, not as declared, so
-        # a stalled upload holds only what it has sent
+        # A request that could not be served now is refused before its body
+        # is sent; the body's bytes are reserved as they arrive, not as
+        # declared, so a stalled upload holds only what it has sent
         try:
-            reservation = self.produce_admission.admit(subject)
+            reservation = self.produce_admission.admit(subject, declared)
         except RecordError as e:
             return self._produce_error(e)
         try:

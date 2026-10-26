@@ -12,7 +12,8 @@ every other route:
 1. Admission (ProduceAdmission): the bytes a request has sent, and then
    its records, count against PRODUCE_MAX_BODY_BYTES; once its body is
    read, it takes one of PRODUCE_MAX_REQUESTS places. Each subject has a
-   share of both. A request past a bound is refused at once.
+   share of both. A request past a bound is refused at once, and one
+   that could not be served when it arrives before its body is sent.
 2. Parsing (prepare_record, prepare_batch): one body at a time, after a
    cheap estimate of what parsing it would cost in memory.
 3. Sending (ProducerService.send): within SEND_TIMEOUT_S of the parse.
@@ -256,21 +257,42 @@ class ProduceAdmission:
         self._subjects: dict[str, list[int]] = {}
         self._lock = threading.Lock()
 
-    def admit(self, subject: str) -> Reservation:
+    def admit(
+        self,
+        subject: str,
+        declared: int | None = None,
+    ) -> Reservation:
         """Admit a request of subject to send its body, holding nothing.
 
+        A request that could not be served now is refused before its body
+        is sent: every place is taken, or its declared length is more than
+        the bytes free. Nothing is reserved for it, so a stalled upload
+        holds nothing; these checks race with other requests, so the read
+        and the place taken after it check again.
+
         Raises:
-            RecordError: 429 if the subject has its most requests
+            RecordError: 429 if the subject has its most requests, every
+                place is taken, or the declared length does not fit
         """
         with self._lock:
-            held = self._subjects.setdefault(subject, [0, 0])
+            held = self._subjects.get(subject, [0, 0])
             if held[0] >= self.subject_max_requests:
                 raise _busy(
                     f'You have {held[0]} produce requests in flight, the '
                     'most one user may',
                 )
-            held[0] += 1
+            self._check_place()
+            if declared:
+                self._check_bytes(held, declared)
+            self._subjects.setdefault(subject, held)[0] += 1
         return Reservation(self, subject)
+
+    def _check_place(self) -> None:
+        if self.requests >= self.max_requests:
+            raise _busy(
+                f'The service is serving {self.max_requests} produce '
+                'requests, the most it serves at once',
+            )
 
     def _check_bytes(self, held: list[int], more: int) -> None:
         if self.body_bytes + more > self.max_body_bytes:
@@ -292,11 +314,7 @@ class ProduceAdmission:
 
     def _start(self) -> None:
         with self._lock:
-            if self.requests >= self.max_requests:
-                raise _busy(
-                    f'The service is serving {self.max_requests} produce '
-                    'requests, the most it serves at once',
-                )
+            self._check_place()
             self.requests += 1
 
     def _release(

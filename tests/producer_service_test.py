@@ -1002,9 +1002,11 @@ def test_admission_bounds_requests_past_their_read() -> None:
     admission = ProduceAdmission(max_requests=2, max_body_bytes=100)
     reading = [admission.admit(f'reader-{i}') for i in range(5)]
     first = admission.admit('a')
-    first.start()
-    admission.admit('b').start()
+    second = admission.admit('b')
     late = admission.admit('c')
+    first.start()
+    second.start()
+    # Admitted while places were free, it finds none once read
     _refused(late.start)
     assert admission.requests == 2
     first.release()
@@ -1045,6 +1047,28 @@ def test_admission_bounds_each_subject() -> None:
     other = admission.admit('b')
     other.grow_to(50)
     _refused(lambda: other.grow_to(51))
+
+
+def test_admission_refuses_what_it_could_not_serve() -> None:
+    """Admission checks the places and declared bytes, reserving none."""
+    admission = ProduceAdmission(
+        max_requests=1,
+        max_body_bytes=100,
+        subject_max_body_bytes=60,
+    )
+    first = admission.admit('a', 50)
+    assert (admission.requests, admission.body_bytes) == (0, 0)
+    first.grow_to(50)
+    assert 'one user' in _refused(lambda: admission.admit('a', 11)).message
+    assert 'service' in _refused(lambda: admission.admit('b', 51)).message
+    second = admission.admit('b', 50)
+    second.start()
+    assert 'at once' in _refused(lambda: admission.admit('c')).message
+    # A refused subject leaves nothing behind
+    assert set(admission._subjects) == {'a', 'b'}
+    first.release()
+    second.release()
+    assert admission._subjects == {}
 
 
 def test_reservation_grows_and_releases_once() -> None:
