@@ -237,7 +237,7 @@ A consumer instance serves one request at a time. A request that waits more than
 
 At create, `auto.offset.reset` must be `earliest`, `latest` (the default) or `none`, and `auto.commit.enable` must be `true` or `false` (the default), in any case. `fetch.min.bytes` and `consumer.request.timeout.ms` must be whole numbers of at least 0, given as numbers or strings. A create that breaks one of these rules is refused with 422 and error code 42204, and the message names the setting. `fetch.min.bytes` is passed to the Kafka consumer. `consumer.request.timeout.ms` is how long a fetch that names no `timeout` waits for records, 5000 ms if it is not set; it is not passed to the Kafka consumer.
 
-A fetch waits for records for its `timeout`, in milliseconds. A `timeout` of 0 or less, or none, waits for the instance's `consumer.request.timeout.ms`. Either wait is capped at 30000 ms. `max_bytes` is the most records a fetch returns, not bytes; 0, a negative value or none returns up to 500. A fetch that waits for a turn (see the limits below) waits that much less for records, so the two waits together take no longer than its `timeout`.
+A fetch waits for records for its `timeout`, in milliseconds. A `timeout` of 0 or less, or none, waits for the instance's `consumer.request.timeout.ms`. Either wait is capped at 30000 ms. `max_bytes` is the most records a fetch returns, not bytes; 0, a negative value or none returns up to 500. A fetch polls in turns of at most half a second (see the limits below), and its turns and its waits for a turn together take no longer than its `timeout`. It returns as soon as a turn finds records, and returns `[]` if none did.
 
 A commit with offsets names, for each partition, the offset of the last record the client processed, as in Confluent's REST Proxy, and the group commits the next one. A commit without a body commits the position of each assigned partition, which is already the next record to read. So after a commit of offset 41, or after a commit without a body once a fetch returned offset 41, `GET .../offsets` returns 42 for that partition. It returns -1 for a partition the group has not committed.
 
@@ -251,8 +251,11 @@ The consumer routes have these limits:
 - A request may list at most as many topics, partitions or offsets as a namespace may hold topics (50, set by `MAX_TOPICS_PER_NAMESPACE`); a longer list is refused with 422. A request body may be 64 KiB; a larger one is refused with 413 before it is read.
 - A fetch asks each broker for at most 1 MiB of records. A broker still returns a first record larger than that, so a fetch can read a record of up to 8 MiB from each broker.
 - A reply holds at most 2 MiB of JSON. The records past that are left for the next fetch, which returns them first. A fetch always returns its first record, however large: a reply over 2 MiB holds that record alone and is sent in chunks, without a `Content-Length`.
-- A user may have 2 fetches in progress, and the service runs 4 at once. A fetch past the user's 2 is refused at once with 429 and error code 42901. A fetch past the service's 4 waits for a turn, for no longer than its wait for records; if no turn comes, it is refused with 429 and 42901. Both refusals carry `Retry-After: 1` and fetch nothing.
-- A reply must be sent within 30 s, or the service closes the connection. The instance's position has then moved past the reply's records: seek back to fetch them again.
+- A user may have 2 fetches in progress. A fetch past those is refused at once with 429 and error code 42901.
+- The service polls for 3 fetches at once. A fetch polls in turns of at most half a second: a turn that finds nothing gives its place to the next fetch waiting, and the fetch waits for another turn. So a fetch whose records are ready waits about a turn, however many fetches are waiting quietly for records. A fetch that gets no turn within its wait for records is refused with 429 and 42901. Both refusals carry `Retry-After: 1` and fetch nothing.
+- A reply must be sent within 30 s, or the service closes the connection.
+- A reply the client did not receive is fetched again by the next fetch, unless it was already handed to the network. This covers a client that leaves while its fetch polls or while a reply is sent, a reply that fails to encode, and a reply not sent within 30 s. The service cannot tell whether a client read a reply it handed to the network whole, so such a reply counts as received, as a reply read by a Kafka consumer does.
+- When a reply is cut at 2 MiB, the partitions take turns to come first in the next replies, so one partition's records cannot keep another's out. Within a partition, records keep their order.
 
 Every error reply of a consumer route is `{"error_code": <int>, "message": <str>}`, with two exceptions: a path that matches no route answers 404, and a method a route does not take answers 405, both with FastAPI's `{"detail": <str>}`. Error messages do not include Kafka's own error text.
 
@@ -271,7 +274,7 @@ Every error reply of a consumer route is `{"error_code": <int>, "message": <str>
 | 41301 | 413 | The request body is over 64 KiB |
 | 422 | 422 | A header or field is missing or invalid, a list is too long, or the format is not `binary` or `json` |
 | 42204 | 422 | At create, a setting breaks its rule above; at subscribe, the list of topics is empty or `topic_pattern` is set |
-| 42901 | 429 | The user holds 4 instances or the service 16, the user has 2 fetches in progress, no fetch turn came within the fetch's wait, or the cluster throttled the request |
+| 42901 | 429 | The user holds 4 instances or the service 16, the user has 2 fetches in progress, the fetch got no turn within its wait, or the cluster throttled the request |
 | 500 | 500 | An error inside the service |
 | 50002 | 500 | Kafka failed the request, or the service has no Kafka endpoint |
 | 50003 | 500 | A retriable Kafka error, or Kafka did not answer in time; retry |
@@ -296,7 +299,7 @@ The consumer routes follow the statuses and codes of Confluent's REST Proxy v2 e
 | A partition other than 0 | 404, 40402, at once | Passed to the Kafka consumer | Every topic has one partition |
 | Kafka reports an unknown topic or partition | 404, 40401 | 404, 40403 | Confluent also uses 40403 for an instance not found |
 | Most bytes a fetch asks for | 1 MiB | 50 MiB, the Kafka consumer's default `fetch.max.bytes` | With 50 MiB, one fetch from 50 topics took 128 MiB of memory in a test, and the service has 1 GB |
-| More than 2 fetches for a user, or no fetch turn within the fetch's wait | 429, 42901, with `Retry-After: 1` | No limit | Each fetch can hold a record of 8 MiB from each broker in the service's memory |
+| More than 2 fetches for a user, or no turn to poll within the fetch's wait | 429, 42901, with `Retry-After: 1` | No limit | Each fetch can hold a record of 8 MiB from each broker in the service's memory |
 | Reply over 2 MiB of JSON | The records past 2 MiB are left for the next fetch; a first record over 2 MiB is returned alone | Up to `max_bytes` bytes, and the proxy's `consumer.request.max.bytes` | It bounds the service's memory |
 | `max_bytes` | The most records to return; 0 or less returns up to 500 | The most bytes to return; 0 or less means no limit beyond `consumer.request.max.bytes` | Octopus passes it to the Kafka consumer's `max_records` |
 | `timeout` | 0 or less, or none, waits for the instance's `consumer.request.timeout.ms`; a positive `timeout` waits for itself; either wait is capped at 30000 ms | 0 or less, or none, waits for `consumer.request.timeout.ms`; a positive `timeout` waits for the smaller of itself and `consumer.request.timeout.ms` | A client can wait longer than its instance's default, up to 30 s |
