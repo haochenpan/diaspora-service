@@ -618,6 +618,20 @@ class DynamoDBService:
                 },
             )
 
+    def delete_namespace_topics(self, namespace: str) -> None:
+        """Delete a namespace's topics item from DynamoDB (idempotent).
+
+        Args:
+            namespace: Namespace name
+        """
+        with contextlib.suppress(
+            self.dynamodb.exceptions.ResourceNotFoundException,
+        ):
+            self.dynamodb.delete_item(
+                TableName=self.namespace_table_name,
+                Key={'namespace': {'S': namespace}},
+            )
+
     # ========================================================================
     # Table Management
     # ========================================================================
@@ -732,12 +746,17 @@ class KafkaService:
         self,
         namespace: str,
         topic: str,
+        *,
+        exists_ok: bool = True,
     ) -> dict[str, Any] | None:
-        """Create a Kafka topic (idempotent).
+        """Create a Kafka topic (idempotent unless exists_ok is False).
 
         Args:
             namespace: Namespace name
             topic: Topic name
+            exists_ok: If True, a topic that already exists counts as
+                success. If False, the create is retried and fails if the
+                topic still exists after the last attempt.
 
         Returns:
             Dictionary with status (success/failure) and message,
@@ -752,7 +771,7 @@ class KafkaService:
         max_retries = 3
         last_exception: Exception | None = None
 
-        for attempt in range(max_retries):
+        for _ in range(max_retries):
             admin: KafkaAdminClient | None = None
             try:
                 admin = self._admin_client()
@@ -771,23 +790,15 @@ class KafkaService:
                     'status': 'success',
                     'message': 'Topic created',
                 }
-            except TopicAlreadyExistsError:
-                return {
-                    'status': 'success',
-                    'message': 'Topic already exists',
-                }
+            except TopicAlreadyExistsError as e:
+                if exists_ok:
+                    return {
+                        'status': 'success',
+                        'message': 'Topic already exists',
+                    }
+                last_exception = e
             except Exception as e:
                 last_exception = e
-                if attempt == max_retries - 1:
-                    return {
-                        'status': 'failure',
-                        'message': (
-                            f'Failed to create Kafka topic '
-                            f'{kafka_topic_name} after {max_retries} '
-                            f'attempts: {e!s}'
-                        ),
-                    }
-                continue
             finally:
                 if admin is not None:
                     with contextlib.suppress(Exception):
@@ -796,8 +807,9 @@ class KafkaService:
         return {
             'status': 'failure',
             'message': (
-                f'Failed to create Kafka topic {kafka_topic_name}: '
-                f'{str(last_exception) if last_exception else "Unknown error"}'
+                f'Failed to create Kafka topic '
+                f'{kafka_topic_name} after {max_retries} '
+                f'attempts: {last_exception!s}'
             ),
         }
 
@@ -825,7 +837,7 @@ class KafkaService:
         max_retries = 3
         last_exception: Exception | None = None
 
-        for attempt in range(max_retries):
+        for _ in range(max_retries):
             admin: KafkaAdminClient | None = None
             try:
                 admin = self._admin_client()
@@ -844,16 +856,6 @@ class KafkaService:
                 }
             except Exception as e:
                 last_exception = e
-                if attempt == max_retries - 1:
-                    return {
-                        'status': 'failure',
-                        'message': (
-                            f'Failed to delete Kafka topic '
-                            f'{kafka_topic_name} after {max_retries} '
-                            f'attempts: {e!s}'
-                        ),
-                    }
-                continue
             finally:
                 if admin is not None:
                     with contextlib.suppress(Exception):
@@ -862,8 +864,9 @@ class KafkaService:
         return {
             'status': 'failure',
             'message': (
-                f'Failed to delete Kafka topic {kafka_topic_name}: '
-                f'{str(last_exception) if last_exception else "Unknown error"}'
+                f'Failed to delete Kafka topic '
+                f'{kafka_topic_name} after {max_retries} '
+                f'attempts: {last_exception!s}'
             ),
         }
 
@@ -875,7 +878,9 @@ class KafkaService:
         """Recreate a Kafka topic by deleting and recreating it.
 
         This method calls delete_topic (idempotent) and then
-        create_topic (idempotent).
+        create_topic. A topic that still exists when it is created again
+        (for example while its deletion is still in progress) is retried,
+        and is a failure if it persists.
 
         Args:
             namespace: Namespace name
@@ -896,8 +901,8 @@ class KafkaService:
         # Wait 5 seconds before recreating
         time.sleep(5)
 
-        # Create topic (idempotent)
-        create_result = self.create_topic(namespace, topic)
+        # Create topic; one that still exists is not a success here
+        create_result = self.create_topic(namespace, topic, exists_ok=False)
         if create_result and create_result['status'] == 'failure':
             return create_result
 
@@ -1064,9 +1069,11 @@ class NamespaceService:
                 'namespaces': existing_namespaces,
             }
 
-        # Atomically remove namespace from user and global lists
-        # These methods handle the RMW pattern internally
+        # Atomically remove namespace from user and global lists, and drop
+        # its topics item before the name is released, so a later owner of
+        # the name does not inherit the old topic list
         self.dynamodb.remove_user_namespace(subject, namespace)
+        self.dynamodb.delete_namespace_topics(namespace)
         self.dynamodb.remove_global_namespace(namespace)
 
         # Read back the updated list to return
@@ -1100,10 +1107,32 @@ class NamespaceService:
             Dictionary with status, message, and topics list (on success)
             or status 'failure' with message
         """
+        result, _ = self.add_topic(subject, namespace, topic)
+        return result
+
+    def add_topic(
+        self,
+        subject: str,
+        namespace: str,
+        topic: str,
+    ) -> tuple[dict[str, Any], bool]:
+        """Create a topic in a namespace and say whether this call added it.
+
+        Behaves as create_topic.
+
+        Args:
+            subject: User subject ID
+            namespace: Namespace name
+            topic: Topic name to create
+
+        Returns:
+            The create_topic result, and True only if this call added the
+            topic to the namespace's topics
+        """
         # Validate topic name
         validation_error = self.validate_name(topic)
         if validation_error:
-            return validation_error
+            return validation_error, False
 
         # Use global lock to ensure atomicity
         with self._global_lock:
@@ -1115,7 +1144,7 @@ class NamespaceService:
                     'message': (
                         f'Namespace {namespace} not found for {subject}'
                     ),
-                }
+                }, False
 
             # Get existing topics for the namespace (for idempotency check)
             existing_topics = self.dynamodb.get_namespace_topics(namespace)
@@ -1126,7 +1155,7 @@ class NamespaceService:
                     'status': 'success',
                     'message': f'Topic {topic} already exists in {namespace}',
                     'topics': existing_topics,
-                }
+                }, False
 
             # Atomically add topic to the list (prevents race conditions)
             self.dynamodb.add_namespace_topic(namespace, topic)
@@ -1139,7 +1168,7 @@ class NamespaceService:
                 'status': 'success',
                 'message': f'Topic {topic} created in {namespace}',
                 'topics': all_topics,
-            }
+            }, True
 
     def delete_topic(
         self,
@@ -1341,14 +1370,34 @@ class WebService:
                     ),
                 }
 
-            # Delete all topics under the default namespace
-            topics = self.namespace_service.dynamodb.get_namespace_topics(
-                default_namespace,
+            # Delete all topics under the default namespace, only if the
+            # subject owns it
+            topics = (
+                self.namespace_service.dynamodb.get_namespace_topics(
+                    default_namespace,
+                )
+                if default_namespace in user_namespaces
+                else []
             )
             for topic in topics:
                 # Delete Kafka topic (idempotent)
-                with contextlib.suppress(Exception):
-                    self.kafka_service.delete_topic(default_namespace, topic)
+                kafka_result = self.kafka_service.delete_topic(
+                    default_namespace,
+                    topic,
+                )
+                # If Kafka deletion failed, stop WITHOUT deleting from
+                # DynamoDB to avoid orphaning the Kafka topic
+                if (
+                    kafka_result is not None
+                    and kafka_result.get('status') == 'failure'
+                ):
+                    return {
+                        'status': 'failure',
+                        'message': (
+                            f'Failed to delete Kafka topic: '
+                            f'{kafka_result.get("message", "Unknown error")}'
+                        ),
+                    }
                 # Delete topic from DynamoDB (idempotent)
                 self.namespace_service.delete_topic(
                     subject,
@@ -1426,7 +1475,15 @@ class WebService:
                 }
 
             # Delete existing access keys in IAM before creating new one
-            self.iam_service.delete_access_keys(subject)
+            delete_result = self.iam_service.delete_access_keys(subject)
+            if delete_result['status'] != 'success':
+                return {
+                    'status': 'failure',
+                    'message': (
+                        f'Failed to delete existing IAM access keys: '
+                        f'{delete_result["message"]}'
+                    ),
+                }
 
             # Create new access key in IAM
             iam_key_result = self.iam_service.create_access_key(subject)
@@ -1468,8 +1525,17 @@ class WebService:
         Returns:
             Dictionary with status and message
         """
-        # Delete access keys in IAM (idempotent)
-        self.iam_service.delete_access_keys(subject)
+        # Delete access keys in IAM (idempotent); on failure keep the
+        # cached key, since the IAM key is still valid
+        iam_result = self.iam_service.delete_access_keys(subject)
+        if iam_result['status'] != 'success':
+            return {
+                'status': 'failure',
+                'message': (
+                    f'Failed to delete IAM access keys: '
+                    f'{iam_result["message"]}'
+                ),
+            }
 
         # Delete key from DynamoDB (idempotent)
         self.namespace_service.dynamodb.delete_key(subject)
@@ -1499,7 +1565,7 @@ class WebService:
             Dictionary with status, message, and topics list
         """
         # Create topic in NamespaceService (DynamoDB)
-        namespace_result = self.namespace_service.create_topic(
+        namespace_result, added = self.namespace_service.add_topic(
             subject,
             namespace,
             topic,
@@ -1510,9 +1576,15 @@ class WebService:
         # Create topic in KafkaService (Kafka cluster)
         kafka_result = self.kafka_service.create_topic(namespace, topic)
         if kafka_result and kafka_result.get('status') == 'failure':
-            # If Kafka creation fails, try to clean up DynamoDB entry
-            with contextlib.suppress(Exception):
-                self.namespace_service.delete_topic(subject, namespace, topic)
+            # If Kafka creation fails, clean up the DynamoDB entry, but only
+            # one this call added: an existing entry may be a live topic
+            if added:
+                with contextlib.suppress(Exception):
+                    self.namespace_service.delete_topic(
+                        subject,
+                        namespace,
+                        topic,
+                    )
             return {
                 'status': 'failure',
                 'message': (
@@ -1587,6 +1659,17 @@ class WebService:
             namespace,
             topic,
         )
+
+        # A Kafka topic can lack its DynamoDB entry (for example after a
+        # failed create's cleanup); its deletion is still a deletion
+        if (
+            kafka_result is not None
+            and kafka_result.get('message') == 'Topic deleted'
+            and namespace_result.get('status') == 'success'
+        ):
+            namespace_result['message'] = (
+                f'Topic {topic} deleted from {namespace}'
+            )
 
         return namespace_result
 
