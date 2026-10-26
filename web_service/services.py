@@ -1059,12 +1059,23 @@ class KafkaService:
             if topic_exists and attempt < max_retries - 1:
                 time.sleep(TOPIC_EXISTS_RETRY_DELAY_S)
 
+        logger.warning(
+            'Failed to create Kafka topic %s after %d attempts: %r',
+            kafka_topic_name,
+            max_retries,
+            last_exception,
+        )
+        reason = (
+            'it still exists'
+            if isinstance(last_exception, TopicAlreadyExistsError)
+            else 'the Kafka cluster did not complete it'
+        )
         return {
             'status': 'failure',
             'message': (
                 f'Failed to create Kafka topic '
                 f'{kafka_topic_name} after {max_retries} '
-                f'attempts: {last_exception!s}'
+                f'attempts: {reason}; retry shortly'
             ),
         }
 
@@ -1116,12 +1127,19 @@ class KafkaService:
                     with contextlib.suppress(Exception):
                         admin.close()
 
+        logger.warning(
+            'Failed to delete Kafka topic %s after %d attempts: %r',
+            kafka_topic_name,
+            max_retries,
+            last_exception,
+        )
         return {
             'status': 'failure',
             'message': (
                 f'Failed to delete Kafka topic '
                 f'{kafka_topic_name} after {max_retries} '
-                f'attempts: {last_exception!s}'
+                'attempts: the Kafka cluster did not complete it; retry '
+                'shortly'
             ),
         }
 
