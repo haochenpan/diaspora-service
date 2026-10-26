@@ -5,7 +5,7 @@
       "Sid": "CreateUsersOnlyWithTheBoundary",
       "Effect": "Allow",
       "Action": "iam:CreateUser",
-      "Resource": "arn:aws:iam::<account-id>:user/msk-users/*",
+      "Resource": "arn:aws:iam::<account-id>:user/msk-users/????????-????-????-????-????????????",
       "Condition": {
         "StringEquals": {
           "iam:PermissionsBoundary": "arn:aws:iam::<account-id>:policy/diaspora-service/msk-user-boundary"
@@ -16,10 +16,10 @@
       "Sid": "AttachUserPoliciesOnlyToBoundedUsers",
       "Effect": "Allow",
       "Action": "iam:AttachUserPolicy",
-      "Resource": "arn:aws:iam::<account-id>:user/msk-users/*",
+      "Resource": "arn:aws:iam::<account-id>:user/msk-users/????????-????-????-????-????????????",
       "Condition": {
         "ArnLike": {
-          "iam:PolicyARN": "arn:aws:iam::<account-id>:policy/msk-policy/*"
+          "iam:PolicyARN": "arn:aws:iam::<account-id>:policy/msk-policy/????????-????-????-????-????????????"
         },
         "StringEquals": {
           "iam:PermissionsBoundary": "arn:aws:iam::<account-id>:policy/diaspora-service/msk-user-boundary"
@@ -30,10 +30,10 @@
       "Sid": "DetachUserPolicies",
       "Effect": "Allow",
       "Action": "iam:DetachUserPolicy",
-      "Resource": "arn:aws:iam::<account-id>:user/msk-users/*",
+      "Resource": "arn:aws:iam::<account-id>:user/msk-users/????????-????-????-????-????????????",
       "Condition": {
         "ArnLike": {
-          "iam:PolicyARN": "arn:aws:iam::<account-id>:policy/msk-policy/*"
+          "iam:PolicyARN": "arn:aws:iam::<account-id>:policy/msk-policy/????????-????-????-????-????????????"
         }
       }
     },
@@ -46,7 +46,7 @@
         "iam:DeleteAccessKey",
         "iam:DeleteUser"
       ],
-      "Resource": "arn:aws:iam::<account-id>:user/msk-users/*"
+      "Resource": "arn:aws:iam::<account-id>:user/msk-users/????????-????-????-????-????????????"
     },
     {
       "Sid": "CreateAndDeleteUserPolicies",
@@ -57,7 +57,7 @@
         "iam:DeletePolicyVersion",
         "iam:DeletePolicy"
       ],
-      "Resource": "arn:aws:iam::<account-id>:policy/msk-policy/*"
+      "Resource": "arn:aws:iam::<account-id>:policy/msk-policy/????????-????-????-????-????????????"
     },
     {
       "Sid": "ReadAndWriteTheTables",

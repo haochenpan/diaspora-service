@@ -129,11 +129,13 @@ marks the deployment failed.
 | `NAMESPACE_TABLE_NAME` | no | `diaspora-namespace-table` | The DynamoDB table of namespaces. |
 | `MAX_TOPICS_PER_NAMESPACE` | no | `50` | The most topics a namespace may hold. A value that is not a whole number of at least 1 is logged and replaced by 50. |
 | `CONSUMER_INSTANCE_TIMEOUT_MS` | no | `300000` (5 minutes) | How long a consumer instance may sit idle before the service closes it. The service looks for idle instances every 30 seconds. A value that is not an integer stops the worker at start with a `ValueError`. |
-| `IAM_USER_PERMISSIONS_BOUNDARY_ARN` | no | none | The ARN of a managed policy that the service sets as the permissions boundary of every IAM user it creates; unset or empty, it sets none. When the service runs as its own identity ([The service's AWS identity](#the-services-aws-identity)), it must be that identity's boundary, `arn:aws:iam::<account-id>:policy/diaspora-service/msk-user-boundary`, or IAM denies every user the service creates. The live tests set it to theirs ([The live tests' AWS identity](2-testing.md#the-live-tests-aws-identity)). |
+| `IAM_USER_PERMISSIONS_BOUNDARY_ARN` | no | none | The ARN of a managed policy that the service sets as the permissions boundary of every IAM user it creates; unset or empty, it sets none. When the service runs as its own identity ([The service's AWS identity](#the-services-aws-identity)), it must be that identity's boundary, or IAM denies every user the service creates; the workflow sets it from a repository variable ([The boundary in the container](#the-boundary-in-the-container)). The live tests set it to theirs ([The live tests' AWS identity](2-testing.md#the-live-tests-aws-identity)). |
 
-The workflow passes none of the optional variables, so production runs
-with their defaults. To set one, add it to the `environment` block in
-`deployment.yml`.
+The workflow passes none of the other optional variables, so production
+runs with their defaults. To set one, add it to the `environment` block in
+`deployment.yml`. It sets `IAM_USER_PERMISSIONS_BOUNDARY_ARN` only when
+the repository variable `DOCKER_IAM_USER_PERMISSIONS_BOUNDARY_NAME` is set
+([The boundary in the container](#the-boundary-in-the-container)).
 
 ## The service's AWS identity
 
@@ -147,8 +149,8 @@ hold that user's policies, with `<account-id>`, `<region>`,
 `<cluster-name>` and `<cluster-uuid>` in place of the account's values:
 
 - `service-policy.json`, the policy of the IAM user
-  `diaspora-web-service-container`, created as
-  `/diaspora-service/diaspora-web-service-container`.
+  `/diaspora-service/diaspora-web-service-container`, created as the
+  managed policy `/diaspora-service/diaspora-web-service-container`.
 - `user-boundary-policy.json`, created as
   `/diaspora-service/msk-user-boundary`: the permissions boundary of
   every IAM user the service creates. It allows the `kafka-cluster`
@@ -157,18 +159,24 @@ hold that user's policies, with `<account-id>`, `<region>`,
   can do no more than the boundary allows, whatever policy is attached to
   the user.
 
-The service's policy grants these actions, each used by the code named
-(in `web_service/services.py` unless another file is named):
+In the table, `<subject>` is a name shaped like a Globus subject, a UUID
+(`????????-????-????-????-????????????` in the policy). The service names
+each user and its policy after the user's subject, so the policy reaches
+no other name, and no user or policy under a deeper path such as
+`/msk-users/x/<subject>`. The live tests' `test-subject-*` users are out
+of its reach too. The service's policy grants these actions, each used by
+the code named (in `web_service/services.py` unless another file is
+named):
 
 | Actions | On | Used by |
 | --- | --- | --- |
-| `iam:CreateUser`, only with the boundary as the new user's permissions boundary | IAM users under `/msk-users/` | `IAMService.create_user_and_policy` |
-| `iam:CreatePolicy` | managed policies under `/msk-policy/` | `IAMService.create_user_and_policy` |
-| `iam:AttachUserPolicy`, only of a policy under `/msk-policy/` and only to a user whose boundary is the boundary | IAM users under `/msk-users/` | `IAMService.create_user_and_policy` |
-| `iam:CreateAccessKey` | IAM users under `/msk-users/` | `IAMService.create_access_key` |
-| `iam:ListAccessKeys`, `iam:DeleteAccessKey` | IAM users under `/msk-users/` | `IAMService.delete_access_keys` |
-| `iam:DetachUserPolicy`, only of a policy under `/msk-policy/`; `iam:DeleteUser` | IAM users under `/msk-users/` | `IAMService.delete_user_and_policy` |
-| `iam:ListPolicyVersions`, `iam:DeletePolicyVersion`, `iam:DeletePolicy` | managed policies under `/msk-policy/` | `IAMService.delete_user_and_policy` |
+| `iam:CreateUser`, only with the boundary as the new user's permissions boundary | IAM users `/msk-users/<subject>` | `IAMService.create_user_and_policy` |
+| `iam:CreatePolicy` | managed policies `/msk-policy/<subject>` | `IAMService.create_user_and_policy` |
+| `iam:AttachUserPolicy`, only of a policy `/msk-policy/<subject>` and only to a user whose boundary is the boundary | IAM users `/msk-users/<subject>` | `IAMService.create_user_and_policy` |
+| `iam:CreateAccessKey` | IAM users `/msk-users/<subject>` | `IAMService.create_access_key` |
+| `iam:ListAccessKeys`, `iam:DeleteAccessKey` | IAM users `/msk-users/<subject>` | `IAMService.delete_access_keys` |
+| `iam:DetachUserPolicy`, only of a policy `/msk-policy/<subject>`; `iam:DeleteUser` | IAM users `/msk-users/<subject>` | `IAMService.delete_user_and_policy` |
+| `iam:ListPolicyVersions`, `iam:DeletePolicyVersion`, `iam:DeletePolicy` | managed policies `/msk-policy/<subject>` | `IAMService.delete_user_and_policy` |
 | `dynamodb:GetItem` | the three tables | `DynamoDBService._get_item`, which every read goes through |
 | `dynamodb:PutItem` | the three tables | `DynamoDBService.store_key` |
 | `dynamodb:UpdateItem` | the three tables | `DynamoDBService.add_user_namespace`, `remove_user_namespace`, `add_global_namespace`, `remove_global_namespace`, `add_namespace_topic`, `remove_namespace_topic` |
@@ -176,10 +184,10 @@ The service's policy grants these actions, each used by the code named
 | `dynamodb:CreateTable`, `dynamodb:DescribeTable` | the three tables | `DynamoDBService._create_keys_table`, `_create_users_table`, `_create_namespace_table`, when a table is missing; `DescribeTable` is boto3's `table_exists` waiter |
 | `kafka-cluster:Connect` | the cluster | every Kafka client: `KafkaService._admin_client`, each consumer instance (`consumer_service.py`) and the producer (`producer_service.py`) |
 | `kafka-cluster:CreateTopic`, `kafka-cluster:DeleteTopic` | every topic | `KafkaService.create_topic`, `delete_topic`, `recreate_topic` |
-| `kafka-cluster:DescribeTopic` | every topic | the topic admin calls, and the metadata of the producer and the consumer instances |
+| `kafka-cluster:DescribeTopic` | every topic | the topic deletes, the producer's sends and metadata, and the consumer instances' subscribes, fetches, committed offsets and seeks to the beginning or end |
 | `kafka-cluster:WriteData` | every topic | the produce routes (`ProducerService`) |
 | `kafka-cluster:ReadData` | every topic | the consumer instances' fetches and commits (`consumer_service.py`) |
-| `kafka-cluster:DescribeGroup`, `kafka-cluster:AlterGroup` | every consumer group | the consumer instances, which join groups, commit offsets and read committed offsets (`consumer_service.py`) |
+| `kafka-cluster:DescribeGroup`, `kafka-cluster:AlterGroup` | every consumer group | the consumer instances, which join groups, commit offsets, read committed offsets and leave their group when closed (`consumer_service.py`) |
 
 A namespace may have any valid name, so the service's topics and groups
 (`<namespace>.<name>`) can have any name, and the Kafka actions cover every
@@ -187,15 +195,32 @@ topic and group on the cluster. The service makes no other AWS call: the
 MSK token is signed locally from the key, with no STS call, and the
 brokers come from `DEFAULT_SERVERS`. The template names the production
 tables; a deployment with other `*_TABLE_NAME` values needs those names in
-its copy of the template. `tests/service_identity_test.py` checks that the
-IAM and DynamoDB actions granted are the ones `web_service/services.py`
-calls.
+its copy of the template.
+
+`deploy/iam/service-actions.json` lists each of these actions with an
+example resource and the calls in `web_service/` that need it.
+`tests/service_identity_test.py` checks that the policy allows each
+listed use and grants nothing more, that the IAM and DynamoDB uses are
+the calls in `web_service/services.py`, and that each Kafka call in the
+code has its actions listed.
 
 The policy grants no right to change a user's permissions boundary, add
 an inline policy, add or select a version of a policy, or touch anything
 under `/diaspora-service/`, its own policy and the boundary included. So
 with the container's key alone, no one can give a user more than the
 boundary allows, or give the service more than this policy.
+
+### The boundary in the container
+
+The workflow sets `IAM_USER_PERMISSIONS_BOUNDARY_ARN` only when the
+repository variable `DOCKER_IAM_USER_PERMISSIONS_BOUNDARY_NAME` is set.
+Its value is a policy name under `/diaspora-service/`, `msk-user-boundary`,
+and the workflow builds the ARN
+`arn:aws:iam::<account-id>:policy/diaspora-service/msk-user-boundary` from
+it and the account ID in the `DOCKER_AWS_ACCOUNT_ID` secret.
+While the variable is not set, the container gets no such variable and
+creates users without a boundary. A value that is not a valid policy name
+fails the deploy before anything is pushed.
 
 ### Users created before the boundary
 
@@ -204,10 +229,11 @@ service's identity can still delete them, since detaching a policy and
 deleting a user do not require the boundary. It can't attach a policy to
 them, and `POST /api/v3/key` attaches the user's policy again whenever it
 creates a key. So before the container switches to this identity, every
-user under `/msk-users/` needs the boundary, which
-`scripts/update_user_policies.py --boundary`
-([Update the users' policies](5-runbook.md#update-the-users-policies))
-gives them.
+user under `/msk-users/` needs the boundary. The `boundaries` step of
+`scripts/update_user_policies.py`
+([Update the users' IAM](5-runbook.md#update-the-users-iam)) gives it to
+the service's users. Delete the live tests' leftover users, which it
+skips, with the sweep (`scripts/sweep_test_resources.py --apply`).
 
 ### Switch the service to its identity
 
@@ -224,26 +250,34 @@ the `render` function used below.
     aws iam create-policy --path /diaspora-service/ \
       --policy-name diaspora-web-service-container \
       --policy-document "$(render deploy/iam/service-policy.json)"
-    aws iam create-user --user-name diaspora-web-service-container
+    aws iam create-user --path /diaspora-service/ \
+      --user-name diaspora-web-service-container
     aws iam attach-user-policy --user-name diaspora-web-service-container \
       --policy-arn "arn:aws:iam::$ACCOUNT_ID:policy/diaspora-service/diaspora-web-service-container"
     aws iam create-access-key --user-name diaspora-web-service-container
     ```
 
-2. Set `IAM_USER_PERMISSIONS_BOUNDARY_ARN` in the container to
-   `arn:aws:iam::<account-id>:policy/diaspora-service/msk-user-boundary`
-   (the workflow passes only the variables in the `environment` block of
-   `deployment.yml`), and deploy. From then on every new user gets the
-   boundary.
-3. Give the users created before it the boundary. The first command
-   only lists what would change, the second makes the changes, and the
-   third must report 0 users without a boundary:
+    Keep the key's secret somewhere safe: AWS shows it only here.
+
+2. Set the boundary variable and deploy. From then on every new user gets
+   the boundary.
+
+    ```bash
+    gh variable set DOCKER_IAM_USER_PERMISSIONS_BOUNDARY_NAME --body msk-user-boundary
+    gh workflow run deployment.yml --ref main
+    ```
+
+3. Give the users created before it the boundary. The first command only
+   lists what would change. The second makes the changes and records each
+   one in a new file outside the repository. The third must report 0
+   users without a boundary.
 
     ```bash
     BOUNDARY="arn:aws:iam::$ACCOUNT_ID:policy/diaspora-service/msk-user-boundary"
-    python scripts/update_user_policies.py --boundary "$BOUNDARY"
-    python scripts/update_user_policies.py --boundary "$BOUNDARY" --apply
-    python scripts/update_user_policies.py --boundary "$BOUNDARY"
+    python scripts/update_user_policies.py boundaries --boundary "$BOUNDARY"
+    python scripts/update_user_policies.py boundaries --boundary "$BOUNDARY" \
+      --apply --record ~/boundaries-$(date -u +%Y%m%dT%H%M%SZ).json
+    python scripts/update_user_policies.py boundaries --boundary "$BOUNDARY"
     ```
 
 4. If the live tests' own key is not set yet, set it first
@@ -251,7 +285,16 @@ the `render` function used below.
    Without it, the `live` job of `tests.yml` uses the container's key,
    and the live tests fail, since this identity cannot reach the test
    tables.
-5. Store the new key as `DOCKER_AWS_ACCESS_KEY_ID` and
+5. Note the container's current key ID, for the rollback and for
+   retiring that key later. The query prints the key ID only:
+
+    ```bash
+    aws lightsail get-container-services --region us-east-1 \
+        --service-name diaspora-web-service \
+        --query 'containerServices[0].currentDeployment.{version: version, key: containers.flask.environment.AWS_ACCESS_KEY_ID}'
+    ```
+
+6. Store the new key as `DOCKER_AWS_ACCESS_KEY_ID` and
    `DOCKER_AWS_SECRET_ACCESS_KEY` (`gh secret set` prompts for each value),
    deploy, and [check the deploy](#check-a-deploy). Then make one call
    that creates a key, such as `POST /api/v3/key` for a user without one,
@@ -262,6 +305,50 @@ default version of its policy, as the live tests' guide shows for theirs.
 To rotate its key, follow
 [Rotate an AWS access key](5-runbook.md#rotate-an-aws-access-key) with the
 user `diaspora-web-service-container`.
+
+### Roll back the switch
+
+Put the previous key back in the two secrets and deploy. The boundary
+variable may stay: the boundary allows everything a user's policy grants,
+so the previous key works with it. GitHub does not show a secret's value,
+but the deployment noted in step 5 still holds the previous key, so these
+commands copy it from there without printing it (replace `<version>`):
+
+```bash
+for var in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY; do
+  aws lightsail get-container-service-deployments --region us-east-1 \
+      --service-name diaspora-web-service \
+      --query "deployments[?version==\`<version>\`].containers.flask.environment.$var | [0]" \
+      --output text | gh secret set "DOCKER_$var"
+done
+gh workflow run deployment.yml --ref main
+```
+
+If the previous key has been deactivated since, make it active first
+(`aws iam update-access-key --status Active`, with its user and key ID).
+
+### Retire the previous key
+
+Once the service has run as its identity without an `AccessDenied` in the
+log, for at least a day that included user and key creations, deactivate
+the container's previous key, and delete it later. The deploy workflow's
+own key (`AWS_ACCESS_KEY_ID`) may be the same key; check before you
+deactivate it:
+
+1. Show the previous key's user and last use, with the key ID from step 5:
+   `aws iam get-access-key-last-used --access-key-id <previous-key-id>`.
+   No secret is printed.
+2. Run a deploy (`gh workflow run deployment.yml --ref main`) and wait for
+   it to finish. Then run step 1 again. If the key's `LastUsedDate` moved
+   to the deploy's time, with `ServiceName` `lightsail` or `sts`, the
+   deploy uses it too. Then give the deploy its own key first
+   ([Rotate an AWS access key](5-runbook.md#rotate-an-aws-access-key)),
+   and repeat this check.
+3. Deactivate the key:
+   `aws iam update-access-key --user-name <user> --access-key-id <previous-key-id> --status Inactive`.
+   Run a deploy and [check it](#check-a-deploy).
+4. After a week without a failure, delete it:
+   `aws iam delete-access-key --user-name <user> --access-key-id <previous-key-id>`.
 
 ## One worker
 
