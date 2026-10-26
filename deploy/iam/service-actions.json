@@ -1,0 +1,287 @@
+{
+  "Description": "Each AWS action the web service calls, an example resource and request context for it, and the calls in web_service/ that need it (file:receiver.method, or file:client class). tests/service_identity_test.py checks service-policy.json and the code against it.",
+  "Uses": [
+    {
+      "Action": "iam:CreateUser",
+      "Resources": [
+        "arn:aws:iam::<account-id>:user/msk-users/0a1b2c3d-0000-4000-8000-0a1b2c3d4e5f"
+      ],
+      "Context": {
+        "iam:PermissionsBoundary": "arn:aws:iam::<account-id>:policy/diaspora-service/msk-user-boundary"
+      },
+      "Calls": [
+        "services.py:iam.create_user"
+      ]
+    },
+    {
+      "Action": "iam:CreatePolicy",
+      "Resources": [
+        "arn:aws:iam::<account-id>:policy/msk-policy/0a1b2c3d-0000-4000-8000-0a1b2c3d4e5f"
+      ],
+      "Context": {},
+      "Calls": [
+        "services.py:iam.create_policy"
+      ]
+    },
+    {
+      "Action": "iam:AttachUserPolicy",
+      "Resources": [
+        "arn:aws:iam::<account-id>:user/msk-users/0a1b2c3d-0000-4000-8000-0a1b2c3d4e5f"
+      ],
+      "Context": {
+        "iam:PermissionsBoundary": "arn:aws:iam::<account-id>:policy/diaspora-service/msk-user-boundary",
+        "iam:PolicyARN": "arn:aws:iam::<account-id>:policy/msk-policy/0a1b2c3d-0000-4000-8000-0a1b2c3d4e5f"
+      },
+      "Calls": [
+        "services.py:iam.attach_user_policy"
+      ]
+    },
+    {
+      "Action": "iam:CreateAccessKey",
+      "Resources": [
+        "arn:aws:iam::<account-id>:user/msk-users/0a1b2c3d-0000-4000-8000-0a1b2c3d4e5f"
+      ],
+      "Context": {},
+      "Calls": [
+        "services.py:iam.create_access_key"
+      ]
+    },
+    {
+      "Action": "iam:ListAccessKeys",
+      "Resources": [
+        "arn:aws:iam::<account-id>:user/msk-users/0a1b2c3d-0000-4000-8000-0a1b2c3d4e5f"
+      ],
+      "Context": {},
+      "Calls": [
+        "services.py:iam.list_access_keys"
+      ]
+    },
+    {
+      "Action": "iam:DeleteAccessKey",
+      "Resources": [
+        "arn:aws:iam::<account-id>:user/msk-users/0a1b2c3d-0000-4000-8000-0a1b2c3d4e5f"
+      ],
+      "Context": {},
+      "Calls": [
+        "services.py:iam.delete_access_key"
+      ]
+    },
+    {
+      "Action": "iam:DetachUserPolicy",
+      "Resources": [
+        "arn:aws:iam::<account-id>:user/msk-users/0a1b2c3d-0000-4000-8000-0a1b2c3d4e5f"
+      ],
+      "Context": {
+        "iam:PolicyARN": "arn:aws:iam::<account-id>:policy/msk-policy/0a1b2c3d-0000-4000-8000-0a1b2c3d4e5f"
+      },
+      "Calls": [
+        "services.py:iam.detach_user_policy"
+      ]
+    },
+    {
+      "Action": "iam:DeleteUser",
+      "Resources": [
+        "arn:aws:iam::<account-id>:user/msk-users/0a1b2c3d-0000-4000-8000-0a1b2c3d4e5f"
+      ],
+      "Context": {},
+      "Calls": [
+        "services.py:iam.delete_user"
+      ]
+    },
+    {
+      "Action": "iam:ListPolicyVersions",
+      "Resources": [
+        "arn:aws:iam::<account-id>:policy/msk-policy/0a1b2c3d-0000-4000-8000-0a1b2c3d4e5f"
+      ],
+      "Context": {},
+      "Calls": [
+        "services.py:iam.list_policy_versions"
+      ]
+    },
+    {
+      "Action": "iam:DeletePolicyVersion",
+      "Resources": [
+        "arn:aws:iam::<account-id>:policy/msk-policy/0a1b2c3d-0000-4000-8000-0a1b2c3d4e5f"
+      ],
+      "Context": {},
+      "Calls": [
+        "services.py:iam.delete_policy_version"
+      ]
+    },
+    {
+      "Action": "iam:DeletePolicy",
+      "Resources": [
+        "arn:aws:iam::<account-id>:policy/msk-policy/0a1b2c3d-0000-4000-8000-0a1b2c3d4e5f"
+      ],
+      "Context": {},
+      "Calls": [
+        "services.py:iam.delete_policy"
+      ]
+    },
+    {
+      "Action": "dynamodb:GetItem",
+      "Resources": [
+        "arn:aws:dynamodb:<region>:<account-id>:table/diaspora-keys-table",
+        "arn:aws:dynamodb:<region>:<account-id>:table/diaspora-users-table",
+        "arn:aws:dynamodb:<region>:<account-id>:table/diaspora-namespace-table"
+      ],
+      "Context": {},
+      "Calls": [
+        "services.py:dynamodb.get_item"
+      ]
+    },
+    {
+      "Action": "dynamodb:PutItem",
+      "Resources": [
+        "arn:aws:dynamodb:<region>:<account-id>:table/diaspora-keys-table",
+        "arn:aws:dynamodb:<region>:<account-id>:table/diaspora-users-table",
+        "arn:aws:dynamodb:<region>:<account-id>:table/diaspora-namespace-table"
+      ],
+      "Context": {},
+      "Calls": [
+        "services.py:dynamodb.put_item"
+      ]
+    },
+    {
+      "Action": "dynamodb:UpdateItem",
+      "Resources": [
+        "arn:aws:dynamodb:<region>:<account-id>:table/diaspora-keys-table",
+        "arn:aws:dynamodb:<region>:<account-id>:table/diaspora-users-table",
+        "arn:aws:dynamodb:<region>:<account-id>:table/diaspora-namespace-table"
+      ],
+      "Context": {},
+      "Calls": [
+        "services.py:dynamodb.update_item"
+      ]
+    },
+    {
+      "Action": "dynamodb:DeleteItem",
+      "Resources": [
+        "arn:aws:dynamodb:<region>:<account-id>:table/diaspora-keys-table",
+        "arn:aws:dynamodb:<region>:<account-id>:table/diaspora-users-table",
+        "arn:aws:dynamodb:<region>:<account-id>:table/diaspora-namespace-table"
+      ],
+      "Context": {},
+      "Calls": [
+        "services.py:dynamodb.delete_item"
+      ]
+    },
+    {
+      "Action": "dynamodb:CreateTable",
+      "Resources": [
+        "arn:aws:dynamodb:<region>:<account-id>:table/diaspora-keys-table",
+        "arn:aws:dynamodb:<region>:<account-id>:table/diaspora-users-table",
+        "arn:aws:dynamodb:<region>:<account-id>:table/diaspora-namespace-table"
+      ],
+      "Context": {},
+      "Calls": [
+        "services.py:dynamodb.create_table"
+      ]
+    },
+    {
+      "Action": "dynamodb:DescribeTable",
+      "Resources": [
+        "arn:aws:dynamodb:<region>:<account-id>:table/diaspora-keys-table",
+        "arn:aws:dynamodb:<region>:<account-id>:table/diaspora-users-table",
+        "arn:aws:dynamodb:<region>:<account-id>:table/diaspora-namespace-table"
+      ],
+      "Context": {},
+      "Calls": [
+        "services.py:dynamodb.get_waiter"
+      ]
+    },
+    {
+      "Action": "kafka-cluster:Connect",
+      "Resources": [
+        "arn:aws:kafka:<region>:<account-id>:cluster/<cluster-name>/<cluster-uuid>"
+      ],
+      "Context": {},
+      "Calls": [
+        "services.py:KafkaAdminClient",
+        "consumer_service.py:KafkaConsumer",
+        "producer_service.py:KafkaProducer"
+      ]
+    },
+    {
+      "Action": "kafka-cluster:CreateTopic",
+      "Resources": [
+        "arn:aws:kafka:<region>:<account-id>:topic/<cluster-name>/<cluster-uuid>/any-namespace.events"
+      ],
+      "Context": {},
+      "Calls": [
+        "services.py:admin.create_topics"
+      ]
+    },
+    {
+      "Action": "kafka-cluster:DeleteTopic",
+      "Resources": [
+        "arn:aws:kafka:<region>:<account-id>:topic/<cluster-name>/<cluster-uuid>/any-namespace.events"
+      ],
+      "Context": {},
+      "Calls": [
+        "services.py:admin.delete_topics"
+      ]
+    },
+    {
+      "Action": "kafka-cluster:DescribeTopic",
+      "Resources": [
+        "arn:aws:kafka:<region>:<account-id>:topic/<cluster-name>/<cluster-uuid>/any-namespace.events"
+      ],
+      "Context": {},
+      "Calls": [
+        "services.py:admin.delete_topics",
+        "producer_service.py:producer.send",
+        "producer_service.py:metadata.partitions_for_topic",
+        "consumer_service.py:consumer.subscribe",
+        "consumer_service.py:consumer.poll",
+        "consumer_service.py:consumer.committed",
+        "consumer_service.py:consumer.seek_to_beginning",
+        "consumer_service.py:consumer.seek_to_end"
+      ]
+    },
+    {
+      "Action": "kafka-cluster:WriteData",
+      "Resources": [
+        "arn:aws:kafka:<region>:<account-id>:topic/<cluster-name>/<cluster-uuid>/any-namespace.events"
+      ],
+      "Context": {},
+      "Calls": [
+        "producer_service.py:producer.send"
+      ]
+    },
+    {
+      "Action": "kafka-cluster:ReadData",
+      "Resources": [
+        "arn:aws:kafka:<region>:<account-id>:topic/<cluster-name>/<cluster-uuid>/any-namespace.events"
+      ],
+      "Context": {},
+      "Calls": [
+        "consumer_service.py:consumer.poll",
+        "consumer_service.py:consumer.commit"
+      ]
+    },
+    {
+      "Action": "kafka-cluster:DescribeGroup",
+      "Resources": [
+        "arn:aws:kafka:<region>:<account-id>:group/<cluster-name>/<cluster-uuid>/any-namespace.workers"
+      ],
+      "Context": {},
+      "Calls": [
+        "consumer_service.py:consumer.poll",
+        "consumer_service.py:consumer.committed"
+      ]
+    },
+    {
+      "Action": "kafka-cluster:AlterGroup",
+      "Resources": [
+        "arn:aws:kafka:<region>:<account-id>:group/<cluster-name>/<cluster-uuid>/any-namespace.workers"
+      ],
+      "Context": {},
+      "Calls": [
+        "consumer_service.py:consumer.poll",
+        "consumer_service.py:consumer.commit",
+        "consumer_service.py:consumer.close"
+      ]
+    }
+  ]
+}

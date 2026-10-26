@@ -96,7 +96,22 @@ jobs:
         env:
           SERVICE_NAME: ${{ matrix.service_name }}
           CONTAINER_NAME: ${{ matrix.container_name }}
+          # The name of the policy under /diaspora-service/ that the service
+          # sets as the permissions boundary of each user it creates. Unset,
+          # the container gets no IAM_USER_PERMISSIONS_BOUNDARY_ARN.
+          BOUNDARY_NAME: ${{ vars.DOCKER_IAM_USER_PERMISSIONS_BOUNDARY_NAME }}
         run: |
+          if [ -n "$BOUNDARY_NAME" ]; then
+            if [[ ! "$BOUNDARY_NAME" =~ ^[A-Za-z0-9+=,.@_-]+$ ]]; then
+              echo "DOCKER_IAM_USER_PERMISSIONS_BOUNDARY_NAME is not an IAM policy name" >&2
+              exit 1
+            fi
+            if [ "$BOUNDARY_NAME" = diaspora-web-service-container ]; then
+              echo "DOCKER_IAM_USER_PERMISSIONS_BOUNDARY_NAME names the service's own policy" >&2
+              exit 1
+            fi
+          fi
+
           output=$(aws lightsail push-container-image --region us-east-1 --service-name "$SERVICE_NAME" --label "$CONTAINER_NAME" --image "$CONTAINER_NAME")
           image_name=$(echo "$output" | sed -n 's/.*Refer to this image as "\(.*\)" in deployments.*/\1/p')
 
@@ -115,13 +130,14 @@ jobs:
               --arg client_scope "${{ secrets.DOCKER_CLIENT_SCOPE }}" \
               --arg default_servers "${{ secrets.DOCKER_DEFAULT_SERVERS }}" \
               --arg server_client_id "${{ secrets.DOCKER_SERVER_CLIENT_ID }}" \
-              --arg server_secret "${{ secrets.DOCKER_SERVER_SECRET }}" '{
+              --arg server_secret "${{ secrets.DOCKER_SERVER_SECRET }}" \
+              --arg boundary_name "$BOUNDARY_NAME" '{
               "flask": {
                   "image": $image_name,
                   "ports": {
                       "8000": "HTTP"
                   },
-                  "environment": {
+                  "environment": ({
                       "AWS_ACCOUNT_ID": $aws_account_id,
                       "AWS_ACCOUNT_REGION": $aws_accound_region,
                       "MSK_CLUSTER_NAME": $msk_cluster_name,
@@ -134,7 +150,9 @@ jobs:
                       "DEFAULT_SERVERS": $default_servers,
                       "SERVER_CLIENT_ID": $server_client_id,
                       "SERVER_SECRET": $server_secret
-                  }
+                  } + (if $boundary_name == "" then {} else {
+                      "IAM_USER_PERMISSIONS_BOUNDARY_ARN": ("arn:aws:iam::" + $aws_account_id + ":policy/diaspora-service/" + $boundary_name)
+                  } end))
               }
           }')
 

@@ -1,0 +1,107 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "CreateUsersOnlyWithTheBoundary",
+      "Effect": "Allow",
+      "Action": "iam:CreateUser",
+      "Resource": "arn:aws:iam::<account-id>:user/msk-users/????????-????-????-????-????????????",
+      "Condition": {
+        "StringEquals": {
+          "iam:PermissionsBoundary": "arn:aws:iam::<account-id>:policy/diaspora-service/msk-user-boundary"
+        }
+      }
+    },
+    {
+      "Sid": "AttachUserPoliciesOnlyToBoundedUsers",
+      "Effect": "Allow",
+      "Action": "iam:AttachUserPolicy",
+      "Resource": "arn:aws:iam::<account-id>:user/msk-users/????????-????-????-????-????????????",
+      "Condition": {
+        "ArnLike": {
+          "iam:PolicyARN": "arn:aws:iam::<account-id>:policy/msk-policy/????????-????-????-????-????????????"
+        },
+        "StringEquals": {
+          "iam:PermissionsBoundary": "arn:aws:iam::<account-id>:policy/diaspora-service/msk-user-boundary"
+        }
+      }
+    },
+    {
+      "Sid": "DetachUserPolicies",
+      "Effect": "Allow",
+      "Action": "iam:DetachUserPolicy",
+      "Resource": "arn:aws:iam::<account-id>:user/msk-users/????????-????-????-????-????????????",
+      "Condition": {
+        "ArnLike": {
+          "iam:PolicyARN": "arn:aws:iam::<account-id>:policy/msk-policy/????????-????-????-????-????????????"
+        }
+      }
+    },
+    {
+      "Sid": "ManageUserKeysAndDeleteUsers",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreateAccessKey",
+        "iam:ListAccessKeys",
+        "iam:DeleteAccessKey",
+        "iam:DeleteUser"
+      ],
+      "Resource": "arn:aws:iam::<account-id>:user/msk-users/????????-????-????-????-????????????"
+    },
+    {
+      "Sid": "CreateAndDeleteUserPolicies",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreatePolicy",
+        "iam:ListPolicyVersions",
+        "iam:DeletePolicyVersion",
+        "iam:DeletePolicy"
+      ],
+      "Resource": "arn:aws:iam::<account-id>:policy/msk-policy/????????-????-????-????-????????????"
+    },
+    {
+      "Sid": "ReadAndWriteTheTables",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:GetItem",
+        "dynamodb:PutItem",
+        "dynamodb:UpdateItem",
+        "dynamodb:DeleteItem",
+        "dynamodb:CreateTable",
+        "dynamodb:DescribeTable"
+      ],
+      "Resource": [
+        "arn:aws:dynamodb:<region>:<account-id>:table/diaspora-keys-table",
+        "arn:aws:dynamodb:<region>:<account-id>:table/diaspora-users-table",
+        "arn:aws:dynamodb:<region>:<account-id>:table/diaspora-namespace-table"
+      ]
+    },
+    {
+      "Sid": "ConnectToTheCluster",
+      "Effect": "Allow",
+      "Action": "kafka-cluster:Connect",
+      "Resource": "arn:aws:kafka:<region>:<account-id>:cluster/<cluster-name>/<cluster-uuid>"
+    },
+    {
+      "Sid": "ManageAndUseTopics",
+      "Effect": "Allow",
+      "Action": [
+        "kafka-cluster:CreateTopic",
+        "kafka-cluster:DescribeTopic",
+        "kafka-cluster:DeleteTopic",
+        "kafka-cluster:ReadData",
+        "kafka-cluster:WriteData"
+      ],
+      "Resource": "arn:aws:kafka:<region>:<account-id>:topic/<cluster-name>/<cluster-uuid>/*"
+    },
+    {
+      "Sid": "UseConsumerGroups",
+      "Effect": "Allow",
+      "Action": [
+        "kafka-cluster:DescribeGroup",
+        "kafka-cluster:AlterGroup"
+      ],
+      "Resource": "arn:aws:kafka:<region>:<account-id>:group/<cluster-name>/<cluster-uuid>/*"
+    }
+  ]
+}

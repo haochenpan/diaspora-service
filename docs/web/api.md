@@ -61,6 +61,8 @@ curl -X DELETE "https://diaspora-web-service.qpp943wkvr7b2.us-east-1.cs.amazonli
   -H "authorization: $AUTHORIZATION"
 ```
 
+The key also lets a Kafka client connect to the cluster at the `endpoint` that Create key returns, with MSK IAM authentication. Such a client may use only topics, consumer group IDs and transactional IDs that start with your default namespace and a dot, such as `ns-0123456789ab.workers`; the cluster refuses any other with an authorization error (`GroupAuthorizationFailedError` in kafka-python for a group).
+
 ### Namespace
 
 ```bash
