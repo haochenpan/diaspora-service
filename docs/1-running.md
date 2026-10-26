@@ -6,6 +6,8 @@ in a Docker container. The service reads its configuration from the
 [Deployment](3-deploying.md#container-environment) describes how the
 production container sets them.
 
+## What a local run changes
+
 !!! warning "With real AWS keys, a local run changes the production account"
     The service has no local or mock mode. It acts on the AWS account that
     its keys belong to, and on the MSK cluster that `DEFAULT_SERVERS`
@@ -30,6 +32,11 @@ production container sets them.
 
 ## Keep a local run away from production data
 
+The test tables keep the service's records out of the production tables,
+but they do not isolate IAM. IAM users, policies and access keys always go
+to the account that the AWS keys belong to, named after the caller's
+Globus identity.
+
 - Point the three tables at the test tables, which the live tests also
   use. `.env.example` does this:
 
@@ -46,18 +53,42 @@ production container sets them.
   routes then change only the service's records, and creating a consumer
   or recreating a topic fails with `Kafka endpoint is not configured`.
 - Call the service with a Globus identity that has no resources in the
-  production service.
-- When you are done, call `DELETE /api/v3/user`. It deletes the IAM user,
-  its access keys, its default namespace and that namespace's topics.
+  production service. By default the SDK requests tokens only for the
+  production service's Globus client ([Call the API](#call-the-api)). A
+  local service that takes SDK tokens therefore runs with the production
+  client, and the SDK signs you in with your own Globus identity, the one
+  production also knows.
+- When you are done, and only for an identity that has no resources in
+  production, call `DELETE /api/v3/user`. It deletes the IAM user, its
+  policy, its access keys, its default namespace and that namespace's
+  topics. For an identity you also use with production, it deletes the
+  production IAM user and policy.
+
+If you call a local service on the test tables with an identity that has a
+key in production, your first `POST /api/v3/key` finds no key in the test
+keys table. It deletes the access keys of your production IAM user and
+creates a new one. Clients that hold your old key, such as the SDK on your
+machine, can no longer connect to the cluster. The production keys table
+still holds the deleted key, and the production service's
+`POST /api/v3/key` keeps returning it with `fresh` set to `false`. To
+recover, call `DELETE /api/v3/key` on the production service, then
+`POST /api/v3/key` there: the first deletes the IAM user's keys and the
+stored key, and the second creates and stores a new one. The test keys
+table still holds a key for that identity, so a later
+`DELETE /api/v3/key` to a local service with it deletes the production
+IAM user's keys again.
 
 To check only that the service starts, run it with the placeholder values
 of the unit tests ([Run the unit tests locally](2-testing.md#run-the-unit-tests-locally)).
-It then makes no AWS call: it serves its API documentation at `/`, and
-every API route fails to authenticate the caller.
+It makes no AWS call and serves its API documentation at `/`. API requests
+reach Globus but not AWS, and fail: Globus rejects the placeholder client
+credentials, so a request with a well-formed token gets `500`
+([Authentication](architecture.md#authentication) lists the other
+answers).
 
 ## Set up
 
-The service needs Python 3.9 to 3.14. CI runs 3.14, and the container image
+The service needs Python 3.10 to 3.14. CI runs 3.14, and the container image
 runs 3.11. A full local run also needs AWS keys for the service's account
 and the ID and secret of the service's Globus confidential client. Without
 them, you can run the unit tests and start the service with placeholders.
@@ -69,7 +100,10 @@ pip install -e ".[dev]"
 cp .env.example .env
 ```
 
-Fill in the required values in `.env`, which git ignores. Write each value
+The required values are keys for the production service's AWS account
+and the production service's Globus client, so read
+[What a local run changes](#what-a-local-run-changes) before you fill them
+in. Fill in the required values in `.env`, which git ignores. Write each value
 without quotes and without a trailing comment: `docker run --env-file`
 takes every value literally.
 
@@ -90,7 +124,9 @@ As the container runs it, with gunicorn and one Uvicorn worker:
 The parentheses run each command in a subshell, so the values from `.env`
 stay out of your shell. Run one worker only: the service keeps consumer
 instances in the worker's memory
-([One worker](3-deploying.md#one-worker)).
+([One worker](3-deploying.md#one-worker)). gunicorn reads its worker count
+from `WEB_CONCURRENCY` and extra options from `GUNICORN_CMD_ARGS`, so a
+value of either in your shell can change the number of workers.
 
 The API documentation is at <http://127.0.0.1:8000/>.
 
@@ -112,8 +148,8 @@ and `authorization`, a Globus bearer token. The service accepts a token
 only when it names `SERVER_CLIENT_ID` in its audience and carries the
 scope `https://auth.globus.org/scopes/<SERVER_CLIENT_ID>/action_all`. The
 [API reference](web/api.md) shows how to get both headers with the
-Diaspora Event SDK. The SDK requests tokens for one particular Globus
-client, so its tokens work with a local service only when
+Diaspora Event SDK. By default the SDK requests tokens for the production
+service's Globus client, so its tokens work with a local service only when
 `SERVER_CLIENT_ID` is that client's ID.
 
 ## Environment variables
