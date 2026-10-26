@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import functools
 import importlib.metadata as importlib_metadata
 import logging
 import os
 import time
+from collections import deque
 from collections.abc import AsyncIterator
 from collections.abc import Callable
 from contextlib import asynccontextmanager
@@ -128,6 +131,75 @@ def fetch_wait_ms(timeout: int | None, default_wait_ms: int | None) -> int:
     if default_wait_ms is not None:
         return min(default_wait_ms, MAX_FETCH_WAIT_MS)
     return DEFAULT_FETCH_WAIT_MS
+
+
+class FetchSlots:
+    """A fixed number of fetch slots, handed out in the order asked for.
+
+    A slot given back goes straight to the fetch that has waited longest,
+    so a fetch that gives its slot back and asks again at once waits
+    behind the fetches already waiting. anyio's CapacityLimiter lets such
+    a fetch take the slot first in some versions (4.13.0 among them),
+    which lets more fetches hold a slot than there are slots. Used only
+    on the event loop.
+    """
+
+    def __init__(self, total: int) -> None:
+        """Make total slots, all free."""
+        self.total_tokens = total
+        self._held = 0
+        self._waiters: deque[asyncio.Future[None]] = deque()
+
+    @property
+    def borrowed_tokens(self) -> int:
+        """Slots held."""
+        return self._held
+
+    @property
+    def available_tokens(self) -> int:
+        """Slots free."""
+        return self.total_tokens - self._held
+
+    async def take(self, timeout: float) -> bool:
+        """Take a slot, waiting at most timeout seconds behind earlier askers.
+
+        Returns:
+            Whether a slot was taken
+        """
+        if self._held < self.total_tokens and not self._waiters:
+            self._held += 1
+            return True
+        waiter: asyncio.Future[None] = (
+            asyncio.get_running_loop().create_future()
+        )
+        self._waiters.append(waiter)
+        try:
+            with anyio.move_on_after(timeout):
+                await waiter
+                return True
+        except BaseException:
+            self._abandon(waiter)
+            raise
+        self._abandon(waiter)
+        return False
+
+    def _abandon(self, waiter: asyncio.Future[None]) -> None:
+        if waiter.done() and not waiter.cancelled():
+            # Handed a slot just as the wait ended: pass it on
+            self.give_back()
+            return
+        waiter.cancel()
+        with contextlib.suppress(ValueError):
+            self._waiters.remove(waiter)
+
+    def give_back(self) -> None:
+        """Give a slot back, to the longest waiter if there is one."""
+        while self._waiters:
+            waiter = self._waiters.popleft()
+            if not waiter.done():
+                waiter.set_result(None)
+                return
+        self._held -= 1
 
 
 class FetchResponse(Response):
@@ -350,7 +422,7 @@ class DiasporaService:
         # Slots a fetch takes before it polls, and the threads it polls and
         # writes its reply on; a fetch holds a slot whenever it holds one
         # of these threads, so the threads are never short
-        self.fetch_slots = anyio.CapacityLimiter(FETCH_MAX_CONCURRENT)
+        self.fetch_slots = FetchSlots(FETCH_MAX_CONCURRENT)
         self.fetch_threads = anyio.CapacityLimiter(FETCH_MAX_CONCURRENT)
         # Fetches in progress by subject; changed only on the event loop
         self.fetching: dict[str, int] = {}
@@ -1128,8 +1200,7 @@ class DiasporaService:
         """
         polled = False
         while True:
-            slot = await self._take_fetch_slot(deadline)
-            if slot is None:
+            if not await self._take_fetch_slot(deadline):
                 if polled:
                     return self._consumer_response([], 200)
                 return self._fetch_refused(
@@ -1138,7 +1209,6 @@ class DiasporaService:
                 )
             polled = True
             found = await self._poll_slice(
-                slot,
                 held,
                 fetch,
                 deadline,
@@ -1147,20 +1217,19 @@ class DiasporaService:
             if not isinstance(found, FetchReply):
                 return found
             if found.records:
-                stack.callback(self.fetch_slots.release_on_behalf_of, slot)
+                stack.callback(self.fetch_slots.give_back)
                 return found
             if time.monotonic() >= deadline:
                 return self._consumer_response([], 200)
 
     async def _poll_slice(
         self,
-        slot: object,
         held: Any,
         fetch: Callable[..., tuple[Any, int]],
         deadline: float,
         request: Request,
     ) -> FetchReply | Response:
-        """Poll once, for at most FETCH_SLICE_MS, under slot.
+        """Poll once, for at most FETCH_SLICE_MS, under a slot it holds.
 
         The slot is given back unless the poll found records.
         """
@@ -1185,7 +1254,7 @@ class DiasporaService:
             return reply
         finally:
             if not keep:
-                self.fetch_slots.release_on_behalf_of(slot)
+                self.fetch_slots.give_back()
 
     def _fetch_done(self, subject: str) -> None:
         left = self.fetching.get(subject, 0) - 1
@@ -1194,22 +1263,15 @@ class DiasporaService:
         else:
             self.fetching.pop(subject, None)
 
-    async def _take_fetch_slot(self, deadline: float) -> object | None:
+    async def _take_fetch_slot(self, deadline: float) -> bool:
         """Take a fetch slot by the deadline (time.monotonic()).
 
         Returns:
-            The slot's holder, to release it with, or None if no slot
-            came free in time
+            Whether a slot came free in time; the caller gives it back
         """
-        holder = object()
-        try:
-            self.fetch_slots.acquire_on_behalf_of_nowait(holder)
-        except anyio.WouldBlock:
-            with anyio.move_on_after(max(0.0, deadline - time.monotonic())):
-                await self.fetch_slots.acquire_on_behalf_of(holder)
-                return holder
-            return None
-        return holder
+        return await self.fetch_slots.take(
+            max(0.0, deadline - time.monotonic()),
+        )
 
     @staticmethod
     def _fetch_refused(message: str) -> Response:

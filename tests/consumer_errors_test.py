@@ -1739,6 +1739,69 @@ async def test_a_reply_past_the_send_limit_is_fetched_again(
     _assert_released(service)
 
 
+async def test_fetch_slots_go_to_the_longest_waiter() -> None:
+    """A slot given back and asked for again at once waits its turn."""
+    slots = main.FetchSlots(2)
+    assert await slots.take(0)
+    assert await slots.take(0)
+    waiting = asyncio.create_task(slots.take(5))
+    await asyncio.sleep(0)
+    slots.give_back()
+    # The fetch that gave it back asks again before the waiter has run
+    again = asyncio.create_task(slots.take(0.2))
+    assert await waiting
+    assert not await again
+    assert slots.borrowed_tokens == 2
+    # A wait that times out leaves no trace
+    assert not await slots.take(0.05)
+    slots.give_back()
+    slots.give_back()
+    assert slots.borrowed_tokens == 0
+    assert await slots.take(0)
+
+
+async def test_quiet_long_polls_never_hold_more_slots_than_there_are(
+    service: DiasporaService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Long polls give their slots back and take them again many times.
+
+    One poll more than there are slots, so each slot given back has one
+    fetch waiting for it, which the fetch that gave it back must not pass.
+    """
+    monkeypatch.setattr(main, 'FETCH_SLICE_MS', 50)
+    count = main.FETCH_MAX_CONCURRENT + 1
+    fetches = [(_subject(i // 2), 'ab'[i % 2]) for i in range(count)]
+    for subject, name in fetches:
+        _log(service, name, subject=subject)
+    most = 0
+    done = asyncio.Event()
+
+    async def watch() -> None:
+        nonlocal most
+        while not done.is_set():
+            most = max(most, service.fetch_slots.borrowed_tokens)
+            await asyncio.sleep(0)
+
+    async with _client(service) as client:
+        watcher = asyncio.create_task(watch())
+        polls = await asyncio.gather(
+            *(
+                client.get(
+                    _records(subject, name),
+                    params={'timeout': 1000},
+                    headers=_headers(subject),
+                )
+                for subject, name in fetches
+            ),
+        )
+        done.set()
+        await watcher
+    assert [p.status_code for p in polls] == [200] * count
+    assert most == main.FETCH_MAX_CONCURRENT
+    assert service.fetch_slots.borrowed_tokens == 0
+
+
 def test_partitions_take_turns_to_start_a_reply(
     service: DiasporaService,
 ) -> None:
