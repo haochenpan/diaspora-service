@@ -1214,7 +1214,7 @@ service creates the user.</p>
 <tr>
 <td>IAM user</td>
 <td>the subject, under the path <code>/msk-users/</code></td>
-<td><code>POST /api/v3/user</code>, or <code>POST /api/v3/key</code> when the keys table holds no key for the user</td>
+<td><code>POST /api/v3/user</code>, or <code>POST /api/v3/key</code> when the keys table holds no key that is still active in IAM</td>
 <td><code>DELETE /api/v3/user</code></td>
 </tr>
 <tr>
@@ -1227,7 +1227,7 @@ service creates the user.</p>
 <td>IAM access key</td>
 <td>chosen by IAM</td>
 <td><code>POST /api/v3/key</code></td>
-<td><code>POST /api/v3/key</code> when the keys table holds no key for the user, <code>DELETE /api/v3/key</code>, <code>DELETE /api/v3/user</code></td>
+<td><code>POST /api/v3/key</code> when the keys table holds no key that is still active in IAM, <code>DELETE /api/v3/key</code>, <code>DELETE /api/v3/user</code></td>
 </tr>
 <tr>
 <td>Default namespace</td>
@@ -1266,8 +1266,10 @@ service also sets the policy it names as the user's permissions boundary.</p>
 reaches only the users created after the change. <code>scripts/update_user_policies.py</code>
 brings the other users' policies up to date
 (<a href="../5-runbook/#update-the-users-iam">Update the users' IAM</a>).</p>
-<p><code>POST /api/v3/key</code> returns the key stored for the user when the keys table
-holds one, with <code>fresh</code> set to <code>false</code>. Otherwise it creates the user and
+<p><code>POST /api/v3/key</code> returns the key stored for the user, with <code>fresh</code> set
+to <code>false</code>, when the keys table holds one that is still active in IAM. It
+skips the check for a key under 5 minutes old, which IAM may not list yet,
+and returns the stored key when IAM does not answer. Otherwise it creates the user and
 the default namespace if they are missing, deletes every access key the IAM
 user holds, creates a new key, stores it, and returns it with <code>fresh</code> set
 to <code>true</code>. Both answers include <code>endpoint</code>, the value of <code>DEFAULT_SERVERS</code>.</p>

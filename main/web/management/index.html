@@ -1461,8 +1461,8 @@
 <td>The token's identity is not <code>subject</code></td>
 </tr>
 <tr>
-<td><code>Not in the audience set. introspected = [...] server_client_id = ...</code></td>
-<td>The token is not for this service; the reason lists the token's audiences and the service's client ID</td>
+<td><code>Not in the audience set.</code></td>
+<td>The token is not for this service</td>
 </tr>
 <tr>
 <td><code>Token lacks the scope for action.</code></td>
@@ -1554,8 +1554,8 @@
 </span></code></pre></div>
 <p><code>POST /api/v3/key</code> returns the user's AWS access key and the cluster's endpoint:</p>
 <ul>
-<li>If the service holds a key for the user, it returns that key, with <code>"fresh": false</code> and the message <code>Access key already exists for &lt;subject&gt;</code>. It creates nothing and does not check the key with IAM, so every call returns the same key until <a href="#delete-key"><code>DELETE /api/v3/key</code></a> deletes it.</li>
-<li>Otherwise it creates the user and the default namespace as <a href="#create-user"><code>POST /api/v3/user</code></a> does, deletes every access key the IAM user has, creates one, stores it, and returns it with <code>"fresh": true</code>.</li>
+<li>If the service holds a key for the user and IAM still holds it as an active key, it returns that key, with <code>"fresh": false</code> and the message <code>Access key already exists for &lt;subject&gt;</code>. It creates nothing, so calls return the same key until <a href="#delete-key"><code>DELETE /api/v3/key</code></a> deletes it or it is deleted or deactivated in IAM. It returns the stored key without the check when the key is under 5 minutes old, since IAM can take a few seconds to list a new key, and when IAM does not answer the check.</li>
+<li>Otherwise, as when the key was deleted or deactivated in IAM outside the service, it creates the user and the default namespace as <a href="#create-user"><code>POST /api/v3/user</code></a> does, deletes every access key the IAM user has, creates one, stores it, and returns it with <code>"fresh": true</code>.</li>
 </ul>
 <p>To replace a key, delete it and create one.</p>
 <div class="language-json highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="p">{</span>
