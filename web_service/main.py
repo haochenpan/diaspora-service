@@ -37,6 +37,7 @@ from starlette.types import Receive
 from starlette.types import Scope
 from starlette.types import Send
 
+from web_service import route_text
 from web_service.consumer_models import AssignmentRequest
 from web_service.consumer_models import CreateConsumerRequest
 from web_service.consumer_models import OffsetsCommitRequest
@@ -84,6 +85,9 @@ from web_service.producer_service import Reservation
 from web_service.producer_service import SEND_TIMEOUT_S
 from web_service.producer_service import UNSUPPORTED_MEDIA_TYPE
 from web_service.producer_service import without_traceback
+from web_service.route_text import APP_DESCRIPTION
+from web_service.route_text import RouteText
+from web_service.route_text import TAGS
 from web_service.utils import AuthManager
 from web_service.utils import EnvironmentChecker
 
@@ -530,6 +534,8 @@ class DiasporaService:
 
         self.app = FastAPI(
             title='Diaspora Web Service V3',
+            description=APP_DESCRIPTION,
+            openapi_tags=TAGS,
             docs_url='/',
             version=service_version(),
             lifespan=self._lifespan,
@@ -539,35 +545,74 @@ class DiasporaService:
         self.add_producer_routes()
 
     def add_routes(self) -> None:
-        """Add routes to the FastAPI app."""
-        # User management routes
-        self.app.post('/api/v3/user', tags=['User'])(
-            self.create_user,
-        )
-        self.app.delete('/api/v3/user', tags=['User'])(
-            self.delete_user,
-        )
-        # Key management routes
-        self.app.post('/api/v3/key', tags=['Authentication'])(
-            self.create_key,
-        )
-        self.app.delete('/api/v3/key', tags=['Authentication'])(
-            self.delete_key,
-        )
-        # List namespaces and topics
-        self.app.get('/api/v3/namespace', tags=['Namespace'])(
-            self.list_namespace_and_topics,
-        )
-        # Topic management routes
-        self.app.post('/api/v3/{namespace}/{topic}', tags=['Topic'])(
-            self.create_topic,
-        )
-        self.app.delete('/api/v3/{namespace}/{topic}', tags=['Topic'])(
-            self.delete_topic,
-        )
-        self.app.put('/api/v3/{namespace}/{topic}/recreate', tags=['Topic'])(
-            self.recreate_topic,
-        )
+        """Add the management routes to the FastAPI app."""
+        routes: list[tuple[str, str, str, Callable[..., Any], RouteText]] = [
+            (
+                'POST',
+                '/api/v3/user',
+                'User',
+                self.create_user,
+                route_text.CREATE_USER,
+            ),
+            (
+                'DELETE',
+                '/api/v3/user',
+                'User',
+                self.delete_user,
+                route_text.DELETE_USER,
+            ),
+            (
+                'POST',
+                '/api/v3/key',
+                'Authentication',
+                self.create_key,
+                route_text.CREATE_KEY,
+            ),
+            (
+                'DELETE',
+                '/api/v3/key',
+                'Authentication',
+                self.delete_key,
+                route_text.DELETE_KEY,
+            ),
+            (
+                'GET',
+                '/api/v3/namespace',
+                'Namespace',
+                self.list_namespace_and_topics,
+                route_text.LIST_NAMESPACES,
+            ),
+            (
+                'POST',
+                '/api/v3/{namespace}/{topic}',
+                'Topic',
+                self.create_topic,
+                route_text.CREATE_TOPIC,
+            ),
+            (
+                'DELETE',
+                '/api/v3/{namespace}/{topic}',
+                'Topic',
+                self.delete_topic,
+                route_text.DELETE_TOPIC,
+            ),
+            (
+                'PUT',
+                '/api/v3/{namespace}/{topic}/recreate',
+                'Topic',
+                self.recreate_topic,
+                route_text.RECREATE_TOPIC,
+            ),
+        ]
+        for method, path, tag, handler, text in routes:
+            self.app.add_api_route(
+                path,
+                handler,
+                methods=[method],
+                tags=[tag],
+                summary=text.summary,
+                description=text.description,
+            )
 
     async def create_user(
         self,
@@ -692,11 +737,12 @@ class DiasporaService:
     ) -> dict[str, Any]:
         """Recreate a topic by deleting and recreating it.
 
-        Authenticates the client with namespace and topic access, then:
-        1. Verifies the subject owns the namespace
-        2. Deletes the Kafka topic and DynamoDB entry
+        Checks the token, then:
+        1. Verifies the subject owns the namespace and it lists the topic
+        2. Deletes the Kafka topic
         3. Waits 5 seconds
-        4. Recreates the Kafka topic and DynamoDB entry
+        4. Creates the Kafka topic again; the namespace's DynamoDB entry
+           is left as it is
         """
         if err := await run_in_threadpool(
             self.auth.validate_access_token,
@@ -954,74 +1000,97 @@ class DiasporaService:
         shape.
         """
         instance = '/{group_name}/instances/{instance_id}'
-        routes: list[tuple[str, str, Callable[..., Any], str]] = [
-            ('POST', '/{group_name}', self.create_consumer_instance, 'create'),
-            ('DELETE', instance, self.delete_consumer_instance, 'delete'),
+        routes: list[tuple[str, str, Callable[..., Any], str, RouteText]] = [
+            (
+                'POST',
+                '/{group_name}',
+                self.create_consumer_instance,
+                'create',
+                route_text.CONSUMER_CREATE,
+            ),
+            (
+                'DELETE',
+                instance,
+                self.delete_consumer_instance,
+                'delete',
+                route_text.CONSUMER_DELETE,
+            ),
             (
                 'POST',
                 f'{instance}/subscription',
                 self.subscribe_consumer,
                 'subscribe',
+                route_text.CONSUMER_SUBSCRIBE,
             ),
             (
                 'GET',
                 f'{instance}/subscription',
                 self.get_consumer_subscription,
                 'get_subscription',
+                route_text.CONSUMER_GET_SUBSCRIPTION,
             ),
             (
                 'DELETE',
                 f'{instance}/subscription',
                 self.unsubscribe_consumer,
                 'unsubscribe',
+                route_text.CONSUMER_UNSUBSCRIBE,
             ),
             (
                 'GET',
                 f'{instance}/records',
                 self.fetch_consumer_records,
                 'fetch_records',
+                route_text.CONSUMER_FETCH,
             ),
             (
                 'POST',
                 f'{instance}/offsets',
                 self.commit_consumer_offsets,
                 'commit_offsets',
+                route_text.CONSUMER_COMMIT,
             ),
             (
                 'GET',
                 f'{instance}/offsets',
                 self.get_committed_offsets,
                 'get_offsets',
+                route_text.CONSUMER_GET_OFFSETS,
             ),
             (
                 'POST',
                 f'{instance}/assignments',
                 self.assign_consumer_partitions,
                 'assign',
+                route_text.CONSUMER_ASSIGN,
             ),
             (
                 'GET',
                 f'{instance}/assignments',
                 self.get_consumer_assignments,
                 'get_assignments',
+                route_text.CONSUMER_GET_ASSIGNMENTS,
             ),
             (
                 'POST',
                 f'{instance}/positions',
                 self.seek_consumer_positions,
                 'seek',
+                route_text.CONSUMER_SEEK,
             ),
             (
                 'POST',
                 f'{instance}/positions/beginning',
                 self.seek_consumer_beginning,
                 'seek_to_beginning',
+                route_text.CONSUMER_SEEK_BEGINNING,
             ),
             (
                 'POST',
                 f'{instance}/positions/end',
                 self.seek_consumer_end,
                 'seek_to_end',
+                route_text.CONSUMER_SEEK_END,
             ),
         ]
         current = APIRouter(
@@ -1029,12 +1098,14 @@ class DiasporaService:
             route_class=ConsumerRoute,
             tags=['Consumer'],
         )
-        for method, path, handler, name in routes:
+        for method, path, handler, name, text in routes:
             current.add_api_route(
                 path,
                 handler,
                 methods=[method],
                 operation_id=f'consumer_{name}',
+                summary=text.summary,
+                description=text.description,
             )
         self.app.include_router(current)
 
@@ -1739,6 +1810,7 @@ class DiasporaService:
         self.app.post(
             f'{base}/records',
             tags=['Producer'],
+            summary=route_text.PRODUCE_RECORD.summary,
             responses={
                 200: {
                     'model': ProduceResult,
@@ -1758,6 +1830,7 @@ class DiasporaService:
         self.app.post(
             f'{base}/records:batch',
             tags=['Producer'],
+            summary=route_text.PRODUCE_BATCH.summary,
             status_code=207,
             responses={
                 207: {

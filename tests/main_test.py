@@ -2413,3 +2413,42 @@ def test_fetch_timeout_cap_is_documented(
     ]['get']['parameters']
     timeout = next(p for p in params if p['name'] == 'timeout')
     assert '30000' in timeout['description']
+
+
+def test_every_api_route_has_a_summary_and_a_description(
+    mock_diaspora_service: DiasporaService,
+) -> None:
+    """Each route under /api/ states what it does in its OpenAPI text."""
+    # The summaries FastAPI makes from handler names when none is set
+    generated = {
+        name.replace('_', ' ').title() for name in dir(DiasporaService)
+    }
+    paths = mock_diaspora_service.app.openapi()['paths']
+    operations = [
+        (f'{method.upper()} {path}', op)
+        for path, ops in paths.items()
+        if path.startswith('/api/')
+        for method, op in ops.items()
+    ]
+    # 8 management, 2 produce and 13 consumer routes
+    assert len(operations) == 23
+    for name, op in operations:
+        assert op['summary'].strip(), name
+        assert op['summary'] not in generated, name
+        assert op['description'].strip(), name
+
+
+def test_management_descriptions_say_failures_answer_200(
+    mock_diaspora_service: DiasporaService,
+) -> None:
+    """The management routes' text warns that a failure is HTTP 200."""
+    paths = mock_diaspora_service.app.openapi()['paths']
+    for path, ops in paths.items():
+        for op in ops.values():
+            if op['tags'][0] in {
+                'User',
+                'Authentication',
+                'Namespace',
+                'Topic',
+            }:
+                assert 'HTTP 200 for a failure' in op['description'], path
