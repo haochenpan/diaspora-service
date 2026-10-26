@@ -203,7 +203,8 @@ and clients and these docs use the current domain.
    `linux/amd64`, the platform Lightsail runs.
 
     ```bash
-    docker build -t docker -f web_service/Dockerfile .
+    docker build -t docker -f web_service/Dockerfile \
+        --build-arg GIT_SHA="$(git rev-parse HEAD)" .
     ```
 
 2. Push it and keep the name Lightsail gives it:
