@@ -83,7 +83,7 @@ curl -X POST "https://diaspora-web-service.qpp943wkvr7b2.us-east-1.cs.amazonligh
 
 | `message` of a failure | Cause |
 | --- | --- |
-| `Failed to create IAM user: Failed to create user and policy: <IAM error>` | IAM refused a call |
+| `Failed to create IAM user: Failed to create user and policy: IAM did not complete the request` | IAM refused a call |
 | `Failed to create namespace: Namespace already taken: <namespace>` | Another user holds the default namespace's name; the service deletes the IAM user |
 
 ### Delete user
@@ -104,7 +104,7 @@ curl -X DELETE "https://diaspora-web-service.qpp943wkvr7b2.us-east-1.cs.amazonli
 | --- | --- |
 | `Cannot delete user <subject>: user has <n> additional namespace(s). Delete namespaces first.` | The user holds namespaces other than the default one; nothing is deleted |
 | `Failed to delete Kafka topic: Failed to delete Kafka topic <namespace>.<topic> after 3 attempts: the Kafka cluster did not complete it; retry shortly` | The cluster did not delete a topic. The topics deleted before it stay deleted; that topic, the rest, the namespace, the key and the user are kept |
-| `Failed to delete IAM user: Failed to delete user and policy: <IAM error>` | IAM refused a call. The topics, the namespace and the stored key are already deleted |
+| `Failed to delete IAM user: Failed to delete user and policy: IAM did not complete the request` | IAM refused a call. The topics, the namespace and the stored key are already deleted |
 
 ## Keys
 
@@ -142,8 +142,8 @@ The key lets a Kafka client connect to the cluster at `endpoint`, with MSK IAM a
 | `message` of a failure | Cause |
 | --- | --- |
 | `Failed to create user: Failed to create IAM user: ...` or `Failed to create user: Failed to create namespace: ...` | Creating the user failed, as in [Create user](#create-user) |
-| `Failed to delete existing IAM access keys: Failed to delete access keys: <IAM error>` | IAM refused to list or delete the user's keys |
-| `Failed to create IAM access key: Failed to create access key: <IAM error>` | IAM refused to create the key |
+| `Failed to delete existing IAM access keys: Failed to delete access keys: IAM did not complete the request` | IAM refused to list or delete the user's keys |
+| `Failed to create IAM access key: Failed to create access key: IAM did not complete the request` | IAM refused to create the key |
 
 If the service cannot store a new key, the reply is 500 and the key is not returned; a retry deletes it and creates another.
 
@@ -163,7 +163,7 @@ curl -X DELETE "https://diaspora-web-service.qpp943wkvr7b2.us-east-1.cs.amazonli
 
 | `message` of a failure | Cause |
 | --- | --- |
-| `Failed to delete IAM access keys: Failed to delete access keys: <IAM error>` | IAM refused to list or delete the keys. The stored key is kept, since it may still be valid |
+| `Failed to delete IAM access keys: Failed to delete access keys: IAM did not complete the request` | IAM refused to list or delete the keys. The stored key is kept, since it may still be valid |
 
 ## Namespaces
 
