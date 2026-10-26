@@ -294,6 +294,8 @@ async def test_json_instance_returns_json_values(
     values = [
         {'type': 'JSON', 'data': {'step': 1, 'name': 'é'}},
         {'type': 'JSON', 'data': [1, 2]},
+        # Text that is not JSON comes back as a string
+        {'type': 'STRING', 'data': 'job done'},
     ]
     await _produce(client, subject, namespace, topic, values)
     group = _group()
@@ -318,8 +320,12 @@ async def test_json_instance_returns_json_values(
         headers=_headers(subject),
     )
     assert (refused.status_code, refused.json()['error_code']) == (406, 40601)
-    records = await _fetch_all(client, subject, instance, 2, accept=JSON)
-    assert [r['value'] for r in records] == [{'step': 1, 'name': 'é'}, [1, 2]]
+    records = await _fetch_all(client, subject, instance, 3, accept=JSON)
+    assert [r['value'] for r in records] == [
+        {'step': 1, 'name': 'é'},
+        [1, 2],
+        'job done',
+    ]
 
 
 async def test_assign_and_seek(
