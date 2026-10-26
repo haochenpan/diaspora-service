@@ -512,6 +512,45 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#the-live-tests-aws-identity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The live tests' AWS identity
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The live tests&#39; AWS identity">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#naming-live-test-resources" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Naming live-test resources
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#create-the-identity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Create the identity
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -901,6 +940,45 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#the-live-tests-aws-identity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The live tests' AWS identity
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The live tests&#39; AWS identity">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#naming-live-test-resources" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Naming live-test resources
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#create-the-identity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Create the identity
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -964,7 +1042,9 @@ placeholders, and point the AWS SDK away from any credentials you have:</p>
 </span></code></pre></div>
 <p>They write to the account and the cluster the credentials point to. Do not
 run them while another live run is in progress: some tests assert on
-records shared by all runs.</p>
+records shared by all runs. With the live tests' own keys (see below),
+also set <code>IAM_USER_PERMISSIONS_BOUNDARY_ARN</code> to the boundary policy's ARN,
+or every test that creates an IAM user is denied.</p>
 <p>With coverage, over both sets:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>coverage<span class="w"> </span>erase
 </span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>coverage<span class="w"> </span>run<span class="w"> </span>-m<span class="w"> </span>pytest<span class="w"> </span>tests/
@@ -992,16 +1072,9 @@ records shared by all runs.</p>
 <tr>
 <td><code>tests.yml</code></td>
 <td><code>live</code></td>
-<td>live</td>
+<td>live, then the sweep (nightly only)</td>
 <td>pushes to <code>main</code>, nightly, manual dispatch</td>
-<td>the service's AWS keys</td>
-</tr>
-<tr>
-<td><code>tests.yml</code></td>
-<td><code>sweep</code></td>
-<td>none</td>
-<td>nightly, after <code>live</code></td>
-<td>the service's AWS keys</td>
+<td>the live tests' AWS keys, or the service's while those are not set</td>
 </tr>
 <tr>
 <td><code>deployment.yml</code></td>
@@ -1018,21 +1091,136 @@ records shared by all runs.</p>
 <li>The <code>live</code> job never runs on pull requests or <code>test-me-*</code> pushes. A
   manual dispatch runs the live tests of the branch it is dispatched on,
   whichever branch that is.</li>
-<li><code>live</code> and <code>sweep</code> share the <code>live-tests</code> concurrency group, so no two
-  of them run at the same time. GitHub keeps only one pending run per
-  group: a run that is waiting can be cancelled by a newer one.</li>
-<li>After the nightly live run, unless it was cancelled, the <code>sweep</code> job
-  runs <code>scripts/sweep_test_resources.py --apply</code>. It deletes what earlier
+<li><code>live</code> runs in the <code>live-tests</code> concurrency group, so no two live runs
+  happen at the same time. GitHub keeps only one pending run per group: a
+  run that is waiting can be cancelled by a newer one.</li>
+<li>In the nightly run, after the live tests whether they passed or failed
+  (not when the job was cancelled), the last step of <code>live</code> runs
+  <code>scripts/sweep_test_resources.py --apply</code>. It deletes what earlier
   live runs left behind: IAM users and policies named
-  <code>test-subject-&lt;16 hex&gt;</code> older than two hours, and Kafka topics named
+  <code>test-subject-test&lt;8 hex&gt;</code> older than two hours, and Kafka topics named
   <code>test-namespace-&lt;16 hex&gt;.test-topic-&lt;16 hex&gt;</code> or
-  <code>ns-&lt;12 hex&gt;.test-topic-&lt;suffix&gt;</code> (with the suffixes the tests use)
+  <code>ns-test&lt;8 hex&gt;.test-topic-&lt;suffix&gt;</code> (with the suffixes the tests use)
   whose namespace the service has no record of and that is not the default
-  namespace of another IAM user. Kafka keeps no creation time for topics,
-  so topics are not filtered by age: a local live run around the nightly
-  time can lose its topics. Without <code>--apply</code> the script only lists what
-  it would delete.</li>
+  namespace of another IAM user. It also selects leftovers with the names
+  the tests used before (<code>test-subject-&lt;16 hex&gt;</code>,
+  <code>ns-&lt;12 hex&gt;.test-topic-&lt;suffix&gt;</code>). The live tests' own identity can
+  delete IAM users and policies with those names, but it cannot see or
+  delete topics with those names; only the service's keys can (see
+  <a href="#create-the-identity">Create the identity</a>). Kafka keeps no creation
+  time for topics, so topics are not filtered by age: a local live run
+  around the nightly time can lose its topics. Without <code>--apply</code> the
+  script only lists what it would delete.</li>
 </ul>
+<h2 id="the-live-tests-aws-identity">The live tests' AWS identity<a class="headerlink" href="#the-live-tests-aws-identity" title="Permanent link">&para;</a></h2>
+<p>The live tests and the sweep run against the service's production account
+and MSK cluster, as an IAM user of their own whose policy lets them touch
+only what they create. Its keys are the repository secrets
+<code>LIVE_TESTS_AWS_ACCESS_KEY_ID</code> and <code>LIVE_TESTS_AWS_SECRET_ACCESS_KEY</code>;
+while either of them is not set, <code>live</code> uses the service's keys.</p>
+<p>The policy, <a href="https://github.com/haochenpan/diaspora-service/blob/main/tests/live_identity/identity-policy.json"><code>tests/live_identity/identity-policy.json</code></a>,
+allows:</p>
+<ul>
+<li>Creating IAM users under <code>/msk-users/</code> and managed policies under
+  <code>/msk-policy/</code> whose names are <code>test-subject-test</code> followed by exactly
+  8 characters, attaching such a policy to such a user, and creating
+  access keys for such a user. A user can be created, or given a policy,
+  only with the boundary below as its permissions boundary.</li>
+<li>Reading any IAM user named <code>test-subject-*</code>, detaching its policies,
+  deleting its access keys and deleting it, and deleting any policy of
+  that name, so the sweep also removes test users named the way the tests
+  used to name them.</li>
+<li>Listing all IAM users and policies, which the sweep needs.</li>
+<li>Reading and writing items in the three <code>test-diaspora-*</code> tables.</li>
+<li>In the service's own tables, reading only the global namespace list and
+  the records of test namespaces. Nothing else in them, and never the keys
+  table.</li>
+<li>On the cluster: connecting; creating, reading, writing and deleting
+  topics in namespaces starting <code>ns-test</code> or <code>test-namespace-</code>; and using
+  consumer groups in namespaces starting <code>ns-test</code>.</li>
+</ul>
+<p>Every IAM user the tests create gets the permissions boundary
+<a href="https://github.com/haochenpan/diaspora-service/blob/main/tests/live_identity/boundary-policy.json"><code>tests/live_identity/boundary-policy.json</code></a>,
+so whatever policy is attached to it, the user can do no more than read
+and write test topics and groups. The service sets that boundary when
+<code>IAM_USER_PERMISSIONS_BOUNDARY_ARN</code> is set, and sets none when it is not.</p>
+<h3 id="naming-live-test-resources">Naming live-test resources<a class="headerlink" href="#naming-live-test-resources" title="Permanent link">&para;</a></h3>
+<p>The identity can touch only resources with these names, and the sweep
+finds only these, so every live test takes its names from
+<code>tests/live_identity</code>:</p>
+<ul>
+<li>a subject (and so an IAM user and policy): <code>live_subject()</code>, which
+  returns <code>test-subject-test&lt;8 hex&gt;</code>; the shared <code>random_subject</code> fixture
+  in <code>tests/conftest.py</code> returns one. Its default namespace is
+  <code>ns-test&lt;8 hex&gt;</code>.</li>
+<li>a namespace without a user: <code>live_namespace()</code>, which returns
+  <code>ns-test&lt;8 hex&gt;</code>.</li>
+<li>Kafka topics and consumer groups: <code>&lt;namespace&gt;.&lt;name&gt;</code> in one of those
+  namespaces, or in <code>test-namespace-&lt;hex&gt;</code>.</li>
+</ul>
+<p>A real user's subject is a UUID, so its default namespace is <code>ns-</code> and 12
+hex digits, which never starts with <code>ns-test</code>.</p>
+<h3 id="create-the-identity">Create the identity<a class="headerlink" href="#create-the-identity" title="Permanent link">&para;</a></h3>
+<p>Run these with an administrator's credentials, at a time when no live run
+is in progress.</p>
+<p>First create the boundary, the identity's policy, the user and its access
+key. Fill in the account ID, region, MSK cluster name and the cluster's
+UUID (the last part of its ARN, from <code>aws kafka list-clusters-v2</code>):</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nv">ACCOUNT_ID</span><span class="o">=</span>&lt;account-id&gt;
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="nv">REGION</span><span class="o">=</span>&lt;region&gt;
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="nv">CLUSTER_NAME</span><span class="o">=</span>&lt;cluster-name&gt;
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="nv">CLUSTER_UUID</span><span class="o">=</span>&lt;cluster-uuid&gt;
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>render<span class="o">()</span><span class="w"> </span><span class="o">{</span>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">  </span>sed<span class="w"> </span>-e<span class="w"> </span><span class="s2">"s/&lt;account-id&gt;/</span><span class="nv">$ACCOUNT_ID</span><span class="s2">/g"</span><span class="w"> </span>-e<span class="w"> </span><span class="s2">"s/&lt;region&gt;/</span><span class="nv">$REGION</span><span class="s2">/g"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="w">    </span>-e<span class="w"> </span><span class="s2">"s/&lt;cluster-name&gt;/</span><span class="nv">$CLUSTER_NAME</span><span class="s2">/g"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="w">    </span>-e<span class="w"> </span><span class="s2">"s/&lt;cluster-uuid&gt;/</span><span class="nv">$CLUSTER_UUID</span><span class="s2">/g"</span><span class="w"> </span><span class="s2">"</span><span class="nv">$1</span><span class="s2">"</span>
+</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="o">}</span>
+</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a>
+</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a>aws<span class="w"> </span>iam<span class="w"> </span>create-policy<span class="w"> </span>--path<span class="w"> </span>/diaspora-test/<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-13"><a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a><span class="w">  </span>--policy-name<span class="w"> </span>test-user-boundary<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-14"><a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a><span class="w">  </span>--policy-document<span class="w"> </span><span class="s2">"</span><span class="k">$(</span>render<span class="w"> </span>tests/live_identity/boundary-policy.json<span class="k">)</span><span class="s2">"</span>
+</span><span id="__span-3-15"><a id="__codelineno-3-15" name="__codelineno-3-15" href="#__codelineno-3-15"></a>aws<span class="w"> </span>iam<span class="w"> </span>create-policy<span class="w"> </span>--path<span class="w"> </span>/diaspora-test/<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-16"><a id="__codelineno-3-16" name="__codelineno-3-16" href="#__codelineno-3-16"></a><span class="w">  </span>--policy-name<span class="w"> </span>diaspora-live-tests<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-17"><a id="__codelineno-3-17" name="__codelineno-3-17" href="#__codelineno-3-17"></a><span class="w">  </span>--policy-document<span class="w"> </span><span class="s2">"</span><span class="k">$(</span>render<span class="w"> </span>tests/live_identity/identity-policy.json<span class="k">)</span><span class="s2">"</span>
+</span><span id="__span-3-18"><a id="__codelineno-3-18" name="__codelineno-3-18" href="#__codelineno-3-18"></a>aws<span class="w"> </span>iam<span class="w"> </span>create-user<span class="w"> </span>--user-name<span class="w"> </span>diaspora-live-tests
+</span><span id="__span-3-19"><a id="__codelineno-3-19" name="__codelineno-3-19" href="#__codelineno-3-19"></a>aws<span class="w"> </span>iam<span class="w"> </span>attach-user-policy<span class="w"> </span>--user-name<span class="w"> </span>diaspora-live-tests<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-20"><a id="__codelineno-3-20" name="__codelineno-3-20" href="#__codelineno-3-20"></a><span class="w">  </span>--policy-arn<span class="w"> </span><span class="s2">"arn:aws:iam::</span><span class="nv">$ACCOUNT_ID</span><span class="s2">:policy/diaspora-test/diaspora-live-tests"</span>
+</span><span id="__span-3-21"><a id="__codelineno-3-21" name="__codelineno-3-21" href="#__codelineno-3-21"></a>aws<span class="w"> </span>iam<span class="w"> </span>create-access-key<span class="w"> </span>--user-name<span class="w"> </span>diaspora-live-tests
+</span></code></pre></div>
+<p>Do not name the user <code>test-subject-*</code>, or its policy would let it manage
+itself.</p>
+<p>Just before storing the key, delete with the service's keys everything
+earlier live runs left behind, whatever its age. Until the secrets are
+set, live runs use the service's keys and create test users without a
+boundary, and the identity cannot see or delete the topics named the way
+the tests used to name them. The sweep reads the region and the bootstrap
+servers from <code>AWS_ACCOUNT_REGION</code> and <code>DEFAULT_SERVERS</code>. Without <code>--apply</code>
+it lists what it would delete:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>python<span class="w"> </span>scripts/sweep_test_resources.py<span class="w"> </span>--min-age-hours<span class="w"> </span><span class="m">0</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>python<span class="w"> </span>scripts/sweep_test_resources.py<span class="w"> </span>--apply<span class="w"> </span>--min-age-hours<span class="w"> </span><span class="m">0</span>
+</span></code></pre></div>
+<p>Then store the key's <code>AccessKeyId</code> and <code>SecretAccessKey</code> as the repository
+secrets. Each command prompts for the value, which keeps the key out of
+the shell history:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>gh<span class="w"> </span>secret<span class="w"> </span><span class="nb">set</span><span class="w"> </span>LIVE_TESTS_AWS_ACCESS_KEY_ID<span class="w"> </span>--repo<span class="w"> </span>haochenpan/diaspora-service
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>gh<span class="w"> </span>secret<span class="w"> </span><span class="nb">set</span><span class="w"> </span>LIVE_TESTS_AWS_SECRET_ACCESS_KEY<span class="w"> </span>--repo<span class="w"> </span>haochenpan/diaspora-service
+</span></code></pre></div>
+<p>Once both secrets are set, <code>live</code> runs as the identity and sets
+<code>IAM_USER_PERMISSIONS_BOUNDARY_ARN</code> to
+<code>arn:aws:iam::&lt;account-id&gt;:policy/diaspora-test/test-user-boundary</code>.</p>
+<p>To change what the identity may do, edit the template and apply it as a
+new default version of the policy. IAM keeps at most five versions of a
+policy, so when it holds five, first delete the oldest version that is
+not the default, replacing <code>v1</code> below with the ID the list prints with
+the earliest date:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="nv">POLICY_ARN</span><span class="o">=</span><span class="s2">"arn:aws:iam::</span><span class="nv">$ACCOUNT_ID</span><span class="s2">:policy/diaspora-test/diaspora-live-tests"</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>aws<span class="w"> </span>iam<span class="w"> </span>list-policy-versions<span class="w"> </span>--policy-arn<span class="w"> </span><span class="s2">"</span><span class="nv">$POLICY_ARN</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span>--query<span class="w"> </span><span class="s1">'Versions[?!IsDefaultVersion].[VersionId,CreateDate]'</span><span class="w"> </span>--output<span class="w"> </span>text
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>aws<span class="w"> </span>iam<span class="w"> </span>delete-policy-version<span class="w"> </span>--policy-arn<span class="w"> </span><span class="s2">"</span><span class="nv">$POLICY_ARN</span><span class="s2">"</span><span class="w"> </span>--version-id<span class="w"> </span>v1
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>aws<span class="w"> </span>iam<span class="w"> </span>create-policy-version<span class="w"> </span>--set-as-default<span class="w"> </span>--policy-arn<span class="w"> </span><span class="s2">"</span><span class="nv">$POLICY_ARN</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">  </span>--policy-document<span class="w"> </span><span class="s2">"</span><span class="k">$(</span>render<span class="w"> </span>tests/live_identity/identity-policy.json<span class="k">)</span><span class="s2">"</span>
+</span></code></pre></div>
 
 
 
