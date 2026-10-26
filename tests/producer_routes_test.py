@@ -401,16 +401,24 @@ async def _reply(
 
 
 @pytest.mark.parametrize(('path', 'body'), PRODUCE_ROUTES)
-async def test_token_failure_matches_consumer_routes(
+async def test_token_failure_keeps_the_produce_reply(
     service: DiasporaService,
     fake_producer: FakeProducer,
     path: str,
     body: Any,
 ) -> None:
+    """The produce routes keep their 401; the consumer routes add a code."""
     service.auth.validate_access_token.return_value = AUTH_ERROR
     consumer = await _reply(service, *CONSUMER_SUBSCRIBE)
     produce = await _reply(service, path, body)
-    assert produce == consumer == (401, AUTH_ERROR)
+    assert produce == (401, AUTH_ERROR)
+    assert consumer == (
+        401,
+        {
+            'error_code': 40101,
+            'message': 'Authentication failed: Token is inactive.',
+        },
+    )
     service.auth.validate_access_token.assert_called_with(
         SUBJECT,
         HEADERS['authorization'],

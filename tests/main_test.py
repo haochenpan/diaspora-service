@@ -11,6 +11,9 @@ import asyncio
 import json
 import os
 import threading
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
@@ -19,6 +22,7 @@ from unittest.mock import patch
 import httpx
 import pytest
 
+from web_service import main
 from web_service.consumer_models import AssignmentRequest
 from web_service.consumer_models import CreateConsumerRequest
 from web_service.consumer_models import OffsetsCommitRequest
@@ -27,6 +31,9 @@ from web_service.consumer_models import PartitionOffset
 from web_service.consumer_models import SeekPartitionsRequest
 from web_service.consumer_models import SeekRequest
 from web_service.consumer_models import SubscriptionRequest
+from web_service.consumer_records import EncodedField
+from web_service.consumer_records import EncodedRecord
+from web_service.consumer_records import FetchReply
 from web_service.main import DiasporaService
 
 # ============================================================================
@@ -51,8 +58,52 @@ def mock_web_service() -> MagicMock:
 
 @pytest.fixture
 def mock_consumer_service() -> MagicMock:
-    """Create a mock ConsumerService for unit tests."""
-    return MagicMock()
+    """Create a mock ConsumerService for unit tests.
+
+    Its hold yields an instance whose lock the request holds, with the
+    service's default fetch wait.
+    """
+    service = MagicMock()
+
+    @asynccontextmanager
+    async def hold(
+        key: tuple[str, str, str, str],
+        *,
+        wait: bool = True,
+    ) -> AsyncIterator[Any]:
+        yield SimpleNamespace(default_wait_ms=None)
+
+    service.hold.side_effect = hold
+    return service
+
+
+def _fetch_request() -> MagicMock:
+    """A request whose client is still connected."""
+    request = MagicMock()
+    request.is_disconnected = AsyncMock(return_value=False)
+    return request
+
+
+def _reply(*values: bytes) -> FetchReply:
+    """A fetch reply of binary records of topic t1."""
+    return FetchReply(
+        [
+            EncodedRecord(
+                topic='t1',
+                key=EncodedField.of(None, 'binary'),
+                value=EncodedField.of(value, 'binary'),
+                partition=0,
+                offset=i,
+            )
+            for i, value in enumerate(values)
+        ],
+    )
+
+
+@pytest.fixture
+def long_slices(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Let a fetch poll for its whole wait in one slice."""
+    monkeypatch.setattr(main, 'FETCH_SLICE_MS', 60_000)
 
 
 @pytest.fixture
@@ -608,6 +659,23 @@ CONSUMER_INST = 'my-instance'
 # ============================================================================
 
 
+async def _sent_json(response: object) -> Any:
+    """Send a response as a server would, and parse the body it wrote."""
+    sent: list[dict[str, Any]] = []
+    done = asyncio.Event()
+
+    async def receive() -> dict[str, Any]:
+        await done.wait()
+        return {'type': 'http.disconnect'}
+
+    async def send(message: dict[str, Any]) -> None:
+        sent.append(message)
+
+    await response({'type': 'http'}, receive, send)
+    done.set()
+    return json.loads(b''.join(m.get('body', b'') for m in sent[1:]))
+
+
 def _response_json(response: object) -> Any:
     """Extract JSON body from a Response object."""
     body = getattr(response, 'body', b'')
@@ -756,15 +824,17 @@ async def test_unsubscribe_consumer_auth_failure(
     mock_consumer_service.unsubscribe.assert_not_called()
 
 
-def test_fetch_consumer_records_auth_failure(
+@pytest.mark.asyncio
+async def test_fetch_consumer_records_auth_failure(
     mock_diaspora_service: DiasporaService,
     mock_auth_manager: MagicMock,
     mock_consumer_service: MagicMock,
     valid_subject: str,
 ) -> None:
-    """Test fetch_consumer_records returns 401 on auth failure (sync)."""
+    """Test fetch_consumer_records returns 401 on auth failure ."""
     _setup_auth_failure(mock_auth_manager)
-    response = mock_diaspora_service.fetch_consumer_records(
+    response = await mock_diaspora_service.fetch_consumer_records(
+        request=_fetch_request(),
         namespace=CONSUMER_NS,
         group_name=CONSUMER_GROUP,
         instance_id=CONSUMER_INST,
@@ -805,9 +875,9 @@ async def test_get_committed_offsets_auth_failure(
     """Test get_committed_offsets returns 401 on auth failure."""
     _setup_auth_failure(mock_auth_manager)
     mock_request = AsyncMock()
-    mock_request.json.return_value = {
-        'partitions': [{'topic': 't1', 'partition': 0}],
-    }
+    mock_request.body.return_value = json.dumps(
+        {'partitions': [{'topic': 't1', 'partition': 0}]},
+    ).encode()
     response = await mock_diaspora_service.get_committed_offsets(
         namespace=CONSUMER_NS,
         group_name=CONSUMER_GROUP,
@@ -1062,7 +1132,8 @@ async def test_unsubscribe_consumer_namespace_failure(
     assert response.status_code == 404
 
 
-def test_fetch_consumer_records_namespace_failure(
+@pytest.mark.asyncio
+async def test_fetch_consumer_records_namespace_failure(
     mock_diaspora_service: DiasporaService,
     mock_web_service: MagicMock,
     mock_consumer_service: MagicMock,
@@ -1071,7 +1142,8 @@ def test_fetch_consumer_records_namespace_failure(
 ) -> None:
     """Test fetch_consumer_records returns 404 on namespace failure."""
     _setup_namespace_failure(mock_web_service)
-    response = mock_diaspora_service.fetch_consumer_records(
+    response = await mock_diaspora_service.fetch_consumer_records(
+        request=_fetch_request(),
         namespace=CONSUMER_NS,
         group_name=CONSUMER_GROUP,
         instance_id=CONSUMER_INST,
@@ -1510,28 +1582,22 @@ async def test_unsubscribe_consumer_success(
     assert response.status_code == 204
 
 
-def test_fetch_consumer_records_success(
+@pytest.mark.asyncio
+async def test_fetch_consumer_records_success(
     mock_diaspora_service: DiasporaService,
     mock_web_service: MagicMock,
     mock_consumer_service: MagicMock,
     valid_subject: str,
     valid_token: str,
 ) -> None:
-    """Test fetch_consumer_records success path (sync)."""
+    """Test fetch_consumer_records success path ."""
     _setup_namespace_success(mock_web_service)
-    mock_consumer_service.poll_records.return_value = (
-        [
-            {
-                'topic': 't1',
-                'key': None,
-                'value': 'aGVsbG8=',
-                'partition': 0,
-                'offset': 0,
-            },
-        ],
+    mock_consumer_service.fetch_records.return_value = (
+        _reply(b'hello'),
         200,
     )
-    response = mock_diaspora_service.fetch_consumer_records(
+    response = await mock_diaspora_service.fetch_consumer_records(
+        request=_fetch_request(),
         namespace=CONSUMER_NS,
         group_name=CONSUMER_GROUP,
         instance_id=CONSUMER_INST,
@@ -1541,22 +1607,32 @@ def test_fetch_consumer_records_success(
         max_bytes=None,
     )
     assert response.status_code == 200
-    resp_body = _response_json(response)
-    assert isinstance(resp_body, list)
-    assert len(resp_body) == 1
+    assert await _sent_json(response) == [
+        {
+            'topic': 't1',
+            'key': None,
+            'value': 'aGVsbG8=',
+            'partition': 0,
+            'offset': 0,
+        },
+    ]
 
 
-def test_fetch_consumer_records_default_timeout(
+@pytest.mark.asyncio
+async def test_fetch_consumer_records_default_timeout(
     mock_diaspora_service: DiasporaService,
+    *,
     mock_web_service: MagicMock,
     mock_consumer_service: MagicMock,
     valid_subject: str,
     valid_token: str,
+    long_slices: None,
 ) -> None:
     """Test fetch_consumer_records uses default timeout=5000."""
     _setup_namespace_success(mock_web_service)
-    mock_consumer_service.poll_records.return_value = ([], 200)
-    mock_diaspora_service.fetch_consumer_records(
+    mock_consumer_service.fetch_records.return_value = (_reply(b'x'), 200)
+    await mock_diaspora_service.fetch_consumer_records(
+        request=_fetch_request(),
         namespace=CONSUMER_NS,
         group_name=CONSUMER_GROUP,
         instance_id=CONSUMER_INST,
@@ -1565,27 +1641,33 @@ def test_fetch_consumer_records_default_timeout(
         timeout=None,
         max_bytes=None,
     )
-    mock_consumer_service.poll_records.assert_called_once_with(
-        subject=valid_subject,
-        namespace=CONSUMER_NS,
-        group_name=CONSUMER_GROUP,
-        instance_id=CONSUMER_INST,
-        timeout_ms=5000,
-        max_bytes=None,
+    call = mock_consumer_service.fetch_records.call_args
+    assert call.args == (
+        valid_subject,
+        CONSUMER_NS,
+        CONSUMER_GROUP,
+        CONSUMER_INST,
     )
+    assert call.kwargs['max_records'] is None
+    # The time the request took so far comes off its wait
+    assert 5000 - 500 < call.kwargs['timeout_ms'] <= 5000
 
 
-def test_fetch_consumer_records_custom_timeout(
+@pytest.mark.asyncio
+async def test_fetch_consumer_records_custom_timeout(
     mock_diaspora_service: DiasporaService,
+    *,
     mock_web_service: MagicMock,
     mock_consumer_service: MagicMock,
     valid_subject: str,
     valid_token: str,
+    long_slices: None,
 ) -> None:
     """Test fetch_consumer_records with custom timeout and max_bytes."""
     _setup_namespace_success(mock_web_service)
-    mock_consumer_service.poll_records.return_value = ([], 200)
-    mock_diaspora_service.fetch_consumer_records(
+    mock_consumer_service.fetch_records.return_value = (_reply(b'x'), 200)
+    await mock_diaspora_service.fetch_consumer_records(
+        request=_fetch_request(),
         namespace=CONSUMER_NS,
         group_name=CONSUMER_GROUP,
         instance_id=CONSUMER_INST,
@@ -1594,14 +1676,16 @@ def test_fetch_consumer_records_custom_timeout(
         timeout=10000,
         max_bytes=1048576,
     )
-    mock_consumer_service.poll_records.assert_called_once_with(
-        subject=valid_subject,
-        namespace=CONSUMER_NS,
-        group_name=CONSUMER_GROUP,
-        instance_id=CONSUMER_INST,
-        timeout_ms=10000,
-        max_bytes=1048576,
+    call = mock_consumer_service.fetch_records.call_args
+    assert call.args == (
+        valid_subject,
+        CONSUMER_NS,
+        CONSUMER_GROUP,
+        CONSUMER_INST,
     )
+    assert call.kwargs['max_records'] == 1048576
+    # The time the request took so far comes off its wait
+    assert 10000 - 500 < call.kwargs['timeout_ms'] <= 10000
 
 
 @pytest.mark.asyncio
@@ -1673,9 +1757,9 @@ async def test_get_committed_offsets_success(
         200,
     )
     mock_request = AsyncMock()
-    mock_request.json.return_value = {
-        'partitions': [{'topic': 't1', 'partition': 0}],
-    }
+    mock_request.body.return_value = json.dumps(
+        {'partitions': [{'topic': 't1', 'partition': 0}]},
+    ).encode()
     response = await mock_diaspora_service.get_committed_offsets(
         namespace=CONSUMER_NS,
         group_name=CONSUMER_GROUP,
@@ -1868,7 +1952,7 @@ CONSUMER_ROUTES: list[tuple[str, str, Any, str, tuple[Any, int]]] = [
         ({'topics': ['t1']}, 200),
     ),
     ('DELETE', f'{_INST}/subscription', None, 'unsubscribe', (None, 204)),
-    ('GET', f'{_INST}/records', None, 'poll_records', ([], 200)),
+    ('GET', f'{_INST}/records', None, 'fetch_records', (_reply(b'x'), 200)),
     ('POST', f'{_INST}/offsets', _OFFSETS, 'commit_offsets', (None, 200)),
     (
         'GET',
@@ -2069,6 +2153,8 @@ async def test_consumer_route_service_call_off_loop(
     assert response.status_code == reply_status
     if reply_status == 204:
         assert response.content == b''
+    elif isinstance(reply_body, FetchReply):
+        assert response.json() == [r.as_dict() for r in reply_body.records]
     else:
         assert response.json() == reply_body
 
@@ -2102,7 +2188,10 @@ async def test_consumer_route_auth_off_loop(
         release=release,
     )
     assert response.status_code == 401
-    assert response.json() == error
+    assert response.json() == {
+        'error_code': 40101,
+        'message': 'Authentication failed: Token is inactive.',
+    }
     getattr(mock_consumer_service, call).assert_not_called()
 
 
@@ -2263,21 +2352,22 @@ async def test_fetch_timeout_is_capped(
     *,
     mock_web_service: MagicMock,
     mock_consumer_service: MagicMock,
+    long_slices: None,
     query: str,
     expected_ms: int,
 ) -> None:
     """Fetch waits at most 30 s; a larger timeout is clamped, not refused."""
     _setup_consumer_mocks(mock_web_service)
-    mock_consumer_service.poll_records.return_value = ([], 200)
+    mock_consumer_service.fetch_records.return_value = (_reply(b'x'), 200)
     response = await _send(
         mock_diaspora_service,
         'GET',
         f'{_INST}/records{query}',
     )
     assert response.status_code == 200
-    assert response.json() == []
-    kwargs = mock_consumer_service.poll_records.call_args.kwargs
-    assert kwargs['timeout_ms'] == expected_ms
+    assert len(response.json()) == 1
+    kwargs = mock_consumer_service.fetch_records.call_args.kwargs
+    assert expected_ms - 500 < kwargs['timeout_ms'] <= expected_ms
 
 
 def test_fetch_timeout_cap_is_documented(

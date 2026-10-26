@@ -2,17 +2,26 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import functools
 import importlib.metadata as importlib_metadata
+import logging
 import os
 import time
+from collections import deque
 from collections.abc import AsyncIterator
 from collections.abc import Callable
 from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack
 from typing import Any
 from typing import TypeVar
 
 import anyio
+import anyio.lowlevel
 import uvicorn
+from anyio.abc import TaskGroup
+from fastapi import APIRouter
 from fastapi import Body
 from fastapi import FastAPI
 from fastapi import Header
@@ -22,6 +31,9 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 from fastapi.responses import Response
 from starlette.requests import ClientDisconnect
+from starlette.types import Receive
+from starlette.types import Scope
+from starlette.types import Send
 
 from web_service.consumer_models import AssignmentRequest
 from web_service.consumer_models import CreateConsumerRequest
@@ -30,7 +42,17 @@ from web_service.consumer_models import OffsetsGetRequest
 from web_service.consumer_models import SeekPartitionsRequest
 from web_service.consumer_models import SeekRequest
 from web_service.consumer_models import SubscriptionRequest
+from web_service.consumer_records import FetchReply
+from web_service.consumer_routes import ConsumerRoute
+from web_service.consumer_routes import error_response
+from web_service.consumer_routes import INVALID_REQUEST
 from web_service.consumer_service import ConsumerService
+from web_service.consumer_service import DEFAULT_FETCH_WAIT_MS
+from web_service.consumer_service import MAX_FETCH_WAIT_MS
+from web_service.consumer_service import REPLY_MAX_BYTES
+from web_service.consumer_service import run_holding
+from web_service.consumer_service import SERVER_ERROR
+from web_service.consumer_service import TOO_MANY_REQUESTS
 from web_service.producer_models import BatchResult
 from web_service.producer_models import PRODUCE_BATCH_REQUEST_SCHEMA
 from web_service.producer_models import PRODUCE_REQUEST_SCHEMA
@@ -67,9 +89,273 @@ from .services import WebService
 
 _Prepared = TypeVar('_Prepared')
 
-# Fetch wait when the request names none, and the longest it may name
-DEFAULT_FETCH_TIMEOUT_MS = 5_000
-MAX_FETCH_TIMEOUT_MS = 30_000
+logger = logging.getLogger(__name__)
+
+# Fetches that hold a slot at once: from a poll that found records until
+# the reply is sent, or for one slice of a poll that finds none. A slot
+# whose poll returned an 8 MiB record from each of two partitions took
+# 71 MiB in a test, so 3 slots hold about 220 MiB; see the consumer
+# routes' memory in docs/architecture.md.
+FETCH_MAX_CONCURRENT = 3
+# Fetches one subject may have in progress at once, and the longest a
+# fetch's reply may take to send before its connection is closed: both
+# keep one user's fetches from holding every slot
+FETCH_MAX_PER_SUBJECT = 2
+FETCH_SEND_TIMEOUT_S = 30
+# Seconds a fetch refused for want of a slot is told to wait
+FETCH_RETRY_AFTER_S = 1
+# Longest a fetch polls under one slot before it gives the slot back and
+# takes its turn again, unless the poll found records
+FETCH_SLICE_MS = 500
+# Threads of the pool that every other blocking call shares: the token
+# check, DynamoDB, the Kafka admin calls and the consumer calls other than
+# fetches. Produce parsing and sends and fetches have limiters of their
+# own, which bound their memory, so this bounds only how many calls may
+# wait at once; 40 is anyio's default, set here so an upgrade cannot
+# change it.
+SHARED_THREADS = 40
+# Code of a failed token check on the consumer routes: Confluent's code
+# for a failed authentication
+AUTHENTICATION_FAILED = 40101
+
+
+def fetch_wait_ms(timeout: int | None, default_wait_ms: int | None) -> int:
+    """How long a fetch waits for records.
+
+    As in Confluent's REST Proxy, a timeout of 0 or less, or none, takes
+    the instance's consumer.request.timeout.ms; unlike there, a positive
+    timeout is not capped by it. Either is capped at MAX_FETCH_WAIT_MS.
+    """
+    if timeout is not None and timeout > 0:
+        return min(timeout, MAX_FETCH_WAIT_MS)
+    if default_wait_ms is not None:
+        return min(default_wait_ms, MAX_FETCH_WAIT_MS)
+    return DEFAULT_FETCH_WAIT_MS
+
+
+class FetchSlots:
+    """A fixed number of fetch slots, handed out in the order asked for.
+
+    A slot given back goes straight to the fetch that has waited longest,
+    so a fetch that gives its slot back and asks again at once waits
+    behind the fetches already waiting. anyio's CapacityLimiter lets such
+    a fetch take the slot first in some versions (4.13.0 among them),
+    which lets more fetches hold a slot than there are slots. Used only
+    on the event loop.
+    """
+
+    def __init__(self, total: int) -> None:
+        """Make total slots, all free."""
+        self.total_tokens = total
+        self._held = 0
+        self._waiters: deque[asyncio.Future[None]] = deque()
+
+    @property
+    def borrowed_tokens(self) -> int:
+        """Slots held."""
+        return self._held
+
+    @property
+    def available_tokens(self) -> int:
+        """Slots free."""
+        return self.total_tokens - self._held
+
+    async def take(self, timeout: float) -> bool:
+        """Take a slot, waiting at most timeout seconds behind earlier askers.
+
+        Returns:
+            Whether a slot was taken
+        """
+        if self._held < self.total_tokens and not self._waiters:
+            self._held += 1
+            return True
+        waiter: asyncio.Future[None] = (
+            asyncio.get_running_loop().create_future()
+        )
+        self._waiters.append(waiter)
+        try:
+            with anyio.move_on_after(timeout):
+                await waiter
+                return True
+        except BaseException:
+            self._abandon(waiter)
+            raise
+        self._abandon(waiter)
+        return False
+
+    def _abandon(self, waiter: asyncio.Future[None]) -> None:
+        if waiter.done() and not waiter.cancelled():
+            # Handed a slot just as the wait ended: pass it on
+            self.give_back()
+            return
+        waiter.cancel()
+        with contextlib.suppress(ValueError):
+            self._waiters.remove(waiter)
+
+    def give_back(self) -> None:
+        """Give a slot back, to the longest waiter if there is one."""
+        while self._waiters:
+            waiter = self._waiters.popleft()
+            if not waiter.done():
+                waiter.set_result(None)
+                return
+        self._held -= 1
+
+
+class FetchResponse(Response):
+    """A fetch's reply, which holds the fetch until the reply is sent.
+
+    The reply is encoded and sent inside __call__, under the fetch's
+    release (the instance's lock, the subject's count and the slot), so
+    the release runs however the send ends, a failure to encode included.
+    A reply of up to REPLY_MAX_BYTES is written whole, with its
+    Content-Length; a larger one, a single record, is written a piece at
+    a time, so its JSON is never held whole.
+
+    If the client leaves before the whole reply is handed to the server,
+    or the encode or the send fails, unfetch runs before the release, so
+    the next fetch returns the reply's records again. A reply handed whole
+    to the server counts as received, since the server cannot tell
+    whether the client read it. A reply that has begun to be sent but
+    takes longer than FETCH_SEND_TIMEOUT_S is skipped: the server closes
+    the connection, and the next fetch starts after the reply. One whose
+    time runs out before anything is sent is fetched again, and the
+    client gets a 500.
+    """
+
+    def __init__(
+        self,
+        reply: FetchReply,
+        *,
+        release: AsyncExitStack,
+        unfetch: Callable[[], None],
+        threads: anyio.CapacityLimiter,
+        name: str,
+    ) -> None:
+        """Make the response; nothing is encoded until it is sent.
+
+        name names the instance in the log.
+        """
+        super().__init__(status_code=200, media_type='application/json')
+        self._name = name
+        self._reply = reply
+        self._release = release
+        self._unfetch = unfetch
+        self._threads = threads
+        self._started = False
+        self._complete = False
+
+    async def __call__(
+        self,
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+    ) -> None:
+        """Send the reply, then release the fetch."""
+        async with self._release:
+            delivered = failed = False
+            timer = anyio.move_on_after(FETCH_SEND_TIMEOUT_S)
+            try:
+                with timer:
+                    async with anyio.create_task_group() as tasks:
+                        tasks.start_soon(self._watch, receive, tasks)
+                        try:
+                            await self._write(send)
+                        except OSError:
+                            # A server on ASGI 2.4 or later reports a closed
+                            # connection this way: the client left
+                            pass
+                        except Exception:
+                            logger.exception('Failed to send a fetch reply')
+                            failed = True
+                        else:
+                            self._complete = delivered = True
+                        tasks.cancel_scope.cancel()
+            finally:
+                if timer.cancelled_caught and self._started:
+                    self._skip()
+                elif not delivered:
+                    self._unfetch()
+            if (failed or timer.cancelled_caught) and not self._started:
+                refusal = error_response(
+                    500,
+                    SERVER_ERROR,
+                    'Internal server error',
+                )
+                await refusal(scope, receive, send)
+
+    def _skip(self) -> None:
+        """Leave out a reply that took too long to send, so it is not resent.
+
+        Seeking back would send the same reply to the same slow client on
+        every retry, each holding a slot for FETCH_SEND_TIMEOUT_S.
+        """
+        logger.warning(
+            'Skipped a fetch reply to instance %s that was not sent within '
+            '%d s; the next fetch starts after it. It started at %s',
+            self._name,
+            FETCH_SEND_TIMEOUT_S,
+            ', '.join(
+                f'{tp.topic}[{tp.partition}] offset {offset}'
+                for tp, offset in self._reply.starts.items()
+            ),
+        )
+
+    async def _watch(
+        self,
+        receive: Receive,
+        tasks: TaskGroup,
+    ) -> None:
+        """Stop the send if the client leaves before it is complete."""
+        while (await receive())['type'] != 'http.disconnect':
+            pass
+        if not self._complete:
+            tasks.cancel_scope.cancel()
+
+    async def _write(self, send: Send) -> None:
+        reply = self._reply
+        start: dict[str, Any] = {
+            'type': 'http.response.start',
+            'status': 200,
+            'headers': [(b'content-type', b'application/json')],
+        }
+        if reply.size <= REPLY_MAX_BYTES:
+            body = await anyio.to_thread.run_sync(
+                reply.body,
+                limiter=self._threads,
+            )
+            start['headers'].append(
+                (b'content-length', str(len(body)).encode()),
+            )
+            # Let _watch see a disconnect the server has already noticed:
+            # once disconnected, uvicorn drops what is sent without an
+            # error, and the reply would count as received
+            await anyio.lowlevel.checkpoint()
+            self._started = True
+            await send(start)
+            await send({'type': 'http.response.body', 'body': body})
+            return
+        chunks = reply.chunks()
+        self._started = True
+        await send(start)
+        while True:
+            chunk = await anyio.to_thread.run_sync(
+                next,
+                chunks,
+                None,
+                limiter=self._threads,
+            )
+            if chunk is None:
+                break
+            await send(
+                {
+                    'type': 'http.response.body',
+                    'body': chunk,
+                    'more_body': True,
+                },
+            )
+        await anyio.lowlevel.checkpoint()
+        await send({'type': 'http.response.body', 'body': b''})
 
 
 class DiasporaService:
@@ -130,11 +416,14 @@ class DiasporaService:
             ),
         )
 
+        # The most topics a namespace holds, and so the most topics or
+        # partitions a consumer request may list
+        self.max_topics = parse_max_topics_per_namespace(
+            os.getenv('MAX_TOPICS_PER_NAMESPACE'),
+        )
         namespace_service = NamespaceService(
             dynamodb_service=db_service,
-            max_topics_per_namespace=parse_max_topics_per_namespace(
-                os.getenv('MAX_TOPICS_PER_NAMESPACE'),
-            ),
+            max_topics_per_namespace=self.max_topics,
         )
 
         self.web_service = WebService(
@@ -158,6 +447,14 @@ class DiasporaService:
         self.produce_admission = ProduceAdmission()
         self.parse_limiter = anyio.CapacityLimiter(1)
         self.send_limiter = anyio.CapacityLimiter(PRODUCE_MAX_REQUESTS)
+        # Fetches in progress, on threads apart from the shared pool
+        # Slots a fetch takes before it polls, and the threads it polls and
+        # writes its reply on; a fetch holds a slot whenever it holds one
+        # of these threads, so the threads are never short
+        self.fetch_slots = FetchSlots(FETCH_MAX_CONCURRENT)
+        self.fetch_threads = anyio.CapacityLimiter(FETCH_MAX_CONCURRENT)
+        # Fetches in progress by subject; changed only on the event loop
+        self.fetching: dict[str, int] = {}
 
         self.app = FastAPI(
             title='Diaspora Web Service V3',
@@ -378,7 +675,10 @@ class DiasporaService:
         self,
         app: FastAPI,
     ) -> AsyncIterator[None]:
-        """Application lifespan: close consumers and the producer."""
+        """Application lifespan: size the threadpool; close consumers."""
+        anyio.to_thread.current_default_thread_limiter().total_tokens = (
+            SHARED_THREADS
+        )
         yield
         await run_in_threadpool(self.consumer_service.shutdown_all)
         await run_in_threadpool(self.producer_service.close)
@@ -450,6 +750,33 @@ class DiasporaService:
             return JSONResponse(content=err, status_code=404)
         return None
 
+    def _check_consumer_access(
+        self,
+        subject: str,
+        token: str,
+        namespace: str,
+    ) -> Response | None:
+        """Check the token and the namespace, in Confluent's error shape.
+
+        Returns:
+            The 401 or 404 response if a check fails, None if both pass
+        """
+        if err := self.auth.validate_access_token(subject, token):
+            reason = err.get('reason')
+            # The audience check's reason names the service's client id
+            if not isinstance(reason, str) or reason.startswith(
+                'Not in the audience set',
+            ):
+                reason = 'Token is not for this service.'
+            return error_response(
+                401,
+                AUTHENTICATION_FAILED,
+                f'Authentication failed: {reason}',
+            )
+        if err := self._validate_namespace(subject, namespace):
+            return JSONResponse(content=err, status_code=404)
+        return None
+
     def _serve_consumer(
         self,
         subject: str,
@@ -464,9 +791,51 @@ class DiasporaService:
         the event loop they would stall every other request and the
         worker's heartbeat to gunicorn.
         """
-        if err := self._check_access(subject, token, namespace):
+        if err := self._check_consumer_access(subject, token, namespace):
             return err
         return serve()
+
+    async def _serve_instance(
+        self,
+        subject: str,
+        token: str,
+        key: tuple[str, str, str, str],
+        serve: Callable[[], Response],
+    ) -> Response:
+        """Check access to a request on an instance, then serve it.
+
+        The access check and serve run in the shared threadpool. Between
+        them the request takes the instance's lock on the event loop,
+        waiting up to 10 s for another request on the instance without
+        holding a thread, and serve runs as the lock's holder.
+        """
+        namespace = key[1]
+        if err := await run_in_threadpool(
+            self._check_consumer_access,
+            subject,
+            token,
+            namespace,
+        ):
+            return err
+        async with self.consumer_service.hold(key) as held:
+            if isinstance(held, tuple):
+                return self._consumer_response(*held)
+            return await run_in_threadpool(run_holding, held, serve)
+
+    def _too_many(self, items: list[Any], what: str) -> Response | None:
+        """The 422 reply if a request lists more items than a namespace holds.
+
+        A namespace holds at most max_topics topics, each of one partition,
+        so a longer list of topics, partitions or offsets is a mistake.
+        """
+        if len(items) <= self.max_topics:
+            return None
+        return error_response(
+            422,
+            INVALID_REQUEST,
+            f'{len(items)} {what} listed; a request may list at most '
+            f'{self.max_topics}, the most topics a namespace holds',
+        )
 
     _NO_CONTENT = 204
 
@@ -483,87 +852,93 @@ class DiasporaService:
     # --- Consumer routes ---
 
     def add_consumer_routes(self) -> None:
-        """Add consumer REST API routes (Confluent v2 compatible)."""
+        """Add consumer REST API routes (Confluent v2 compatible).
+
+        Their route class answers every failure in Confluent's shape.
+        """
         base = '/api/v3/{namespace}/consumers'
+        router = APIRouter(route_class=ConsumerRoute)
 
         # 1. Create consumer instance
-        self.app.post(
+        router.post(
             f'{base}/{{group_name}}',
             tags=['Consumer'],
         )(self.create_consumer_instance)
 
         # 2. Delete consumer instance
-        self.app.delete(
+        router.delete(
             f'{base}/{{group_name}}/instances/{{instance_id}}',
             tags=['Consumer'],
         )(self.delete_consumer_instance)
 
         # 3. Subscribe
-        self.app.post(
+        router.post(
             f'{base}/{{group_name}}/instances/{{instance_id}}/subscription',
             tags=['Consumer'],
         )(self.subscribe_consumer)
 
         # 4. Get subscription
-        self.app.get(
+        router.get(
             f'{base}/{{group_name}}/instances/{{instance_id}}/subscription',
             tags=['Consumer'],
         )(self.get_consumer_subscription)
 
         # 5. Unsubscribe
-        self.app.delete(
+        router.delete(
             f'{base}/{{group_name}}/instances/{{instance_id}}/subscription',
             tags=['Consumer'],
         )(self.unsubscribe_consumer)
 
         # 6. Fetch records
-        self.app.get(
+        router.get(
             f'{base}/{{group_name}}/instances/{{instance_id}}/records',
             tags=['Consumer'],
         )(self.fetch_consumer_records)
 
         # 7. Commit offsets
-        self.app.post(
+        router.post(
             f'{base}/{{group_name}}/instances/{{instance_id}}/offsets',
             tags=['Consumer'],
         )(self.commit_consumer_offsets)
 
         # 8. Get committed offsets
-        self.app.get(
+        router.get(
             f'{base}/{{group_name}}/instances/{{instance_id}}/offsets',
             tags=['Consumer'],
         )(self.get_committed_offsets)
 
         # 9. Assign partitions
-        self.app.post(
+        router.post(
             f'{base}/{{group_name}}/instances/{{instance_id}}/assignments',
             tags=['Consumer'],
         )(self.assign_consumer_partitions)
 
         # 10. Get assignments
-        self.app.get(
+        router.get(
             f'{base}/{{group_name}}/instances/{{instance_id}}/assignments',
             tags=['Consumer'],
         )(self.get_consumer_assignments)
 
         # 11. Seek to offset
-        self.app.post(
+        router.post(
             f'{base}/{{group_name}}/instances/{{instance_id}}/positions',
             tags=['Consumer'],
         )(self.seek_consumer_positions)
 
         # 12. Seek to beginning
-        self.app.post(
+        router.post(
             f'{base}/{{group_name}}/instances'
             f'/{{instance_id}}/positions/beginning',
             tags=['Consumer'],
         )(self.seek_consumer_beginning)
 
         # 13. Seek to end
-        self.app.post(
+        router.post(
             f'{base}/{{group_name}}/instances/{{instance_id}}/positions/end',
             tags=['Consumer'],
         )(self.seek_consumer_end)
+
+        self.app.include_router(router)
 
     # --- Consumer endpoint handlers ---
 
@@ -618,11 +993,10 @@ class DiasporaService:
             )
             return self._consumer_response(resp_body, status)
 
-        return await run_in_threadpool(
-            self._serve_consumer,
+        return await self._serve_instance(
             subject,
             token,
-            namespace,
+            (subject, namespace, group_name, instance_id),
             serve,
         )
 
@@ -658,6 +1032,8 @@ class DiasporaService:
                     },
                     status_code=422,
                 )
+            if too_many := self._too_many(body.topics, 'topics'):
+                return too_many
             if err := self._validate_topics_in_namespace(
                 namespace,
                 body.topics,
@@ -672,11 +1048,10 @@ class DiasporaService:
             )
             return self._consumer_response(resp_body, status)
 
-        return await run_in_threadpool(
-            self._serve_consumer,
+        return await self._serve_instance(
             subject,
             token,
-            namespace,
+            (subject, namespace, group_name, instance_id),
             serve,
         )
 
@@ -699,11 +1074,10 @@ class DiasporaService:
             )
             return self._consumer_response(resp_body, status)
 
-        return await run_in_threadpool(
-            self._serve_consumer,
+        return await self._serve_instance(
             subject,
             token,
-            namespace,
+            (subject, namespace, group_name, instance_id),
             serve,
         )
 
@@ -726,52 +1100,214 @@ class DiasporaService:
             )
             return self._consumer_response(resp_body, status)
 
-        return await run_in_threadpool(
-            self._serve_consumer,
+        return await self._serve_instance(
             subject,
             token,
-            namespace,
+            (subject, namespace, group_name, instance_id),
             serve,
         )
 
-    def fetch_consumer_records(
+    async def fetch_consumer_records(
         self,
         namespace: str,
         group_name: str,
         instance_id: str,
         *,
+        request: Request,
         subject: str = Header(..., alias='subject'),
         token: str = Header(..., alias='authorization'),
         timeout: int | None = Query(
             None,
             description=(
-                'Milliseconds to wait for records (default 5000). Values '
-                'above 30000 are treated as 30000.'
+                'Milliseconds to wait for records. 0, a negative value or '
+                "none takes the instance's consumer.request.timeout.ms, "
+                'else 5000. Values above 30000 are treated as 30000.'
             ),
         ),
-        max_bytes: int | None = Query(None),
+        max_bytes: int | None = Query(
+            None,
+            description=(
+                'Most records to return; 0, a negative value or none takes '
+                'the default of 500.'
+            ),
+        ),
     ) -> Response:
         """Fetch data for subscribed topics or assigned partitions.
 
-        Uses def (not async def) so FastAPI runs it in a threadpool,
-        avoiding blocking the event loop during consumer.poll().
+        A fetch to an instance another request holds is refused at once,
+        and a subject may have FETCH_MAX_PER_SUBJECT fetches in progress.
+        The fetch polls in slices of at most FETCH_SLICE_MS, each under
+        one of FETCH_MAX_CONCURRENT slots. Fetches take the slots in the
+        order they ask, and a slice that finds nothing gives its slot
+        back, so quiet long polls cannot keep the slots from fetches with
+        records waiting. The slices and the waits for a slot all fall
+        within the fetch's wait for records. A fetch that got no slot in
+        that time is refused with 429 and polls nothing; one that polled
+        and found nothing returns []. A slice that finds records keeps
+        its slot, the instance and the subject's count until the reply is
+        sent.
         """
-
-        def serve() -> Response:
-            resp_body, status = self.consumer_service.poll_records(
-                subject=subject,
-                namespace=namespace,
-                group_name=group_name,
-                instance_id=instance_id,
-                timeout_ms=min(
-                    timeout or DEFAULT_FETCH_TIMEOUT_MS,
-                    MAX_FETCH_TIMEOUT_MS,
-                ),
-                max_bytes=max_bytes,
+        started = time.monotonic()
+        if err := await run_in_threadpool(
+            self._check_consumer_access,
+            subject,
+            token,
+            namespace,
+        ):
+            return err
+        key = (subject, namespace, group_name, instance_id)
+        async with AsyncExitStack() as stack:
+            held = await stack.enter_async_context(
+                self.consumer_service.hold(key, wait=False),
             )
-            return self._consumer_response(resp_body, status)
+            if isinstance(held, tuple):
+                return self._consumer_response(*held)
+            if self.fetching.get(subject, 0) >= FETCH_MAX_PER_SUBJECT:
+                return self._fetch_refused(
+                    f'You have {FETCH_MAX_PER_SUBJECT} fetches in progress, '
+                    'the most one user may; retry when one finishes',
+                )
+            self.fetching[subject] = self.fetching.get(subject, 0) + 1
+            stack.callback(self._fetch_done, subject)
+            wait_ms = fetch_wait_ms(timeout, held.default_wait_ms)
+            deadline = started + wait_ms / 1000
+            fetch = functools.partial(
+                self.consumer_service.fetch_records,
+                subject,
+                namespace,
+                group_name,
+                instance_id,
+                max_records=max_bytes if max_bytes and max_bytes > 0 else None,
+            )
+            reply = await self._poll_for_records(
+                stack,
+                held,
+                fetch,
+                deadline,
+                request,
+            )
+            if not isinstance(reply, FetchReply):
+                return reply
+            unfetch = functools.partial(
+                self.consumer_service.unfetch,
+                held,
+                reply,
+            )
+            # The client may have left while the slice polled; nothing has
+            # committed the records since, so they can be fetched again
+            if await request.is_disconnected():
+                unfetch()
+                return Response(status_code=400)
+            release = stack.pop_all()
+            try:
+                return FetchResponse(
+                    reply,
+                    release=release,
+                    unfetch=unfetch,
+                    threads=self.fetch_threads,
+                    name=f'{namespace}/{group_name}/{instance_id}',
+                )
+            except BaseException:
+                unfetch()
+                await release.aclose()
+                raise
 
-        return self._serve_consumer(subject, token, namespace, serve)
+    async def _poll_for_records(
+        self,
+        stack: AsyncExitStack,
+        held: Any,
+        fetch: Callable[..., tuple[Any, int]],
+        deadline: float,
+        request: Request,
+    ) -> FetchReply | Response:
+        """Poll in slices, each under a slot, until records come or time ends.
+
+        Returns:
+            The reply of the slice that found records, whose slot stack
+            now releases; or the response to give instead: [] once the
+            fetch polled and its wait ended, 429 if it never got a slot,
+            or the error a slice met
+        """
+        polled = False
+        while True:
+            if not await self._take_fetch_slot(deadline):
+                if polled:
+                    return self._consumer_response([], 200)
+                return self._fetch_refused(
+                    'The service is serving the most fetches it serves at '
+                    'once; retry',
+                )
+            polled = True
+            found = await self._poll_slice(
+                held,
+                fetch,
+                deadline,
+                request,
+            )
+            if not isinstance(found, FetchReply):
+                return found
+            if found.records:
+                stack.callback(self.fetch_slots.give_back)
+                return found
+            if time.monotonic() >= deadline:
+                return self._consumer_response([], 200)
+
+    async def _poll_slice(
+        self,
+        held: Any,
+        fetch: Callable[..., tuple[Any, int]],
+        deadline: float,
+        request: Request,
+    ) -> FetchReply | Response:
+        """Poll once, for at most FETCH_SLICE_MS, under a slot it holds.
+
+        The slot is given back unless the poll found records.
+        """
+        keep = False
+        try:
+            # A client that left would lose the records polled
+            if await request.is_disconnected():
+                return Response(status_code=400)
+            remaining_ms = max(0, int((deadline - time.monotonic()) * 1000))
+            reply, status = await anyio.to_thread.run_sync(
+                run_holding,
+                held,
+                functools.partial(
+                    fetch,
+                    timeout_ms=min(remaining_ms, FETCH_SLICE_MS),
+                ),
+                limiter=self.fetch_threads,
+            )
+            if not isinstance(reply, FetchReply):
+                return self._consumer_response(reply, status)
+            keep = bool(reply.records)
+            return reply
+        finally:
+            if not keep:
+                self.fetch_slots.give_back()
+
+    def _fetch_done(self, subject: str) -> None:
+        left = self.fetching.get(subject, 0) - 1
+        if left > 0:
+            self.fetching[subject] = left
+        else:
+            self.fetching.pop(subject, None)
+
+    async def _take_fetch_slot(self, deadline: float) -> bool:
+        """Take a fetch slot by the deadline (time.monotonic()).
+
+        Returns:
+            Whether a slot came free in time; the caller gives it back
+        """
+        return await self.fetch_slots.take(
+            max(0.0, deadline - time.monotonic()),
+        )
+
+    @staticmethod
+    def _fetch_refused(message: str) -> Response:
+        response = error_response(429, TOO_MANY_REQUESTS, message)
+        response.headers['Retry-After'] = str(FETCH_RETRY_AFTER_S)
+        return response
 
     async def commit_consumer_offsets(
         self,
@@ -788,6 +1324,8 @@ class DiasporaService:
         def serve() -> Response:
             offsets = None
             if body and body.offsets:
+                if too_many := self._too_many(body.offsets, 'offsets'):
+                    return too_many
                 offsets = [o.model_dump() for o in body.offsets]
             resp_body, status = self.consumer_service.commit_offsets(
                 subject=subject,
@@ -798,11 +1336,10 @@ class DiasporaService:
             )
             return self._consumer_response(resp_body, status)
 
-        return await run_in_threadpool(
-            self._serve_consumer,
+        return await self._serve_instance(
             subject,
             token,
-            namespace,
+            (subject, namespace, group_name, instance_id),
             serve,
         )
 
@@ -818,17 +1355,20 @@ class DiasporaService:
     ) -> Response:
         """Get last committed offsets for given partitions."""
         if err := await run_in_threadpool(
-            self._check_access,
+            self._check_consumer_access,
             subject,
             token,
             namespace,
         ):
             return err
-        # Confluent sends partitions in the GET request body
-        raw_body = await request.json()
-        req = OffsetsGetRequest(**raw_body)
+        # Confluent sends partitions in the GET request body; a body that
+        # is not JSON or fails validation raises, and the route class
+        # answers it
+        req = OffsetsGetRequest.model_validate_json(await request.body())
+        if too_many := self._too_many(req.partitions, 'partitions'):
+            return too_many
         partitions = [p.model_dump() for p in req.partitions]
-        resp_body, status = await run_in_threadpool(
+        lookup = functools.partial(
             self.consumer_service.get_committed,
             subject=subject,
             namespace=namespace,
@@ -836,6 +1376,15 @@ class DiasporaService:
             instance_id=instance_id,
             partitions=partitions,
         )
+        key = (subject, namespace, group_name, instance_id)
+        async with self.consumer_service.hold(key) as held:
+            if isinstance(held, tuple):
+                return self._consumer_response(*held)
+            resp_body, status = await run_in_threadpool(
+                run_holding,
+                held,
+                lookup,
+            )
         return self._consumer_response(resp_body, status)
 
     async def assign_consumer_partitions(
@@ -851,6 +1400,8 @@ class DiasporaService:
         """Manually assign partitions to this consumer."""
 
         def serve() -> Response:
+            if too_many := self._too_many(body.partitions, 'partitions'):
+                return too_many
             # Validate topics exist in namespace
             topics = list({p.topic for p in body.partitions})
             if err := self._validate_topics_in_namespace(
@@ -868,11 +1419,10 @@ class DiasporaService:
             )
             return self._consumer_response(resp_body, status)
 
-        return await run_in_threadpool(
-            self._serve_consumer,
+        return await self._serve_instance(
             subject,
             token,
-            namespace,
+            (subject, namespace, group_name, instance_id),
             serve,
         )
 
@@ -895,11 +1445,10 @@ class DiasporaService:
             )
             return self._consumer_response(resp_body, status)
 
-        return await run_in_threadpool(
-            self._serve_consumer,
+        return await self._serve_instance(
             subject,
             token,
-            namespace,
+            (subject, namespace, group_name, instance_id),
             serve,
         )
 
@@ -916,6 +1465,8 @@ class DiasporaService:
         """Override fetch offsets for the next set of records."""
 
         def serve() -> Response:
+            if too_many := self._too_many(body.offsets, 'offsets'):
+                return too_many
             offsets = [o.model_dump() for o in body.offsets]
             resp_body, status = self.consumer_service.seek(
                 subject=subject,
@@ -926,11 +1477,10 @@ class DiasporaService:
             )
             return self._consumer_response(resp_body, status)
 
-        return await run_in_threadpool(
-            self._serve_consumer,
+        return await self._serve_instance(
             subject,
             token,
-            namespace,
+            (subject, namespace, group_name, instance_id),
             serve,
         )
 
@@ -947,6 +1497,8 @@ class DiasporaService:
         """Seek to the first offset for given partitions."""
 
         def serve() -> Response:
+            if too_many := self._too_many(body.partitions, 'partitions'):
+                return too_many
             partitions = [p.model_dump() for p in body.partitions]
             resp_body, status = self.consumer_service.seek_to_beginning(
                 subject=subject,
@@ -957,11 +1509,10 @@ class DiasporaService:
             )
             return self._consumer_response(resp_body, status)
 
-        return await run_in_threadpool(
-            self._serve_consumer,
+        return await self._serve_instance(
             subject,
             token,
-            namespace,
+            (subject, namespace, group_name, instance_id),
             serve,
         )
 
@@ -978,6 +1529,8 @@ class DiasporaService:
         """Seek to the last offset for given partitions."""
 
         def serve() -> Response:
+            if too_many := self._too_many(body.partitions, 'partitions'):
+                return too_many
             partitions = [p.model_dump() for p in body.partitions]
             resp_body, status = self.consumer_service.seek_to_end(
                 subject=subject,
@@ -988,11 +1541,10 @@ class DiasporaService:
             )
             return self._consumer_response(resp_body, status)
 
-        return await run_in_threadpool(
-            self._serve_consumer,
+        return await self._serve_instance(
             subject,
             token,
-            namespace,
+            (subject, namespace, group_name, instance_id),
             serve,
         )
 

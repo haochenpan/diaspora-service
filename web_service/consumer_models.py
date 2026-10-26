@@ -7,6 +7,16 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 from pydantic import Field
+from pydantic import field_validator
+
+# Formats a consumer instance decodes records in
+FORMATS = ('binary', 'json')
+# Formats Confluent decodes with a schema registry, which Octopus does not run
+SCHEMA_FORMATS = ('avro', 'jsonschema', 'protobuf')
+# Largest partition (int32) the Kafka protocol encodes, and largest offset
+# a request may name: a commit adds 1, which must fit in an int64
+MAX_PARTITION = 2**31 - 1
+MAX_OFFSET = 2**63 - 2
 
 
 class CreateConsumerRequest(BaseModel):
@@ -22,35 +32,62 @@ class CreateConsumerRequest(BaseModel):
     format: str = Field(
         'binary',
         description=(
-            'Deserialization format: "binary", "json", "avro", '
-            '"jsonschema", or "protobuf". Defaults to "binary".'
+            'Deserialization format, "binary" or "json" in any case; '
+            'defaults to "binary". "avro", "jsonschema" and "protobuf" '
+            'need a schema registry, which Octopus does not run, and are '
+            'refused with 422.'
         ),
     )
     auto_offset_reset: str = Field(
         'latest',
         alias='auto.offset.reset',
-        description='Sets the auto.offset.reset setting.',
+        description=(
+            'Where a group without a committed offset starts: "earliest", '
+            '"latest" (the default) or "none".'
+        ),
     )
     auto_commit_enable: str = Field(
         'false',
         alias='auto.commit.enable',
-        description='Sets the auto.commit.enable setting.',
+        description='"true" or "false" (the default).',
     )
-    fetch_min_bytes: str | None = Field(
+    fetch_min_bytes: int | str | None = Field(
         None,
         alias='fetch.min.bytes',
-        description='Sets the fetch.min.bytes setting.',
+        description=(
+            "Sets the Kafka consumer's fetch.min.bytes: a whole number of "
+            'at least 0.'
+        ),
     )
-    consumer_request_timeout_ms: str | None = Field(
+    consumer_request_timeout_ms: int | str | None = Field(
         None,
         alias='consumer.request.timeout.ms',
         description=(
-            'Max time to wait for messages for a request '
-            'if the max request size has not been reached.'
+            'Milliseconds a fetch that names no timeout waits for records: '
+            'a whole number of at least 0, of which 30000 at most is used. '
+            'Defaults to 5000.'
         ),
     )
 
     model_config = {'populate_by_name': True}
+
+    @field_validator('format')
+    @classmethod
+    def _known_format(cls, value: str) -> str:
+        """Accept binary and json in any case, as Confluent does.
+
+        The refusal does not repeat the value, as no validation message
+        of the consumer routes does.
+        """
+        lowered = value.lower()
+        if lowered in FORMATS:
+            return lowered
+        if lowered in SCHEMA_FORMATS:
+            raise ValueError(
+                'avro, jsonschema and protobuf need a schema registry, '
+                'which Octopus does not run; use binary or json',
+            )
+        raise ValueError('Invalid format type; use binary or json')
 
 
 class SubscriptionRequest(BaseModel):
@@ -72,9 +109,9 @@ class SubscriptionRequest(BaseModel):
 class PartitionOffset(BaseModel):
     """A topic-partition-offset triple."""
 
-    topic: str
-    partition: int
-    offset: int
+    topic: str = Field(min_length=1)
+    partition: int = Field(ge=0, le=MAX_PARTITION)
+    offset: int = Field(ge=0, le=MAX_OFFSET)
 
 
 class OffsetsCommitRequest(BaseModel):
@@ -91,8 +128,8 @@ class OffsetsCommitRequest(BaseModel):
 class PartitionInfo(BaseModel):
     """A topic-partition pair."""
 
-    topic: str
-    partition: int
+    topic: str = Field(min_length=1)
+    partition: int = Field(ge=0, le=MAX_PARTITION)
 
 
 class OffsetsGetRequest(BaseModel):
