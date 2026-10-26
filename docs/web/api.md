@@ -299,7 +299,7 @@ A subscribe or an assign takes only topics the namespace holds, and refuses any 
 
 #### The earlier `/api/v3` consumer routes
 
-The consumer routes of earlier versions, under `/api/v3/{namespace}/consumers`, are removed, and a request to them is refused with 404. Clients use `/api/v2/consumers`, which acts in the caller's default namespace.
+The consumer routes of earlier versions, under `/api/v3/{namespace}/consumers`, are removed, and a request to them is refused with 404, or with 405 for a group named `recreate`, whose path is the topic recreate route's. Clients use `/api/v2/consumers`, which acts in the caller's default namespace.
 
 A client of the earlier routes also sees these changes:
 
@@ -333,7 +333,7 @@ The consumer routes have these limits:
 - A fetch asks each broker for at most 1 MiB of records. A broker still returns a first record larger than that, so a fetch can read a record of up to 8 MiB from each broker.
 - A reply holds at most 2 MiB of JSON. The records past that are left for the next fetch, which returns them first. A fetch always returns its first record, however large: a reply over 2 MiB holds that record alone and is sent in chunks, without a `Content-Length`.
 - A user may have 2 fetches in progress. A fetch past those is refused at once with 429 and error code 42901.
-- The service polls for 3 fetches at once, in turns of at most half a second, which fetches take in the order they ask. A turn that finds nothing goes to the back of the line; a turn that finds records keeps its place until its reply is sent. So a fetch whose records are ready waits about half a second for every 3 fetches ahead of it: about 2 s behind 11 quiet long polls, the most there can be, since the service holds 12 instances and an instance serves one fetch at a time. Replies being sent hold their turns longer. The default wait of 5000 ms gets through behind 11 quiet long polls; a shorter `timeout` can be refused. A fetch that gets no turn within its wait for records is refused with 429 and 42901. Like the refusal for a user's third fetch, it carries `Retry-After: 1` and fetches nothing.
+- The service polls for 3 fetches at once, in turns of at most half a second, which fetches take in the order they ask. A turn that finds nothing goes to the back of the line; a turn that finds records keeps its place until its reply is sent. So a fetch whose records are ready waits about half a second for every 3 fetches ahead of it: about 1.5 s behind 11 quiet long polls, the most there can be, since the service holds 12 instances and an instance serves one fetch at a time. Replies being sent hold their turns longer. The default wait of 5000 ms gets through behind 11 quiet long polls; a shorter `timeout` can be refused. A fetch that gets no turn within its wait for records is refused with 429 and 42901. Like the refusal for a user's third fetch, it carries `Retry-After: 1` and fetches nothing.
 - A reply must be sent within 30 s. A reply whose sending has begun and takes longer is not fetched again: the service closes the connection, and the next fetch starts after the reply's records. A reply over 2 MiB holds one record of up to 8 MiB, which takes up to about 10.7 MiB as base64 and up to 48 MiB as the JSON string of text of control characters, so a client may need to read such a reply at 1.6 MiB/s or faster. In `binary`, the reply for an 8 MiB record is about 10.7 MiB, which needs about 0.36 MiB/s. The skipped records stay in the topic, and the positions route can seek back to them, to the offset after the last record the client received, until a commit without a body, or auto-commit, commits past them. `max_bytes` does not make a one-record reply smaller.
 - A reply the client did not receive is fetched again by the next fetch, unless it was already handed to the network or took more than 30 s to send. This covers a client that leaves while its fetch polls or while a reply is sent, and a reply that fails to encode. The service cannot tell whether a client read a reply it handed to the network whole, so such a reply counts as received, as a reply read by a Kafka consumer does.
 - When a reply is cut at 2 MiB or at `max_bytes`, the partitions take turns to come first in the next replies, so one partition's records cannot keep another's out. Within a partition, records keep their order.
@@ -359,7 +359,7 @@ Every error reply of a consumer route is `{"error_code": <int>, "message": <str>
 | 415 | 415 | The request's content type is not a v2 type or `application/json` |
 | 422 | 422 | A header or field is missing or invalid, a list is too long, or the format is not `binary` or `json` |
 | 42204 | 422 | At create, the name or a setting breaks its rule above; at subscribe, the list of topics is empty or `topic_pattern` is set |
-| 42901 | 429 | The user holds 4 instances or the service 16, the user has 2 fetches in progress, the fetch got no turn within its wait, or the cluster throttled the request |
+| 42901 | 429 | The user holds 4 instances or the service 12, the user has 2 fetches in progress, the fetch got no turn within its wait, or the cluster throttled the request |
 | 500 | 500 | An error inside the service |
 | 50002 | 500 | Kafka failed the request, or the service has no Kafka endpoint |
 | 50003 | 500 | A retriable Kafka error, or Kafka did not answer in time; retry |

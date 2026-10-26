@@ -194,7 +194,7 @@ def test_a_subject_may_hold_four_instances(client: TestClient) -> None:
     assert _create(client, 'one-more').status_code == 200
 
 
-def test_the_service_holds_at_most_16_instances(
+def test_the_service_holds_at_most_max_instances(
     service: DiasporaService,
 ) -> None:
     consumers = service.consumer_service

@@ -9,6 +9,7 @@ import os
 import re
 import threading
 import time
+from collections.abc import Callable
 from collections.abc import Mapping
 from collections.abc import Sequence
 from typing import Any

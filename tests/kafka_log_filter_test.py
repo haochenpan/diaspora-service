@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import uuid
 
 import pytest
 
@@ -60,14 +61,16 @@ def test_the_service_filters_the_kafka_cluster_logger(
         )
         == 1
     )
+    # A topic no earlier run in this process has logged
+    topic = f'ns-filter-test.{uuid.uuid4().hex}'
     with caplog.at_level(logging.ERROR, logger='kafka.cluster'):
         for _ in range(5):
             cluster_logger.error(
                 TopicNotFoundLogFilter.MESSAGE,
-                'ns-filter-test.gone',
+                topic,
             )
         cluster_logger.error('Topic %s is not authorized', 'ns-filter-test.x')
     assert [r.getMessage() for r in caplog.records] == [
-        'Topic ns-filter-test.gone not found in cluster metadata',
+        f'Topic {topic} not found in cluster metadata',
         'Topic ns-filter-test.x is not authorized',
     ]

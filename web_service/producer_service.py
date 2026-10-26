@@ -1162,7 +1162,7 @@ class ProducerService:
         return _kafka_failure(KafkaTimeoutError('no metadata'), sent=False)
 
     def close(self) -> None:
-        """Close the producer, waiting at most PRODUCER_CLOSE_TIMEOUT_S.
+        """Close the producer, waiting about PRODUCER_CLOSE_TIMEOUT_S.
 
         Called on application shutdown; produce requests from then on are
         refused.
@@ -1174,7 +1174,9 @@ class ProducerService:
             return
         try:
             # kafka-python's close waits up to its timeout for the records
-            # still unsent and then as long again for its network thread
+            # still unsent and then as long again for its network thread.
+            # Its flush waits up to the timeout for each unsent batch in
+            # turn, so with several the close can take longer.
             producer.close(timeout=PRODUCER_CLOSE_TIMEOUT_S / 2)
         except Exception:
             logger.exception('Error closing producer on shutdown')

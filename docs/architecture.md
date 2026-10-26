@@ -147,7 +147,7 @@ When the process stops, it closes them all at once, within 8 s in all.
 An instance created with `auto.commit.enable` set to `true` commits its
 positions before it closes, at a delete, at the reaper's close and at
 shutdown ([Instance lifecycle](web/api.md#instance-lifecycle)). A subject
-may hold 4 instances and the service 16.
+may hold 4 instances and the service 12.
 
 These limits bound the memory of the consumer routes:
 
@@ -186,8 +186,8 @@ except where the row says otherwise; the others are derived from the code.
 | Total | 881 MiB | |
 
 That leaves about 143 MiB of the node's 1 GB. Creating and deleting 16
-instances round after round, in the service's image on a quarter of a
-CPU, raised the service's memory by 60 to 70 MiB, which that covers. In
+instances round after round, under the earlier cap of 16, in the
+service's image on a quarter of a CPU, raised the service's memory by 60 to 70 MiB, which that covers. In
 the local tests, with 12 idle instances holding 64 MiB of fetched-ahead
 records, 4 fetches of one 8 MiB record each raised the service from
 99 MiB to 320 MiB as base64 and to 350 MiB as JSON of control
