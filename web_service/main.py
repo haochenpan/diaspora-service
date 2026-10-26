@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import importlib.metadata as importlib_metadata
 import os
+import time
 from collections.abc import AsyncIterator
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from typing import Any
+from typing import TypeVar
 
+import anyio
 import uvicorn
 from fastapi import Body
 from fastapi import FastAPI
@@ -18,6 +21,7 @@ from fastapi import Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 from fastapi.responses import Response
+from starlette.requests import ClientDisconnect
 
 from web_service.consumer_models import AssignmentRequest
 from web_service.consumer_models import CreateConsumerRequest
@@ -27,6 +31,30 @@ from web_service.consumer_models import SeekPartitionsRequest
 from web_service.consumer_models import SeekRequest
 from web_service.consumer_models import SubscriptionRequest
 from web_service.consumer_service import ConsumerService
+from web_service.producer_models import BatchResult
+from web_service.producer_models import PRODUCE_BATCH_REQUEST_SCHEMA
+from web_service.producer_models import PRODUCE_REQUEST_SCHEMA
+from web_service.producer_models import ProduceError
+from web_service.producer_models import ProduceResult
+from web_service.producer_service import BAD_TOPIC_NAME
+from web_service.producer_service import batch_reply
+from web_service.producer_service import BODY_TIMEOUT
+from web_service.producer_service import BODY_TOO_LARGE
+from web_service.producer_service import encoded_size
+from web_service.producer_service import MAX_BODY_BYTES
+from web_service.producer_service import OutgoingRecord
+from web_service.producer_service import prepare_batch
+from web_service.producer_service import prepare_record
+from web_service.producer_service import PRODUCE_MAX_REQUESTS
+from web_service.producer_service import ProduceAdmission
+from web_service.producer_service import ProducerService
+from web_service.producer_service import READ_TIMEOUT_S
+from web_service.producer_service import record_reply
+from web_service.producer_service import RecordError
+from web_service.producer_service import Reservation
+from web_service.producer_service import SEND_TIMEOUT_S
+from web_service.producer_service import UNSUPPORTED_MEDIA_TYPE
+from web_service.producer_service import without_traceback
 from web_service.utils import AuthManager
 from web_service.utils import EnvironmentChecker
 
@@ -36,6 +64,8 @@ from .services import KafkaService
 from .services import NamespaceService
 from .services import parse_max_topics_per_namespace
 from .services import WebService
+
+_Prepared = TypeVar('_Prepared')
 
 # Fetch wait when the request names none, and the longest it may name
 DEFAULT_FETCH_TIMEOUT_MS = 5_000
@@ -118,6 +148,17 @@ class DiasporaService:
             region=region,
         )
 
+        self.producer_service = ProducerService(
+            bootstrap_servers=os.getenv('DEFAULT_SERVERS'),
+            region=region,
+        )
+        # Produce requests in flight, by count and body size; parsing, one
+        # body at a time; and the threads that wait for the cluster, apart
+        # from the threadpool every other route shares
+        self.produce_admission = ProduceAdmission()
+        self.parse_limiter = anyio.CapacityLimiter(1)
+        self.send_limiter = anyio.CapacityLimiter(PRODUCE_MAX_REQUESTS)
+
         self.app = FastAPI(
             title='Diaspora Web Service V3',
             docs_url='/',
@@ -126,6 +167,7 @@ class DiasporaService:
         )
         self.add_routes()
         self.add_consumer_routes()
+        self.add_producer_routes()
 
     def add_routes(self) -> None:
         """Add routes to the FastAPI app."""
@@ -336,9 +378,10 @@ class DiasporaService:
         self,
         app: FastAPI,
     ) -> AsyncIterator[None]:
-        """Application lifespan: clean up consumers on shutdown."""
+        """Application lifespan: close consumers and the producer."""
         yield
         await run_in_threadpool(self.consumer_service.shutdown_all)
+        await run_in_threadpool(self.producer_service.close)
 
     # --- Consumer helpers ---
 
@@ -952,6 +995,435 @@ class DiasporaService:
             namespace,
             serve,
         )
+
+    # --- Producer routes ---
+
+    def add_producer_routes(self) -> None:
+        """Add produce REST API routes (Confluent v3 syntax)."""
+        base = '/api/v3/{namespace}/topics/{topic}'
+
+        def error(description: str) -> dict[str, Any]:
+            return {'model': ProduceError, 'description': description}
+
+        refusals: dict[int | str, dict[str, Any]] = {
+            400: error('Body not JSON, or invalid field or topic name'),
+            401: {'description': 'The token check failed'},
+            404: error('Namespace, topic or partition not found'),
+            408: error('The body did not arrive within 20 s'),
+            413: error('Body over 16 MiB, or too costly to parse'),
+            415: error('Content-Type is not application/json'),
+            422: error('Payload error: needs a schema registry, or empty'),
+            429: error('Too many produce requests or bytes in flight'),
+        }
+
+        def with_schema(schema: dict[str, Any]) -> dict[str, Any]:
+            return {
+                'requestBody': {
+                    'required': True,
+                    'content': {'application/json': {'schema': schema}},
+                },
+            }
+
+        self.app.post(
+            f'{base}/records',
+            tags=['Producer'],
+            responses={
+                200: {
+                    'model': ProduceResult,
+                    'description': 'The cluster wrote the record',
+                },
+                **refusals,
+                403: error('The service may not write to the topic'),
+                413: error(
+                    'Body over 16 MiB, record over 8 MiB, or body too '
+                    'costly to parse',
+                ),
+                500: error('Kafka failed to write the record'),
+                503: error('The Kafka cluster is not reachable'),
+            },
+            openapi_extra=with_schema(PRODUCE_REQUEST_SCHEMA),
+        )(self.produce_record)
+        self.app.post(
+            f'{base}/records:batch',
+            tags=['Producer'],
+            status_code=207,
+            responses={
+                207: {
+                    'model': BatchResult,
+                    'description': 'The outcome of each entry',
+                },
+                **refusals,
+                413: error(
+                    'Body over 16 MiB, too costly to parse, or records '
+                    'over 16 MiB once encoded',
+                ),
+                422: error(
+                    'The batch is empty, has over 500 entries, or an '
+                    'entry id is missing, invalid or repeated',
+                ),
+            },
+            openapi_extra=with_schema(PRODUCE_BATCH_REQUEST_SCHEMA),
+        )(self.produce_records_batch)
+
+    async def produce_record(
+        self,
+        namespace: str,
+        topic: str,
+        *,
+        request: Request,
+        subject: str = Header(..., alias='subject'),
+        token: str = Header(..., alias='authorization'),
+    ) -> Response:
+        """Produce one record to a topic of the namespace.
+
+        The body (`Content-Type: application/json`) is one record in the
+        syntax of Confluent's REST API v3 (`partition_id`, `headers`,
+        `key`, `value`, `timestamp`); a body holding more than one JSON
+        value is refused, so send several records to `records:batch`. A
+        key or value is `{"type": "BINARY" | "JSON" | "STRING", "data":
+        ...}`: BINARY data is base64, JSON data any JSON value, STRING
+        data a string. AVRO, PROTOBUF, JSONSCHEMA, schema fields and a key
+        or value without a type are refused, since Octopus runs no schema
+        registry. `partition_id` may only be 0, the topic's one partition.
+
+        Replies 200 once every in-sync replica has acknowledged the
+        record, with its partition, offset and timestamp (ISO-8601 UTC).
+        The body must arrive within 20 s, and the record then has 30 s to
+        be acknowledged: if it is not, the reply is 500 with 50003 and the
+        record may still be written. The producer is not idempotent: its
+        retries within the 30 s can write a record twice, even when the
+        reply is 200.
+
+        A record may be 8 MiB (8388608 bytes), counting its key, value,
+        headers and about 100 bytes of Kafka's overhead; a body 16 MiB.
+        The service holds at most 48 MiB of produce bodies and records at
+        once, counting only the bytes that have arrived, and one user at
+        most 16 MiB in at most 2 requests; once read, a body takes one of
+        8 places for parsing and sending. Past a limit it answers 429 with
+        `Retry-After`, before the body is sent if every place is taken or
+        the Content-Length is more than the bytes free.
+
+        Error codes: 40002 dot in the topic name, 40003 body not one JSON
+        object, 40004 more than one JSON value, 40005 invalid record
+        field, 40301 the service may not write to the topic, 40401
+        namespace or topic not found, 40402 partition other than 0, 40801
+        body not received within 20 s, 41301 body over 16 MiB, 41302
+        record over 8 MiB, 41303 body too costly to parse, 41501 body not
+        JSON, 42206 payload that needs a schema registry or empty body,
+        42901 too many produce requests, 50002 Kafka error, 50003
+        retriable Kafka error or timeout, 50302 cluster not reachable.
+        """
+        return await self._serve_producer(
+            request,
+            subject=subject,
+            token=token,
+            namespace=namespace,
+            topic=topic,
+            batch=False,
+        )
+
+    async def produce_records_batch(
+        self,
+        namespace: str,
+        topic: str,
+        *,
+        request: Request,
+        subject: str = Header(..., alias='subject'),
+        token: str = Header(..., alias='authorization'),
+    ) -> Response:
+        """Produce a batch of records to a topic of the namespace.
+
+        The body is `{"entries": [...]}` with 1 to 500 records, each in
+        the syntax of the single-record route plus an `id` of 1 to 80
+        letters, digits, dashes or underscores, distinct within the
+        batch. A missing, invalid or repeated id, or an empty batch or one
+        over 500 entries, refuses the whole request with 422 and 42208,
+        and records that total over 16 MiB once encoded with 413 and
+        41304. The token, namespace and topic checks, the Content-Type,
+        the body limits, the 20 s to send the body and the 429 answer as
+        on the single-record route.
+
+        Otherwise the reply is 207, once every entry is acknowledged or
+        has failed, within 30 s of the body's arrival: `successes` lists
+        each entry the cluster acknowledged with its partition, offset
+        and timestamp, and `failures` each other entry with its error
+        code and message (40005, 40301, 40401, 40402, 41302, 42206,
+        50002, 50003, 50302, as on the single-record route). Entries are
+        sent in order.
+        """
+        return await self._serve_producer(
+            request,
+            subject=subject,
+            token=token,
+            namespace=namespace,
+            topic=topic,
+            batch=True,
+        )
+
+    async def _serve_producer(
+        self,
+        request: Request,
+        *,
+        subject: str,
+        token: str,
+        namespace: str,
+        topic: str,
+        batch: bool,
+    ) -> Response:
+        """Check a produce request, admit it, read its body and produce it.
+
+        The Content-Type and a Content-Length over the limit are refused
+        before anything else, and the body is read only once the access
+        checks pass and the request is admitted. Parsing runs one body at
+        a time, and the sends on threads of their own, apart from the
+        threadpool every other route shares.
+        """
+        if err := self._check_content_type(request):
+            return err
+        declared = self._declared_length(request)
+        if declared is not None and declared > MAX_BODY_BYTES:
+            return self._body_too_large()
+        if err := await run_in_threadpool(
+            self._check_topic_access,
+            subject,
+            token,
+            namespace,
+            topic,
+        ):
+            return err
+        # A request that could not be served now is refused before its body
+        # is sent; the body's bytes are reserved as they arrive, not as
+        # declared, so a stalled upload holds only what it has sent
+        try:
+            reservation = self.produce_admission.admit(subject, declared)
+        except RecordError as e:
+            return self._produce_error(e)
+        try:
+            return await self._produce(
+                request,
+                reservation=reservation,
+                namespace=namespace,
+                topic=topic,
+                batch=batch,
+            )
+        finally:
+            reservation.release()
+
+    async def _produce(
+        self,
+        request: Request,
+        *,
+        reservation: Reservation,
+        namespace: str,
+        topic: str,
+        batch: bool,
+    ) -> Response:
+        """Read, parse and send an admitted produce request."""
+        try:
+            raw = await self._read_body(request, reservation)
+            reservation.start()
+            prepared, records = await self._parse(raw, batch=batch)
+            del raw
+            # The body is gone; hold the records' bytes instead, which
+            # JSON data can make larger
+            reservation.grow_to(sum(encoded_size(r) for r in records))
+        except RecordError as e:
+            return self._produce_error(e)
+        except ClientDisconnect:
+            # Nobody is left to read a reply
+            return Response(status_code=400)
+        # The records' time starts once they are parsed, so a slow upload
+        # or a wait to parse does not count against it
+        deadline = time.monotonic() + SEND_TIMEOUT_S
+        results = await anyio.to_thread.run_sync(
+            self.producer_service.send,
+            self.producer_service.kafka_topic_name(namespace, topic),
+            records,
+            deadline,
+            limiter=self.send_limiter,
+        )
+        if batch:
+            resp_body, status = batch_reply(topic, prepared, results)
+            return JSONResponse(content=resp_body, status_code=status)
+        result = results[0]
+        if isinstance(result, RecordError):
+            return self._produce_error(result)
+        resp_body, status = record_reply(topic, result)
+        return JSONResponse(content=resp_body, status_code=status)
+
+    async def _parse(
+        self,
+        raw: bytearray,
+        *,
+        batch: bool,
+    ) -> tuple[
+        list[tuple[str, OutgoingRecord | RecordError]],
+        list[OutgoingRecord],
+    ]:
+        """Parse a body, one at a time, into its entries and records.
+
+        Raises:
+            RecordError: For a body the route refuses as a whole
+        """
+        if batch:
+            prepared = await anyio.to_thread.run_sync(
+                _refusal_returned,
+                prepare_batch,
+                raw,
+                limiter=self.parse_limiter,
+            )
+            if isinstance(prepared, RecordError):
+                raise prepared
+            return prepared, [
+                r for _, r in prepared if isinstance(r, OutgoingRecord)
+            ]
+        record = await anyio.to_thread.run_sync(
+            _refusal_returned,
+            prepare_record,
+            raw,
+            limiter=self.parse_limiter,
+        )
+        if isinstance(record, RecordError):
+            raise record
+        return [], [record]
+
+    def _check_topic_access(
+        self,
+        subject: str,
+        token: str,
+        namespace: str,
+        topic: str,
+    ) -> Response | None:
+        """Check the token, the namespace and the topic of a request.
+
+        Returns:
+            The 401, 404 or 400 response if a check fails, None if all pass
+        """
+        if err := self._check_access(subject, token, namespace):
+            return err
+        # Topic names never contain a dot, so the Kafka name stays inside
+        # the namespace
+        if '.' in topic:
+            return JSONResponse(
+                content={
+                    'error_code': BAD_TOPIC_NAME,
+                    'message': (
+                        f'Invalid topic name {topic}: topic names never '
+                        'contain a dot'
+                    ),
+                },
+                status_code=400,
+            )
+        if missing := self._validate_topics_in_namespace(namespace, [topic]):
+            return JSONResponse(content=missing, status_code=404)
+        return None
+
+    @staticmethod
+    def _check_content_type(request: Request) -> Response | None:
+        """Refuse a body that is not JSON (in UTF-8, if a charset is named)."""
+        media_type, *params = request.headers.get('content-type', '').split(
+            ';',
+        )
+        charsets = [
+            value.strip().strip('"').lower()
+            for name, _, value in (p.partition('=') for p in params)
+            if name.strip().lower() == 'charset'
+        ]
+        if media_type.strip().lower() == 'application/json' and all(
+            c in ('utf-8', 'utf8') for c in charsets
+        ):
+            return None
+        return JSONResponse(
+            content={
+                'error_code': UNSUPPORTED_MEDIA_TYPE,
+                'message': (
+                    'The body must be Content-Type: application/json, in UTF-8'
+                ),
+            },
+            status_code=415,
+        )
+
+    @staticmethod
+    def _declared_length(request: Request) -> int | None:
+        """The request's Content-Length, or None if it declares none."""
+        length = request.headers.get('content-length')
+        try:
+            return None if length is None else int(length)
+        except ValueError:
+            return None
+
+    @staticmethod
+    async def _read_body(
+        request: Request,
+        reservation: Reservation,
+    ) -> bytearray:
+        """Read an admitted request's body within READ_TIMEOUT_S.
+
+        The reservation grows with the bytes as they arrive, whatever the
+        Content-Length.
+
+        Raises:
+            RecordError: 408 if the body takes too long, 413 if it is too
+                large, 429 if the produce path cannot hold its bytes
+            ClientDisconnect: If the client goes away first
+        """
+        body = bytearray()
+        with anyio.move_on_after(READ_TIMEOUT_S) as read:
+            async for chunk in request.stream():
+                size = len(body) + len(chunk)
+                if size > MAX_BODY_BYTES:
+                    raise _body_too_large_error()
+                reservation.grow_to(size)
+                body += chunk
+        if read.cancelled_caught:
+            raise RecordError(
+                408,
+                BODY_TIMEOUT,
+                f'The request body did not arrive within {READ_TIMEOUT_S} s',
+            )
+        return body
+
+    @staticmethod
+    def _produce_error(error: RecordError) -> Response:
+        headers = {}
+        if error.retry_after_s is not None:
+            headers['Retry-After'] = str(error.retry_after_s)
+        if error.status in (408, 413, 429):
+            # The rest of the body, if any, is not read
+            headers['Connection'] = 'close'
+        return JSONResponse(
+            content=error.body(),
+            status_code=error.status,
+            headers=headers or None,
+        )
+
+    def _body_too_large(self) -> Response:
+        return self._produce_error(_body_too_large_error())
+
+
+def _refusal_returned(
+    prepare: Callable[[bytearray], _Prepared],
+    raw: bytearray,
+) -> _Prepared | RecordError:
+    """Prepare a body, returning its refusal instead of raising it.
+
+    A refusal raised out of the parse thread would keep the frames that
+    raised it, and with them the parsed body, in a reference cycle
+    through anyio's thread call, until the garbage collector ran.
+    """
+    try:
+        return prepare(raw)
+    except RecordError as e:
+        return without_traceback(e)
+
+
+def _body_too_large_error() -> RecordError:
+    return RecordError(
+        413,
+        BODY_TOO_LARGE,
+        f'The request body is over {MAX_BODY_BYTES} bytes, the most a '
+        'produce request may send',
+    )
 
 
 service = DiasporaService()
