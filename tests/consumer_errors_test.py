@@ -436,6 +436,14 @@ def test_validation_failure_is_confluent_shaped(client: TestClient) -> None:
     }
 
 
+def test_missing_headers_are_named_once(client: TestClient) -> None:
+    response = client.post(f'{V2}/{GROUP}', json={'name': 'i1'})
+    assert response.status_code == 422
+    message = response.json()['message']
+    assert message.count('header.subject') == 1
+    assert message.count('header.authorization') == 1
+
+
 def test_missing_field_is_confluent_shaped(client: TestClient) -> None:
     response = _send(client, 'POST', f'{_inst()}/assignments', {})
     assert response.status_code == 422
@@ -486,8 +494,7 @@ def test_token_audience_reason_is_not_echoed(
 ) -> None:
     service.auth.validate_access_token.return_value = {
         'status': 'error',
-        'reason': 'Not in the audience set. introspected = [x] '
-        'server_client_id = secret-id',
+        'reason': 'Not in the audience set.',
     }
     response = client.get(f'{_inst()}/records', headers=HEADERS)
     assert response.status_code == 401

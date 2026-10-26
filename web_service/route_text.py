@@ -117,9 +117,12 @@ DELETE_USER = RouteText(
 
 CREATE_KEY = RouteText(
     'Get the access key, creating it if needed',
-    'If the service holds a key for the user, returns that key with '
-    '`fresh: false` and creates nothing; it does not check the key with '
-    'IAM. Otherwise creates the user and the default namespace as `POST '
+    'If the service holds a key for the user and IAM still holds it as '
+    'an active key, returns that key with `fresh: false` and creates '
+    'nothing. A key under 5 minutes old is returned without the check, '
+    'since IAM can take a few seconds to list a new key, and so is the '
+    'stored key when IAM does not answer. Otherwise creates the user and '
+    'the default namespace as `POST '
     '/api/v3/user` does, deletes every IAM access key of the user, creates '
     'one and returns it with `fresh: true`. To replace a key, delete it '
     'first. Returns `access_key`, `secret_key`, `create_date` and '

@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import uuid
 from typing import Any
 
 from globus_sdk import ConfidentialAppAuthClient
+
+logger = logging.getLogger(__name__)
 
 
 class EnvironmentChecker:
@@ -76,11 +79,11 @@ class AuthManager:
             )
 
         if self.server_client_id not in introspection_response.get('aud'):
-            return self.error_response(
-                f'Not in the audience set. '
-                f'introspected = {introspection_response.get("aud")} '
-                f'server_client_id = {self.server_client_id}',
+            logger.info(
+                'Token audience %s lacks the service',
+                introspection_response.get('aud'),
             )
+            return self.error_response('Not in the audience set.')
 
         if self.action_scope not in introspection_response.get(
             'scope',

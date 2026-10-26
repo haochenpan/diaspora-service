@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import pytest
 
 from web_service.utils import AuthManager
@@ -134,3 +136,23 @@ def test_auth_manager_requires_server_credentials(
 ):
     with pytest.raises(ValueError, match='SERVER_CLIENT_ID and SERVER_SECRET'):
         AuthManager(server_client_id, server_secret, 'client-id')
+
+
+def test_audience_failure_leaves_out_the_client_id() -> None:
+    server_client_id = '00000000-0000-0000-0000-00000000c1d0'
+    subject = '00000000-0000-0000-0000-000000000001'
+    auth = AuthManager(server_client_id, 'secret', 'client-id')
+    introspection = {
+        'active': True,
+        'sub': subject,
+        'aud': ['some-other-client'],
+        'scope': '',
+    }
+    with patch.object(
+        auth.client,
+        'oauth2_token_introspect',
+        return_value=introspection,
+    ):
+        result = auth.validate_access_token(subject, 'Bearer ' + 'a' * 40)
+
+    assert result == {'status': 'error', 'reason': 'Not in the audience set.'}

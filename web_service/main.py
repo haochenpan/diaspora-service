@@ -427,11 +427,15 @@ class FetchResponse(Response):
         await send({'type': 'http.response.body', 'body': b''})
 
 
-def consumer_namespace(
-    subject: str = Header(..., alias='subject'),
-) -> str:
-    """The namespace of a consumer request: the caller's default one."""
-    return NamespaceService.generate_default(subject)
+def consumer_namespace(request: Request) -> str:
+    """The namespace of a consumer request: the caller's default one.
+
+    The route declares the `subject` header, so a request without it gets
+    one 422 entry for it, not two.
+    """
+    return NamespaceService.generate_default(
+        request.headers.get('subject', ''),
+    )
 
 
 class DiasporaService:
@@ -890,7 +894,7 @@ class DiasporaService:
         """
         if err := self.auth.validate_access_token(subject, token):
             reason = err.get('reason')
-            # The audience check's reason names the service's client id
+            # The consumer routes say this in plainer words
             if not isinstance(reason, str) or reason.startswith(
                 'Not in the audience set',
             ):
