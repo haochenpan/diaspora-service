@@ -15,8 +15,8 @@ The tests come in two sets:
 
 ## Run the unit tests locally
 
-Install the dev extras first (`pip install -e ".[dev]"`, as in
-[Running locally](1-running.md#set-up)). The service checks a few
+Install the locked dependencies and dev tools first, as in
+[Running locally](1-running.md#set-up). The service checks a few
 environment variables at import, so give it placeholders, and point the
 AWS SDK away from any credentials you have:
 

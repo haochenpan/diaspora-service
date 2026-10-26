@@ -1,13 +1,22 @@
-FROM --platform=linux/amd64 python:3.11@sha256:8f6593e62e991b818dc28750c0c67c340046a70ab5cf79df52116005ec9cbf56
+FROM --platform=linux/amd64 python:3.14.9-slim@sha256:35caba83af2fe6da9a5d922f9b0156f21d1246a48278c58a08bd253303ba42e8
 
 EXPOSE 8000/tcp
 
 WORKDIR /diaspora-web-service
 
+# The locked dependencies first, so a change to the code alone reuses this
+# layer
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY pyproject.toml ./
 COPY web_service web_service
-COPY pyproject.toml requirements.lock ./
+RUN pip install --no-cache-dir --no-deps .
 
-RUN pip install -r requirements.lock && pip install --no-deps .
+RUN useradd --create-home diaspora
+USER diaspora
 
-# CMD [ "uvicorn", "web_service.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload" ]
-CMD ["gunicorn", "--bind", "0.0.0.0:8000", "-k", "uvicorn.workers.UvicornWorker", "web_service.main:app"]
+# One worker, since consumer instances live in its memory. On SIGTERM,
+# gunicorn gives the worker 30 s to finish requests and shut down before
+# it kills it.
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "-k", "uvicorn_worker.UvicornWorker", "--graceful-timeout", "30", "web_service.main:app"]

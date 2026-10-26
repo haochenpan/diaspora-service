@@ -17,3 +17,21 @@ updates:
     schedule:
       # Check for updates to the base image every month
       interval: "monthly"
+    ignore:
+      # Stay on Python 3.14: propose its patch releases and new builds, not
+      # a new minor or major version
+      - dependency-name: "python"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-major"
+
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      # Check for updates to the locked dependencies every month
+      interval: "monthly"
+    groups:
+      # Bump all of them in one pull request
+      pip:
+        patterns:
+          - "*"
