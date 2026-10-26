@@ -8,6 +8,7 @@ import functools
 import importlib.metadata as importlib_metadata
 import logging
 import os
+import re
 import time
 from collections import deque
 from collections.abc import AsyncIterator
@@ -15,6 +16,7 @@ from collections.abc import Callable
 from contextlib import asynccontextmanager
 from contextlib import AsyncExitStack
 from typing import Any
+from urllib.parse import quote
 
 import anyio
 import anyio.lowlevel
@@ -22,8 +24,10 @@ import uvicorn
 from anyio.abc import TaskGroup
 from fastapi import APIRouter
 from fastapi import Body
+from fastapi import Depends
 from fastapi import FastAPI
 from fastapi import Header
+from fastapi import Path
 from fastapi import Query
 from fastapi import Request
 from fastapi.concurrency import run_in_threadpool
@@ -45,9 +49,14 @@ from web_service.consumer_records import FetchReply
 from web_service.consumer_routes import ConsumerRoute
 from web_service.consumer_routes import error_response
 from web_service.consumer_routes import INVALID_REQUEST
+from web_service.consumer_routes import negotiate_records
 from web_service.consumer_service import ConsumerService
 from web_service.consumer_service import DEFAULT_FETCH_WAIT_MS
+from web_service.consumer_service import error_reply
+from web_service.consumer_service import FetchAttempt
+from web_service.consumer_service import FORMAT_MISMATCH
 from web_service.consumer_service import MAX_FETCH_WAIT_MS
+from web_service.consumer_service import PARTITION_NOT_FOUND
 from web_service.consumer_service import REPLY_MAX_BYTES
 from web_service.consumer_service import run_holding
 from web_service.consumer_service import SERVER_ERROR
@@ -114,6 +123,47 @@ SHARED_THREADS = 40
 # Code of a failed token check on the consumer routes: Confluent's code
 # for a failed authentication
 AUTHENTICATION_FAILED = 40101
+# Where the consumer routes are: Confluent REST Proxy v2's paths, whose
+# namespace is the caller's default one, and the earlier paths, which
+# name it and are deprecated
+CONSUMERS_V2 = '/api/v2/consumers'
+CONSUMERS_V3 = '/api/v3/{namespace}/consumers'
+# A host and port as a URL may hold them, for the Host and
+# X-Forwarded-Host headers of a request whose base_uri the service builds
+_URL_HOST = re.compile(
+    r'(?:[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*|\[[0-9A-Fa-f:.]+\])(?::[0-9]{1,5})?',
+)
+
+
+def _first_forwarded(request: Request, name: str) -> str | None:
+    """The first value of a forwarded header: the one the client reached."""
+    value = request.headers.get(name)
+    return None if value is None else value.split(',')[0].strip()
+
+
+def service_url(request: Request, path: str) -> str:
+    """The absolute URL of path on this service, as the client reached it.
+
+    Lightsail's load balancer ends TLS and forwards each request over
+    HTTP, so the scheme and host come from X-Forwarded-Proto and
+    X-Forwarded-Host when they hold a valid one, else from the request.
+    uvicorn trusts forwarded headers only from FORWARDED_ALLOW_IPS
+    (127.0.0.1 by default, which the load balancer is not), so it leaves
+    the request's own scheme as http. A client can set these headers
+    itself, but the URL goes back only to that client, and a header that
+    is not a plain scheme or host is ignored, so it cannot add a path,
+    a user or another URL.
+    """
+    scheme = _first_forwarded(request, 'x-forwarded-proto')
+    if scheme is None or scheme.lower() not in ('http', 'https'):
+        scheme = request.url.scheme
+    host = _first_forwarded(request, 'x-forwarded-host')
+    if host is None or not _URL_HOST.fullmatch(host):
+        host = request.headers.get('host')
+    if host is None or not _URL_HOST.fullmatch(host):
+        host = request.url.netloc
+    root = request.scope.get('root_path', '')
+    return f'{scheme.lower()}://{host}{root}{path}'
 
 
 def service_version() -> str:
@@ -239,12 +289,14 @@ class FetchResponse(Response):
         unfetch: Callable[[], None],
         threads: anyio.CapacityLimiter,
         name: str,
+        media_type: str,
     ) -> None:
         """Make the response; nothing is encoded until it is sent.
 
-        name names the instance in the log.
+        name names the instance in the log, and media_type is the reply's
+        Content-Type.
         """
-        super().__init__(status_code=200, media_type='application/json')
+        super().__init__(status_code=200, media_type=media_type)
         self._name = name
         self._reply = reply
         self._release = release
@@ -325,7 +377,13 @@ class FetchResponse(Response):
         start: dict[str, Any] = {
             'type': 'http.response.start',
             'status': 200,
-            'headers': [(b'content-type', b'application/json')],
+            # The headers set on the response, but the length of the empty
+            # body it was made with
+            'headers': [
+                (name, value)
+                for name, value in self.raw_headers
+                if name != b'content-length'
+            ],
         }
         if reply.size <= REPLY_MAX_BYTES:
             body = await anyio.to_thread.run_sync(
@@ -364,6 +422,34 @@ class FetchResponse(Response):
             )
         await anyio.lowlevel.checkpoint()
         await send({'type': 'http.response.body', 'body': b''})
+
+
+def consumer_namespace(
+    request: Request,
+    subject: str = Header(..., alias='subject'),
+) -> str:
+    """The namespace of a consumer request.
+
+    A deprecated route names it in its path. A v2 route takes the caller's
+    default namespace, the one every user has, so an instance created
+    through either route is found through the other.
+    """
+    named = request.path_params.get('namespace')
+    if named is not None:
+        return named
+    return NamespaceService.generate_default(subject)
+
+
+def _path_namespace(
+    namespace: str = Path(
+        ...,
+        description=(
+            'Your namespace. The /api/v2/consumers routes take your '
+            'default namespace instead.'
+        ),
+    ),
+) -> None:
+    """Document the namespace a deprecated consumer route names."""
 
 
 class DiasporaService:
@@ -683,13 +769,22 @@ class DiasporaService:
         self,
         app: FastAPI,
     ) -> AsyncIterator[None]:
-        """Application lifespan: size the threadpool; close consumers."""
+        """Application lifespan: size the threadpool; close consumers.
+
+        At shutdown the consumer instances and the producer are closed at
+        the same time, so the whole takes as long as the longer of the two,
+        not their sum.
+        """
         anyio.to_thread.current_default_thread_limiter().total_tokens = (
             SHARED_THREADS
         )
         yield
-        await run_in_threadpool(self.consumer_service.shutdown_all)
-        await run_in_threadpool(self.producer_service.close)
+        async with anyio.create_task_group() as tasks:
+            tasks.start_soon(
+                run_in_threadpool,
+                self.consumer_service.shutdown_all,
+            )
+            tasks.start_soon(run_in_threadpool, self.producer_service.close)
 
     # --- Consumer helpers ---
 
@@ -845,6 +940,25 @@ class DiasporaService:
             f'{self.max_topics}, the most topics a namespace holds',
         )
 
+    @staticmethod
+    def _instance_url(
+        request: Request,
+        namespace: str,
+        group_name: str,
+        instance_id: str,
+    ) -> str:
+        """An instance's absolute URL, under the prefix request used."""
+        if 'namespace' in request.path_params:
+            prefix = CONSUMERS_V3.format(namespace=quote(namespace, safe=''))
+        else:
+            prefix = CONSUMERS_V2
+        return service_url(
+            request,
+            f'{prefix}/{quote(group_name, safe="")}'
+            f'/instances/{quote(instance_id, safe="")}',
+        )
+
+    _OK = 200
     _NO_CONTENT = 204
 
     @staticmethod
@@ -860,118 +974,155 @@ class DiasporaService:
     # --- Consumer routes ---
 
     def add_consumer_routes(self) -> None:
-        """Add consumer REST API routes (Confluent v2 compatible).
+        """Add the consumer routes, in Confluent REST Proxy v2's paths.
 
-        Their route class answers every failure in Confluent's shape.
+        Each route is served under /api/v2/consumers, as Confluent's
+        /consumers, and under the deprecated /api/v3/{namespace}/consumers,
+        which a later API version removes. Both run the same handlers, so
+        an instance created through either is the same instance. Their
+        route class answers every failure in Confluent's shape.
         """
-        base = '/api/v3/{namespace}/consumers'
-        router = APIRouter(route_class=ConsumerRoute)
-
-        # 1. Create consumer instance
-        router.post(
-            f'{base}/{{group_name}}',
+        instance = '/{group_name}/instances/{instance_id}'
+        routes: list[tuple[str, str, Callable[..., Any], str]] = [
+            ('POST', '/{group_name}', self.create_consumer_instance, 'create'),
+            ('DELETE', instance, self.delete_consumer_instance, 'delete'),
+            (
+                'POST',
+                f'{instance}/subscription',
+                self.subscribe_consumer,
+                'subscribe',
+            ),
+            (
+                'GET',
+                f'{instance}/subscription',
+                self.get_consumer_subscription,
+                'get_subscription',
+            ),
+            (
+                'DELETE',
+                f'{instance}/subscription',
+                self.unsubscribe_consumer,
+                'unsubscribe',
+            ),
+            (
+                'GET',
+                f'{instance}/records',
+                self.fetch_consumer_records,
+                'fetch_records',
+            ),
+            (
+                'POST',
+                f'{instance}/offsets',
+                self.commit_consumer_offsets,
+                'commit_offsets',
+            ),
+            (
+                'GET',
+                f'{instance}/offsets',
+                self.get_committed_offsets,
+                'get_offsets',
+            ),
+            (
+                'POST',
+                f'{instance}/assignments',
+                self.assign_consumer_partitions,
+                'assign',
+            ),
+            (
+                'GET',
+                f'{instance}/assignments',
+                self.get_consumer_assignments,
+                'get_assignments',
+            ),
+            (
+                'POST',
+                f'{instance}/positions',
+                self.seek_consumer_positions,
+                'seek',
+            ),
+            (
+                'POST',
+                f'{instance}/positions/beginning',
+                self.seek_consumer_beginning,
+                'seek_to_beginning',
+            ),
+            (
+                'POST',
+                f'{instance}/positions/end',
+                self.seek_consumer_end,
+                'seek_to_end',
+            ),
+        ]
+        current = APIRouter(
+            prefix=CONSUMERS_V2,
+            route_class=ConsumerRoute,
             tags=['Consumer'],
-        )(self.create_consumer_instance)
-
-        # 2. Delete consumer instance
-        router.delete(
-            f'{base}/{{group_name}}/instances/{{instance_id}}',
-            tags=['Consumer'],
-        )(self.delete_consumer_instance)
-
-        # 3. Subscribe
-        router.post(
-            f'{base}/{{group_name}}/instances/{{instance_id}}/subscription',
-            tags=['Consumer'],
-        )(self.subscribe_consumer)
-
-        # 4. Get subscription
-        router.get(
-            f'{base}/{{group_name}}/instances/{{instance_id}}/subscription',
-            tags=['Consumer'],
-        )(self.get_consumer_subscription)
-
-        # 5. Unsubscribe
-        router.delete(
-            f'{base}/{{group_name}}/instances/{{instance_id}}/subscription',
-            tags=['Consumer'],
-        )(self.unsubscribe_consumer)
-
-        # 6. Fetch records
-        router.get(
-            f'{base}/{{group_name}}/instances/{{instance_id}}/records',
-            tags=['Consumer'],
-        )(self.fetch_consumer_records)
-
-        # 7. Commit offsets
-        router.post(
-            f'{base}/{{group_name}}/instances/{{instance_id}}/offsets',
-            tags=['Consumer'],
-        )(self.commit_consumer_offsets)
-
-        # 8. Get committed offsets
-        router.get(
-            f'{base}/{{group_name}}/instances/{{instance_id}}/offsets',
-            tags=['Consumer'],
-        )(self.get_committed_offsets)
-
-        # 9. Assign partitions
-        router.post(
-            f'{base}/{{group_name}}/instances/{{instance_id}}/assignments',
-            tags=['Consumer'],
-        )(self.assign_consumer_partitions)
-
-        # 10. Get assignments
-        router.get(
-            f'{base}/{{group_name}}/instances/{{instance_id}}/assignments',
-            tags=['Consumer'],
-        )(self.get_consumer_assignments)
-
-        # 11. Seek to offset
-        router.post(
-            f'{base}/{{group_name}}/instances/{{instance_id}}/positions',
-            tags=['Consumer'],
-        )(self.seek_consumer_positions)
-
-        # 12. Seek to beginning
-        router.post(
-            f'{base}/{{group_name}}/instances'
-            f'/{{instance_id}}/positions/beginning',
-            tags=['Consumer'],
-        )(self.seek_consumer_beginning)
-
-        # 13. Seek to end
-        router.post(
-            f'{base}/{{group_name}}/instances/{{instance_id}}/positions/end',
-            tags=['Consumer'],
-        )(self.seek_consumer_end)
-
-        self.app.include_router(router)
+        )
+        deprecated = APIRouter(
+            prefix=CONSUMERS_V3,
+            route_class=ConsumerRoute,
+            tags=['Consumer (deprecated)'],
+            deprecated=True,
+            dependencies=[Depends(_path_namespace)],
+        )
+        for method, path, handler, name in routes:
+            current.add_api_route(
+                path,
+                handler,
+                methods=[method],
+                operation_id=f'consumer_{name}',
+            )
+            deprecated.add_api_route(
+                path,
+                handler,
+                methods=[method],
+                operation_id=f'consumer_{name}_deprecated',
+            )
+        self.app.include_router(current)
+        self.app.include_router(deprecated)
 
     # --- Consumer endpoint handlers ---
 
     async def create_consumer_instance(
         self,
-        namespace: str,
         group_name: str,
-        body: CreateConsumerRequest = Body(...),
+        *,
+        request: Request,
+        body: CreateConsumerRequest | None = Body(None),
+        namespace: str = Depends(consumer_namespace),
         subject: str = Header(..., alias='subject'),
         token: str = Header(..., alias='authorization'),
     ) -> Response:
-        """Create a consumer instance in a consumer group."""
+        """Create a consumer instance in a consumer group.
+
+        A request without a body takes every default, as in Confluent's
+        REST Proxy. The reply's base_uri is the instance's absolute URL
+        under the prefix the request used.
+        """
+        settings = body or CreateConsumerRequest.model_validate({})
 
         def serve() -> Response:
             resp_body, status = self.consumer_service.create_consumer(
                 subject=subject,
                 namespace=namespace,
                 group_name=group_name,
-                name=body.name,
-                format_type=body.format,
-                auto_offset_reset=body.auto_offset_reset,
-                auto_commit_enable=body.auto_commit_enable,
-                fetch_min_bytes=body.fetch_min_bytes,
-                consumer_request_timeout_ms=(body.consumer_request_timeout_ms),
+                # Confluent's deprecated id, if given, is the name
+                name=settings.id if settings.id is not None else settings.name,
+                format_type=settings.format,
+                auto_offset_reset=settings.auto_offset_reset,
+                auto_commit_enable=settings.auto_commit_enable,
+                fetch_min_bytes=settings.fetch_min_bytes,
+                consumer_request_timeout_ms=(
+                    settings.consumer_request_timeout_ms
+                ),
             )
+            if status == DiasporaService._OK:
+                resp_body['base_uri'] = self._instance_url(
+                    request,
+                    namespace,
+                    group_name,
+                    resp_body['instance_id'],
+                )
             return self._consumer_response(resp_body, status)
 
         return await run_in_threadpool(
@@ -984,9 +1135,9 @@ class DiasporaService:
 
     async def delete_consumer_instance(
         self,
-        namespace: str,
         group_name: str,
         instance_id: str,
+        namespace: str = Depends(consumer_namespace),
         subject: str = Header(..., alias='subject'),
         token: str = Header(..., alias='authorization'),
     ) -> Response:
@@ -1010,11 +1161,11 @@ class DiasporaService:
 
     async def subscribe_consumer(
         self,
-        namespace: str,
         group_name: str,
         instance_id: str,
         *,
         body: SubscriptionRequest = Body(...),
+        namespace: str = Depends(consumer_namespace),
         subject: str = Header(..., alias='subject'),
         token: str = Header(..., alias='authorization'),
     ) -> Response:
@@ -1065,9 +1216,9 @@ class DiasporaService:
 
     async def get_consumer_subscription(
         self,
-        namespace: str,
         group_name: str,
         instance_id: str,
+        namespace: str = Depends(consumer_namespace),
         subject: str = Header(..., alias='subject'),
         token: str = Header(..., alias='authorization'),
     ) -> Response:
@@ -1091,9 +1242,9 @@ class DiasporaService:
 
     async def unsubscribe_consumer(
         self,
-        namespace: str,
         group_name: str,
         instance_id: str,
+        namespace: str = Depends(consumer_namespace),
         subject: str = Header(..., alias='subject'),
         token: str = Header(..., alias='authorization'),
     ) -> Response:
@@ -1115,13 +1266,13 @@ class DiasporaService:
             serve,
         )
 
-    async def fetch_consumer_records(
+    async def fetch_consumer_records(  # noqa: PLR0911
         self,
-        namespace: str,
         group_name: str,
         instance_id: str,
         *,
         request: Request,
+        namespace: str = Depends(consumer_namespace),
         subject: str = Header(..., alias='subject'),
         token: str = Header(..., alias='authorization'),
         timeout: int | None = Query(
@@ -1135,12 +1286,21 @@ class DiasporaService:
         max_bytes: int | None = Query(
             None,
             description=(
-                'Most records to return; 0, a negative value or none takes '
-                'the default of 500.'
+                'Bytes of keys and values the records returned stay under, '
+                'as in Confluent; the first record is returned however '
+                'large. 0, a negative value or none sets no limit but the '
+                "reply's 2 MiB."
             ),
         ),
     ) -> Response:
         """Fetch data for subscribed topics or assigned partitions.
+
+        The Accept header chooses the format, as in Confluent's REST Proxy:
+        application/vnd.kafka.binary.v2+json (the choice without one, or
+        for application/vnd.kafka.v2+json) or
+        application/vnd.kafka.json.v2+json. A format other than the
+        instance's is refused with 406 and 40601, and an Accept that names
+        neither with 406 and 406. The reply has the chosen type.
 
         A fetch to an instance another request holds is refused at once,
         and a subject may have FETCH_MAX_PER_SUBJECT fetches in progress.
@@ -1163,6 +1323,11 @@ class DiasporaService:
             namespace,
         ):
             return err
+        negotiated = negotiate_records(request.headers.get('accept'))
+        if negotiated is None:
+            # rest-utils' reply for the 406 Jersey raises
+            return error_response(406, 406, 'HTTP 406 Not Acceptable')
+        format_type, media_type = negotiated
         key = (subject, namespace, group_name, instance_id)
         async with AsyncExitStack() as stack:
             held = await stack.enter_async_context(
@@ -1170,6 +1335,16 @@ class DiasporaService:
             )
             if isinstance(held, tuple):
                 return self._consumer_response(*held)
+            if format_type != held.format_type:
+                return self._consumer_response(
+                    *error_reply(
+                        406,
+                        FORMAT_MISMATCH,
+                        # Confluent's message for the same refusal
+                        'The requested embedded data format does not match '
+                        'the deserializer for this consumer instance',
+                    ),
+                )
             if self.fetching.get(subject, 0) >= FETCH_MAX_PER_SUBJECT:
                 return self._fetch_refused(
                     f'You have {FETCH_MAX_PER_SUBJECT} fetches in progress, '
@@ -1185,7 +1360,7 @@ class DiasporaService:
                 namespace,
                 group_name,
                 instance_id,
-                max_records=max_bytes if max_bytes and max_bytes > 0 else None,
+                max_bytes=max_bytes if max_bytes and max_bytes > 0 else None,
             )
             reply = await self._poll_for_records(
                 stack,
@@ -1203,7 +1378,12 @@ class DiasporaService:
             )
             # The client may have left while the slice polled; nothing has
             # committed the records since, so they can be fetched again
-            if await request.is_disconnected():
+            try:
+                left = await request.is_disconnected()
+            except BaseException:
+                unfetch()
+                raise
+            if left:
                 unfetch()
                 return Response(status_code=400)
             release = stack.pop_all()
@@ -1214,6 +1394,7 @@ class DiasporaService:
                     unfetch=unfetch,
                     threads=self.fetch_threads,
                     name=f'{namespace}/{group_name}/{instance_id}',
+                    media_type=media_type,
                 )
             except BaseException:
                 unfetch()
@@ -1277,15 +1458,25 @@ class DiasporaService:
             if await request.is_disconnected():
                 return Response(status_code=400)
             remaining_ms = max(0, int((deadline - time.monotonic()) * 1000))
-            reply, status = await anyio.to_thread.run_sync(
-                run_holding,
-                held,
-                functools.partial(
-                    fetch,
-                    timeout_ms=min(remaining_ms, FETCH_SLICE_MS),
-                ),
-                limiter=self.fetch_threads,
-            )
+            attempt = FetchAttempt()
+            try:
+                reply, status = await anyio.to_thread.run_sync(
+                    run_holding,
+                    held,
+                    functools.partial(
+                        fetch,
+                        timeout_ms=min(remaining_ms, FETCH_SLICE_MS),
+                        attempt=attempt,
+                    ),
+                    limiter=self.fetch_threads,
+                )
+            except BaseException:
+                # Cancelled while the thread may still poll: the thread
+                # seeks back if it finishes later, this request if it
+                # finished already
+                if (polled := attempt.abandon()) is not None:
+                    self.consumer_service.unfetch(held, polled)
+                raise
             if not isinstance(reply, FetchReply):
                 return self._consumer_response(reply, status)
             keep = bool(reply.records)
@@ -1319,11 +1510,11 @@ class DiasporaService:
 
     async def commit_consumer_offsets(
         self,
-        namespace: str,
         group_name: str,
         instance_id: str,
         *,
         body: OffsetsCommitRequest | None = Body(None),
+        namespace: str = Depends(consumer_namespace),
         subject: str = Header(..., alias='subject'),
         token: str = Header(..., alias='authorization'),
     ) -> Response:
@@ -1353,11 +1544,11 @@ class DiasporaService:
 
     async def get_committed_offsets(
         self,
-        namespace: str,
         group_name: str,
         instance_id: str,
         *,
         request: Request,
+        namespace: str = Depends(consumer_namespace),
         subject: str = Header(..., alias='subject'),
         token: str = Header(..., alias='authorization'),
     ) -> Response:
@@ -1371,8 +1562,14 @@ class DiasporaService:
             return err
         # Confluent sends partitions in the GET request body; a body that
         # is not JSON or fails validation raises, and the route class
-        # answers it
-        req = OffsetsGetRequest.model_validate_json(await request.body())
+        # answers it. Confluent answers a request without one, or with
+        # null, as a partition not found.
+        raw = await request.body()
+        if not raw.strip() or raw.strip() == b'null':
+            return self._consumer_response(
+                *error_reply(404, PARTITION_NOT_FOUND, 'Partition not found.'),
+            )
+        req = OffsetsGetRequest.model_validate_json(raw)
         if too_many := self._too_many(req.partitions, 'partitions'):
             return too_many
         partitions = [p.model_dump() for p in req.partitions]
@@ -1397,11 +1594,11 @@ class DiasporaService:
 
     async def assign_consumer_partitions(
         self,
-        namespace: str,
         group_name: str,
         instance_id: str,
         *,
         body: AssignmentRequest = Body(...),
+        namespace: str = Depends(consumer_namespace),
         subject: str = Header(..., alias='subject'),
         token: str = Header(..., alias='authorization'),
     ) -> Response:
@@ -1436,9 +1633,9 @@ class DiasporaService:
 
     async def get_consumer_assignments(
         self,
-        namespace: str,
         group_name: str,
         instance_id: str,
+        namespace: str = Depends(consumer_namespace),
         subject: str = Header(..., alias='subject'),
         token: str = Header(..., alias='authorization'),
     ) -> Response:
@@ -1462,11 +1659,11 @@ class DiasporaService:
 
     async def seek_consumer_positions(
         self,
-        namespace: str,
         group_name: str,
         instance_id: str,
         *,
         body: SeekRequest = Body(...),
+        namespace: str = Depends(consumer_namespace),
         subject: str = Header(..., alias='subject'),
         token: str = Header(..., alias='authorization'),
     ) -> Response:
@@ -1494,11 +1691,11 @@ class DiasporaService:
 
     async def seek_consumer_beginning(
         self,
-        namespace: str,
         group_name: str,
         instance_id: str,
         *,
         body: SeekPartitionsRequest = Body(...),
+        namespace: str = Depends(consumer_namespace),
         subject: str = Header(..., alias='subject'),
         token: str = Header(..., alias='authorization'),
     ) -> Response:
@@ -1526,11 +1723,11 @@ class DiasporaService:
 
     async def seek_consumer_end(
         self,
-        namespace: str,
         group_name: str,
         instance_id: str,
         *,
         body: SeekPartitionsRequest = Body(...),
+        namespace: str = Depends(consumer_namespace),
         subject: str = Header(..., alias='subject'),
         token: str = Header(..., alias='authorization'),
     ) -> Response:

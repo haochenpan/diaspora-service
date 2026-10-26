@@ -21,6 +21,7 @@ from unittest.mock import patch
 
 import httpx
 import pytest
+from starlette.requests import Request
 
 from web_service import main
 from web_service.consumer_models import AssignmentRequest
@@ -71,17 +72,42 @@ def mock_consumer_service() -> MagicMock:
         *,
         wait: bool = True,
     ) -> AsyncIterator[Any]:
-        yield SimpleNamespace(default_wait_ms=None)
+        yield SimpleNamespace(default_wait_ms=None, format_type='binary')
 
     service.hold.side_effect = hold
     return service
 
 
-def _fetch_request() -> MagicMock:
+def _fetch_request(accept: str | None = None) -> MagicMock:
     """A request whose client is still connected."""
     request = MagicMock()
+    request.headers = {} if accept is None else {'accept': accept}
     request.is_disconnected = AsyncMock(return_value=False)
     return request
+
+
+def _create_request(
+    path: str = '/api/v2/consumers/my-group',
+    headers: dict[str, str] | None = None,
+    path_params: dict[str, str] | None = None,
+) -> Request:
+    """A create request as it reaches the service."""
+    return Request(
+        {
+            'type': 'http',
+            'method': 'POST',
+            'scheme': 'http',
+            'server': ('10.0.0.5', 8000),
+            'root_path': '',
+            'path': path,
+            'query_string': b'',
+            'headers': [
+                (k.lower().encode(), v.encode())
+                for k, v in (headers or {'host': 'service.example'}).items()
+            ],
+            'path_params': path_params or {},
+        },
+    )
 
 
 def _reply(*values: bytes) -> FetchReply:
@@ -732,6 +758,7 @@ async def test_create_consumer_instance_auth_failure(
     _setup_auth_failure(mock_auth_manager)
     body = CreateConsumerRequest()
     response = await mock_diaspora_service.create_consumer_instance(
+        request=_create_request(),
         namespace=CONSUMER_NS,
         group_name=CONSUMER_GROUP,
         body=body,
@@ -1038,6 +1065,7 @@ async def test_create_consumer_instance_namespace_failure(
     _setup_namespace_failure(mock_web_service)
     body = CreateConsumerRequest()
     response = await mock_diaspora_service.create_consumer_instance(
+        request=_create_request(),
         namespace=CONSUMER_NS,
         group_name=CONSUMER_GROUP,
         body=body,
@@ -1459,14 +1487,12 @@ async def test_create_consumer_instance_success(
     """Test create_consumer_instance success path."""
     _setup_namespace_success(mock_web_service)
     mock_consumer_service.create_consumer.return_value = (
-        {
-            'instance_id': 'abc',
-            'base_uri': '/api/v3/ns/consumers/g/instances/abc',
-        },
+        {'instance_id': 'abc'},
         200,
     )
     body = CreateConsumerRequest(name='abc')
     response = await mock_diaspora_service.create_consumer_instance(
+        request=_create_request(),
         namespace=CONSUMER_NS,
         group_name=CONSUMER_GROUP,
         body=body,
@@ -1475,8 +1501,12 @@ async def test_create_consumer_instance_success(
     )
     assert response.status_code == 200
     resp_body = _response_json(response)
-    assert resp_body['instance_id'] == 'abc'
-    assert 'base_uri' in resp_body
+    assert resp_body == {
+        'instance_id': 'abc',
+        'base_uri': (
+            'http://service.example/api/v2/consumers/my-group/instances/abc'
+        ),
+    }
 
 
 @pytest.mark.asyncio
@@ -1607,6 +1637,7 @@ async def test_fetch_consumer_records_success(
         max_bytes=None,
     )
     assert response.status_code == 200
+    assert response.media_type == 'application/vnd.kafka.binary.v2+json'
     assert await _sent_json(response) == [
         {
             'topic': 't1',
@@ -1614,6 +1645,7 @@ async def test_fetch_consumer_records_success(
             'value': 'aGVsbG8=',
             'partition': 0,
             'offset': 0,
+            'headers': [],
         },
     ]
 
@@ -1648,7 +1680,7 @@ async def test_fetch_consumer_records_default_timeout(
         CONSUMER_GROUP,
         CONSUMER_INST,
     )
-    assert call.kwargs['max_records'] is None
+    assert call.kwargs['max_bytes'] is None
     # The time the request took so far comes off its wait
     assert 5000 - 500 < call.kwargs['timeout_ms'] <= 5000
 
@@ -1683,7 +1715,7 @@ async def test_fetch_consumer_records_custom_timeout(
         CONSUMER_GROUP,
         CONSUMER_INST,
     )
-    assert call.kwargs['max_records'] == 1048576
+    assert call.kwargs['max_bytes'] == 1048576
     # The time the request took so far comes off its wait
     assert 10000 - 500 < call.kwargs['timeout_ms'] <= 10000
 
@@ -1734,7 +1766,7 @@ async def test_commit_consumer_offsets_with_explicit_offsets(
     )
     call_kwargs = mock_consumer_service.commit_offsets.call_args[1]
     assert call_kwargs['offsets'] == [
-        {'topic': 't1', 'partition': 0, 'offset': 5},
+        {'topic': 't1', 'partition': 0, 'offset': 5, 'metadata': None},
     ]
 
 
@@ -2375,9 +2407,9 @@ def test_fetch_timeout_cap_is_documented(
 ) -> None:
     """The fetch timeout's description states the cap."""
     schema = mock_diaspora_service.app.openapi()
-    params = schema['paths'][
-        '/api/v3/{namespace}/consumers/{group_name}'
-        '/instances/{instance_id}/records'
-    ]['get']['parameters']
-    timeout = next(p for p in params if p['name'] == 'timeout')
-    assert '30000' in timeout['description']
+    for prefix in ('/api/v2/consumers', '/api/v3/{namespace}/consumers'):
+        params = schema['paths'][
+            f'{prefix}/{{group_name}}/instances/{{instance_id}}/records'
+        ]['get']['parameters']
+        timeout = next(p for p in params if p['name'] == 'timeout')
+        assert '30000' in timeout['description']

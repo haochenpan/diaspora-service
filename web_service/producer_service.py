@@ -65,8 +65,10 @@ READ_TIMEOUT_S = 20
 # Longest send() blocks waiting for topic metadata; no send starts with
 # less than this left of the request's time
 PRODUCER_MAX_BLOCK_MS = 10_000
-# Longest shutdown waits for records still in flight
-PRODUCER_CLOSE_TIMEOUT_S = 10
+# Longest shutdown waits for records still in flight: the consumer
+# instances' shutdown takes as long, at the same time, within the time
+# gunicorn leaves after uvicorn has waited for open requests
+PRODUCER_CLOSE_TIMEOUT_S = 8
 # How long produce requests fail at once after the producer could not be
 # built, before the next request tries again
 PRODUCER_BUILD_RETRY_S = 5
@@ -388,7 +390,7 @@ def _busy(reason: str) -> RecordError:
 # --- Parsing ---
 
 
-def _char_width(raw: bytes | bytearray) -> int:
+def char_width(raw: bytes | bytearray) -> int:
     r"""Bytes per character of the widest str that raw can decode to.
 
     CPython stores a str in 1, 2 or 4 bytes per character, by its widest
@@ -417,7 +419,7 @@ def estimate_parse_cost(raw: bytes | bytearray) -> int:
     (1e15 becomes 1000000000000000.0). The counts run at memchr speed and
     include bytes inside strings, so the bound is loose for text.
     """
-    width = _char_width(raw)
+    width = char_width(raw)
     length = len(raw)
     commas = raw.count(b',')
     # Each number ends at a comma or a closing bracket, so there are no

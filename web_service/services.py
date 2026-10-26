@@ -1178,7 +1178,8 @@ class NamespaceService:
             }
         return None
 
-    def generate_default(self, subject: str) -> str:
+    @staticmethod
+    def generate_default(subject: str) -> str:
         """Generate default namespace name from subject.
 
         Args:

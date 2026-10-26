@@ -50,12 +50,12 @@ records shared by all runs. With the live tests' own keys (see below),
 also set `IAM_USER_PERMISSIONS_BOUNDARY_ARN` to the boundary policy's ARN,
 or every test that creates an IAM user is denied.
 
-Their DynamoDB items go to the `test-diaspora-*` tables. Most live tests
-name those tables in code, but the live tests in
-`consumer_service_test.py` take the tables from `KEYS_TABLE_NAME`,
-`USERS_TABLE_NAME` and `NAMESPACE_TABLE_NAME` when these are set. Leave
-them unset, or set them to the test tables as `tests.yml` does, so that no
-test writes to the production tables.
+Their DynamoDB items go to the `test-diaspora-*` tables, which the live
+tests name in code. The live tests of the routes,
+`consumer_live_test.py` and `producer_live_test.py`, set
+`KEYS_TABLE_NAME`, `USERS_TABLE_NAME` and `NAMESPACE_TABLE_NAME` to the
+test tables before they start the app, so no test writes to the
+production tables.
 
 With coverage, over both sets:
 

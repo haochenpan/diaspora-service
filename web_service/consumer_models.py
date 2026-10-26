@@ -22,11 +22,19 @@ MAX_OFFSET = 2**63 - 2
 class CreateConsumerRequest(BaseModel):
     """Request body for POST /consumers/{group_name}."""
 
+    id: str | None = Field(
+        None,
+        description=(
+            "Deprecated in Confluent's REST Proxy; if set, the instance "
+            'name, in place of name.'
+        ),
+    )
     name: str | None = Field(
         None,
         description=(
-            'Consumer instance name, used in URLs. '
-            'Must be unique. Auto-generated if omitted.'
+            'Consumer instance name, used in URLs: 1 to 128 letters, '
+            'digits, dots, dashes or underscores, starting with a letter '
+            'or digit. Unique in the group. Generated if omitted.'
         ),
     )
     format: str = Field(
@@ -107,11 +115,18 @@ class SubscriptionRequest(BaseModel):
 
 
 class PartitionOffset(BaseModel):
-    """A topic-partition-offset triple."""
+    """A topic-partition-offset triple, with optional metadata."""
 
     topic: str = Field(min_length=1)
     partition: int = Field(ge=0, le=MAX_PARTITION)
     offset: int = Field(ge=0, le=MAX_OFFSET)
+    metadata: str | None = Field(
+        None,
+        description=(
+            'Stored with a committed offset, and returned by GET .../offsets. '
+            'A seek ignores it.'
+        ),
+    )
 
 
 class OffsetsCommitRequest(BaseModel):

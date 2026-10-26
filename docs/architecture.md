@@ -26,8 +26,9 @@ reads topics on one Amazon MSK cluster.
       namespace and topic records, through `DynamoDBService`.
     - `DynamoDBService` reads and writes the three tables.
     - `KafkaService` creates and deletes topics with a Kafka admin client.
-5. The consumer routes call `ConsumerService` in
-   `web_service/consumer_service.py`, which keeps Kafka consumers in
+5. The consumer routes, under `/api/v2/consumers` and their deprecated
+   aliases under `/api/v3/{namespace}/consumers`, call `ConsumerService`
+   in `web_service/consumer_service.py`, which keeps Kafka consumers in
    memory ([State in memory](#state-in-memory)).
 
 Calls to Globus, IAM, DynamoDB and Kafka block, so the handlers run them
@@ -143,8 +144,11 @@ the service finds it by the subject, the namespace, the group name and the
 instance ID. Only the subject that created an instance can use it. A
 background thread looks every 30 seconds for instances idle for longer
 than `CONSUMER_INSTANCE_TIMEOUT_MS` (5 minutes by default) and closes them.
-When the process stops, it closes them all. A subject may hold 4
-instances and the service 16.
+When the process stops, it closes them all at once, within 8 s in all.
+An instance created with `auto.commit.enable` set to `true` commits its
+positions before it closes, at a delete, at the reaper's close and at
+shutdown ([Instance lifecycle](web/api.md#instance-lifecycle)). A subject
+may hold 4 instances and the service 16.
 
 These limits bound the memory of the consumer routes:
 
@@ -158,8 +162,15 @@ These limits bound the memory of the consumer routes:
   to 8 MiB from each broker, decodes it and encodes the reply. A reply
   holds at most 2 MiB of JSON, except a first record larger than that,
   which is returned alone and written in chunks of about 256 KiB, so its
-  JSON (up to 48 MiB for 8 MiB of control characters) is never held
-  whole.
+  JSON (about 10.7 MiB for an 8 MiB record as base64, and up to 48 MiB
+  as the JSON string of 8 MiB of control characters) is never held whole.
+  Header values are written a piece at a time too.
+- A json instance checks that each key and value it returns is JSON, one
+  check at a time in the whole service. Before it checks, it estimates the
+  memory the check takes from the counts of the value's brackets, commas,
+  quotes and colons, and returns a value whose estimate is over 32 MiB as
+  text, without the check. In a test on macOS, the check of an 8 MiB array of empty
+  arrays took 180 MiB, which the bound refuses.
 
 The service's worst case on a cluster of two brokers adds up as follows.
 The measured numbers come from tests on macOS against one local broker;
@@ -171,10 +182,11 @@ the others are derived from the code.
 | Records fetched ahead by 16 instances, 8 MiB from each of 2 brokers | 256 MiB | Derived; one broker's 8 MiB per instance was measured |
 | 16 instances' clients, sockets and heartbeat threads | 16 MiB | Measured at 0.3 to 0.6 MiB each, rounded up to 1 MiB |
 | 3 fetches, each with an 8 MiB record from each of 2 brokers | 216 MiB | Measured at 71 MiB for one fetch whose broker returned two 8 MiB records |
+| One check that a json instance's key or value is JSON | 32 MiB | Derived from the estimate's bound |
 | The produce routes: one parse of up to 192 MiB, 48 MiB of bodies and records, and the producer's copies of those records | 288 MiB | Derived |
-| Total | 875 MiB | |
+| Total | 907 MiB | |
 
-That leaves about 150 MiB of the node's 1 GB. In the same tests, with
+That leaves about 117 MiB of the node's 1 GB. In the same tests, with
 12 idle instances holding 64 MiB of fetched-ahead records, 4 fetches of
 one 8 MiB record each raised the service from 99 MiB to 320 MiB as
 base64 and to 350 MiB as JSON of control characters.
