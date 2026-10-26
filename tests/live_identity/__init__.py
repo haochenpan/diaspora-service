@@ -30,6 +30,9 @@ import os
 # service, and the live tests, set on every IAM user they create.
 PERMISSIONS_BOUNDARY_ENV = 'IAM_USER_PERMISSIONS_BOUNDARY_ARN'
 
+# The path and name of that boundary policy (``boundary-policy.json``).
+BOUNDARY_POLICY = 'diaspora-test/test-user-boundary'
+
 SUBJECT_PREFIX = 'test-subject-test'
 NAMESPACE_PREFIX = 'ns-test'
 KAFKA_NAMESPACE_PREFIX = 'test-namespace-'
