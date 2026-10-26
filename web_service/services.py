@@ -12,6 +12,8 @@ import time
 from collections.abc import Callable
 from collections.abc import Mapping
 from collections.abc import Sequence
+from datetime import datetime
+from datetime import UTC
 from typing import Any
 
 import boto3
@@ -36,8 +38,23 @@ TOPIC_EXISTS_RETRY_DELAY_S = 2
 DEFAULT_MAX_TOPICS_PER_NAMESPACE = 50
 # The most versions IAM keeps of a managed policy
 MAX_POLICY_VERSIONS = 5
+# IAM can take a few seconds to list a key it just made, so a stored key
+# younger than this is returned without asking IAM whether it still holds it
+RECENT_KEY_S = 300
 
 logger = logging.getLogger(__name__)
+
+
+def _is_recent(create_date: str) -> bool:
+    """Whether a key made at create_date, an ISO time, is recent."""
+    try:
+        created = datetime.fromisoformat(create_date)
+    except TypeError, ValueError:
+        return False
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=UTC)
+    age = (datetime.now(UTC) - created).total_seconds()
+    return age < RECENT_KEY_S
 
 
 def parse_max_topics_per_namespace(value: str | None) -> int:
@@ -1802,7 +1819,9 @@ class WebService:
         a new access key and stores it. If the key stored in DynamoDB is
         still an active key in IAM, returns it without creating a new one
         (idempotent behavior). A stored key that IAM no longer holds is
-        replaced; when IAM does not answer, the stored key is returned.
+        replaced; when IAM does not answer, the stored key is returned. A
+        key made under RECENT_KEY_S ago is returned without asking IAM,
+        which can take a few seconds to list a new key.
 
         This method is atomic - concurrent calls are serialized using a
         global lock.
@@ -1820,9 +1839,9 @@ class WebService:
         with self._global_lock:
             # Return the stored key unless IAM says it is gone
             existing_key = self.namespace_service.dynamodb.get_key(subject)
-            if (
-                existing_key
-                and self.iam_service.has_access_key(
+            if existing_key and (
+                _is_recent(existing_key['create_date'])
+                or self.iam_service.has_access_key(
                     subject,
                     existing_key['access_key'],
                 )

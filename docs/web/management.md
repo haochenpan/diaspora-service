@@ -118,7 +118,7 @@ curl -X POST "https://diaspora-web-service.qpp943wkvr7b2.us-east-1.cs.amazonligh
 
 `POST /api/v3/key` returns the user's AWS access key and the cluster's endpoint:
 
-- If the service holds a key for the user and IAM still holds it as an active key, it returns that key, with `"fresh": false` and the message `Access key already exists for <subject>`. It creates nothing, so every call returns the same key until [`DELETE /api/v3/key`](#delete-key) deletes it. If IAM does not answer the check, it returns the stored key too.
+- If the service holds a key for the user and IAM still holds it as an active key, it returns that key, with `"fresh": false` and the message `Access key already exists for <subject>`. It creates nothing, so calls return the same key until [`DELETE /api/v3/key`](#delete-key) deletes it or it is deleted or deactivated in IAM. It returns the stored key without the check when the key is under 5 minutes old, since IAM can take a few seconds to list a new key, and when IAM does not answer the check.
 - Otherwise, as when the key was deleted or deactivated in IAM outside the service, it creates the user and the default namespace as [`POST /api/v3/user`](#create-user) does, deletes every access key the IAM user has, creates one, stores it, and returns it with `"fresh": true`.
 
 To replace a key, delete it and create one.

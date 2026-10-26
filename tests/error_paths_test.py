@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import logging
 import threading
+from datetime import datetime
+from datetime import UTC
 from unittest.mock import call
 from unittest.mock import MagicMock
 from unittest.mock import patch
@@ -2446,14 +2448,14 @@ def _key_service(holds_key: bool | None) -> tuple[WebService, MagicMock]:
     mock_iam.create_access_key.return_value = {
         'status': 'success',
         'access_key': 'NEWKEY',
-        'secret_key': 'new-secret',
+        'secret_key': 'new-secret',  # pragma: allowlist secret
         'create_date': '2026-10-26T00:00:00+00:00',
     }
     mock_namespace = MagicMock(spec=NamespaceService)
     mock_namespace.dynamodb = MagicMock()
     mock_namespace.dynamodb.get_key.return_value = {
         'access_key': 'OLDKEY',
-        'secret_key': 'old-secret',
+        'secret_key': 'old-secret',  # pragma: allowlist secret
         'create_date': '2026-01-01T00:00:00+00:00',
     }
     web_service = WebService(
@@ -2475,6 +2477,19 @@ def test_create_key_returns_the_stored_key(holds_key: bool | None) -> None:
     assert result['fresh'] is False
     mock_iam.has_access_key.assert_called_once_with('test-subject', 'OLDKEY')
     mock_iam.create_access_key.assert_not_called()
+
+
+def test_create_key_returns_a_recent_key_without_asking_iam() -> None:
+    """A key made seconds ago comes back even if IAM does not list it yet."""
+    web_service, mock_iam = _key_service(False)
+    stored = web_service.namespace_service.dynamodb.get_key.return_value
+    stored['create_date'] = datetime.now(UTC).isoformat()
+
+    result = web_service.create_key('test-subject')
+
+    assert result['access_key'] == 'OLDKEY'
+    assert result['fresh'] is False
+    mock_iam.has_access_key.assert_not_called()
 
 
 def test_create_key_replaces_a_key_iam_no_longer_holds() -> None:

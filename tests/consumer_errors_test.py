@@ -494,8 +494,7 @@ def test_token_audience_reason_is_not_echoed(
 ) -> None:
     service.auth.validate_access_token.return_value = {
         'status': 'error',
-        'reason': 'Not in the audience set. introspected = [x] '
-        'server_client_id = secret-id',
+        'reason': 'Not in the audience set.',
     }
     response = client.get(f'{_inst()}/records', headers=HEADERS)
     assert response.status_code == 401
