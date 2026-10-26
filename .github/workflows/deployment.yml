@@ -71,7 +71,7 @@ jobs:
           SERVICE_NAME: ${{ matrix.service_name }}
         continue-on-error: true
         run: |
-          aws lightsail create-container-service --region us-east-1 --service-name $SERVICE_NAME --power micro --scale 1
+          aws lightsail create-container-service --region us-east-1 --service-name "$SERVICE_NAME" --power micro --scale 1
 
       - name: Push Docker image to Lightsail and deploy
         env:
@@ -177,11 +177,12 @@ jobs:
           SERVICE_NAME: ${{ matrix.service_name }}
         continue-on-error: true
         run: |
-          # Keep the image of the active deployment and the image of the most
-          # recent inactive deployment (the rollback target); delete the rest.
+          # Keep the images of the active deployment, of any deployment still
+          # activating, and of the most recent inactive deployment (the
+          # rollback target); delete the rest.
           if ! deployments=$(aws lightsail get-container-service-deployments --region us-east-1 \
               --service-name "$SERVICE_NAME" \
-              --query 'deployments[].{version: version, state: state, image: containers.flask.image}' \
+              --query 'deployments[].{version: version, state: state, images: containers.*.image}' \
               --output json); then
             echo "::warning::Could not list deployments of $SERVICE_NAME; no images deleted"
             exit 0
@@ -192,11 +193,18 @@ jobs:
             exit 0
           fi
 
+          if jq -e '[.[] | select(.state == "ACTIVE" or .state == "ACTIVATING")
+                  | (.images // []) | length] | any(. == 0)' <<< "$deployments" > /dev/null; then
+            echo "::warning::A deployment of $SERVICE_NAME in use names no image; no images deleted"
+            exit 0
+          fi
+
           keep=$(jq -c '
               sort_by(.version) | reverse
-              | ([.[] | select(.state == "ACTIVE" or .state == "ACTIVATING") | .image]
-                 + ([.[] | select(.state == "INACTIVE") | .image] | .[:1]))
-              | map(select(. != null)) | unique' <<< "$deployments")
+              | ([.[] | select(.state == "ACTIVE" or .state == "ACTIVATING") | .images[]]
+                 + ([.[] | select(.state == "INACTIVE" and ((.images // []) | length) > 0)]
+                    | .[:1] | map(.images[])))
+              | unique' <<< "$deployments")
 
           if ! images=$(aws lightsail get-container-images --region us-east-1 \
               --service-name "$SERVICE_NAME" \
