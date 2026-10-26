@@ -1618,7 +1618,9 @@ def test_delete_key_iam_fails() -> None:
     mock_iam = MagicMock()
     mock_iam.delete_access_keys.return_value = {
         'status': 'failure',
-        'message': 'Failed to delete access keys: throttled',
+        'message': (
+            'Failed to delete access keys: IAM did not complete the request'
+        ),
     }
     mock_namespace = MagicMock(spec=NamespaceService)
     mock_namespace.dynamodb = MagicMock()
@@ -1632,7 +1634,7 @@ def test_delete_key_iam_fails() -> None:
 
     assert result['status'] == 'failure'
     assert 'Failed to delete IAM access keys' in result['message']
-    assert 'throttled' in result['message']
+    assert 'IAM did not complete the request' in result['message']
     mock_namespace.dynamodb.delete_key.assert_not_called()
 
 
@@ -1641,7 +1643,9 @@ def test_create_key_old_key_delete_fails() -> None:
     mock_iam = MagicMock()
     mock_iam.delete_access_keys.return_value = {
         'status': 'failure',
-        'message': 'Failed to delete access keys: throttled',
+        'message': (
+            'Failed to delete access keys: IAM did not complete the request'
+        ),
     }
     mock_namespace = MagicMock(spec=NamespaceService)
     mock_namespace.dynamodb = MagicMock()
