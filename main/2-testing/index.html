@@ -480,27 +480,27 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#testing-in-virtual-environment" class="md-nav__link">
+  <a href="#run-the-unit-tests-locally" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Testing in Virtual Environment
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Testing in Virtual Environment">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#web-service" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Web Service
+        Run the unit tests locally
       
     </span>
   </a>
   
 </li>
+      
+        <li class="md-nav__item">
+  <a href="#run-the-live-tests-locally" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Run the live tests locally
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Run the live tests locally">
+      <ul class="md-nav__list">
         
           <li class="md-nav__item">
   <a href="#run-tox" class="md-nav__link">
@@ -515,6 +515,17 @@
         
       </ul>
     </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-runs-in-ci" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What runs in CI
+      
+    </span>
+  </a>
   
 </li>
       
@@ -847,27 +858,27 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#testing-in-virtual-environment" class="md-nav__link">
+  <a href="#run-the-unit-tests-locally" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Testing in Virtual Environment
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Testing in Virtual Environment">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#web-service" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Web Service
+        Run the unit tests locally
       
     </span>
   </a>
   
 </li>
+      
+        <li class="md-nav__item">
+  <a href="#run-the-live-tests-locally" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Run the live tests locally
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Run the live tests locally">
+      <ul class="md-nav__list">
         
           <li class="md-nav__item">
   <a href="#run-tox" class="md-nav__link">
@@ -882,6 +893,17 @@
         
       </ul>
     </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-runs-in-ci" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What runs in CI
+      
+    </span>
+  </a>
   
 </li>
       
@@ -912,20 +934,115 @@
 
 
 <h1 id="testing">Testing<a class="headerlink" href="#testing" title="Permanent link">&para;</a></h1>
-<h2 id="testing-in-virtual-environment">Testing in Virtual Environment<a class="headerlink" href="#testing-in-virtual-environment" title="Permanent link">&para;</a></h2>
-<h3 id="web-service">Web Service<a class="headerlink" href="#web-service" title="Permanent link">&para;</a></h3>
-<p>To test the Web Service in a virtual environment, run:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>pytest<span class="w"> </span>tests/<span class="w"> </span>-vv<span class="w"> </span>-s
+<p>The tests come in two sets:</p>
+<ul>
+<li><strong>Unit tests</strong>: every test not marked <code>integration</code>. They mock or stub
+  AWS and Kafka and need no account, credentials or network. Any of them
+  that opens a network connection fails.</li>
+<li><strong>Live tests</strong>: the tests marked <code>integration</code>. They create real IAM
+  users, DynamoDB items and Kafka topics in the AWS account and on the MSK
+  cluster that the credentials point to, and delete them afterwards. Every
+  test in <code>db_service_test.py</code>, <code>iam_service_test.py</code>,
+  <code>kafka_service_test.py</code>, <code>namespace_service_test.py</code> and
+  <code>web_service_test.py</code> is marked <code>integration</code> by <code>tests/conftest.py</code>;
+  other files mark their live tests one by one.</li>
+</ul>
+<h2 id="run-the-unit-tests-locally">Run the unit tests locally<a class="headerlink" href="#run-the-unit-tests-locally" title="Permanent link">&para;</a></h2>
+<p>The service checks a few environment variables at import, so give it
+placeholders, and point the AWS SDK away from any credentials you have:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nv">AWS_CONFIG_FILE</span><span class="o">=</span>/dev/null<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nv">AWS_SHARED_CREDENTIALS_FILE</span><span class="o">=</span>/dev/null<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="nv">AWS_EC2_METADATA_DISABLED</span><span class="o">=</span><span class="nb">true</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="nv">AWS_ACCESS_KEY_ID</span><span class="o">=</span>dummy-not-real<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="nv">AWS_SECRET_ACCESS_KEY</span><span class="o">=</span>dummy-not-real<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="nv">SERVER_CLIENT_ID</span><span class="o">=</span><span class="m">00000000</span>-0000-0000-0000-000000000000<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="nv">SERVER_SECRET</span><span class="o">=</span>dummy-not-real<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="nv">AWS_ACCOUNT_ID</span><span class="o">=</span><span class="m">000000000000</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="nv">AWS_ACCOUNT_REGION</span><span class="o">=</span>us-east-1<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="nv">MSK_CLUSTER_NAME</span><span class="o">=</span>dummy<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>pytest<span class="w"> </span>tests/<span class="w"> </span>-m<span class="w"> </span><span class="s2">"not integration"</span>
 </span></code></pre></div>
-<p>With coverage:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>coverage<span class="w"> </span>erase
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>coverage<span class="w"> </span>run<span class="w"> </span>-m<span class="w"> </span>pytest<span class="w"> </span>tests/
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>coverage<span class="w"> </span>report
+<h2 id="run-the-live-tests-locally">Run the live tests locally<a class="headerlink" href="#run-the-live-tests-locally" title="Permanent link">&para;</a></h2>
+<p>The live tests need the service's environment variables with real values
+(AWS keys, <code>AWS_ACCOUNT_ID</code>, <code>AWS_ACCOUNT_REGION</code>, <code>MSK_CLUSTER_NAME</code>,
+<code>DEFAULT_SERVERS</code> and the Globus client settings):</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>pytest<span class="w"> </span>tests/<span class="w"> </span>-m<span class="w"> </span>integration<span class="w"> </span>-vv<span class="w"> </span>-s
+</span></code></pre></div>
+<p>They write to the account and the cluster the credentials point to. Do not
+run them while another live run is in progress: some tests assert on
+records shared by all runs.</p>
+<p>With coverage, over both sets:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>coverage<span class="w"> </span>erase
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>coverage<span class="w"> </span>run<span class="w"> </span>-m<span class="w"> </span>pytest<span class="w"> </span>tests/
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>coverage<span class="w"> </span>report
 </span></code></pre></div>
 <h3 id="run-tox">Run <code>tox</code><a class="headerlink" href="#run-tox" title="Permanent link">&para;</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nb">source</span><span class="w"> </span>secrets2.sh<span class="w">  </span><span class="c1"># pragma: allowlist secret</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>tox
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nb">source</span><span class="w"> </span>secrets2.sh<span class="w">  </span><span class="c1"># pragma: allowlist secret</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>tox
 </span></code></pre></div>
+<h2 id="what-runs-in-ci">What runs in CI<a class="headerlink" href="#what-runs-in-ci" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Workflow</th>
+<th>Job</th>
+<th>Tests</th>
+<th>When</th>
+<th>Secrets</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>tests.yml</code></td>
+<td><code>unit</code></td>
+<td>unit</td>
+<td>pull requests; pushes to <code>main</code>, <code>test-me-*</code> and tags; nightly; manual dispatch</td>
+<td>none</td>
+</tr>
+<tr>
+<td><code>tests.yml</code></td>
+<td><code>live</code></td>
+<td>live</td>
+<td>pushes to <code>main</code>, nightly, manual dispatch</td>
+<td>the service's AWS keys</td>
+</tr>
+<tr>
+<td><code>tests.yml</code></td>
+<td><code>sweep</code></td>
+<td>none</td>
+<td>nightly, after <code>live</code></td>
+<td>the service's AWS keys</td>
+</tr>
+<tr>
+<td><code>deployment.yml</code></td>
+<td><code>unit</code></td>
+<td>unit</td>
+<td>before every deploy</td>
+<td>none</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>The deploy job in <code>deployment.yml</code> waits for its <code>unit</code> job, so a failing
+  unit test on <code>main</code> stops the deploy.</li>
+<li>The <code>live</code> job never runs on pull requests or <code>test-me-*</code> pushes. A
+  manual dispatch runs the live tests of the branch it is dispatched on,
+  whichever branch that is.</li>
+<li><code>live</code> and <code>sweep</code> share the <code>live-tests</code> concurrency group, so no two
+  of them run at the same time. GitHub keeps only one pending run per
+  group: a run that is waiting can be cancelled by a newer one.</li>
+<li>After the nightly live run, unless it was cancelled, the <code>sweep</code> job
+  runs <code>scripts/sweep_test_resources.py --apply</code>. It deletes what earlier
+  live runs left behind: IAM users and policies named
+  <code>test-subject-&lt;16 hex&gt;</code> older than two hours, and Kafka topics named
+  <code>test-namespace-&lt;16 hex&gt;.test-topic-&lt;16 hex&gt;</code> or
+  <code>ns-&lt;12 hex&gt;.test-topic-&lt;suffix&gt;</code> (with the suffixes the tests use)
+  whose namespace the service has no record of and that is not the default
+  namespace of another IAM user. Kafka keeps no creation time for topics,
+  so topics are not filtered by age: a local live run around the nightly
+  time can lose its topics. Without <code>--apply</code> the script only lists what
+  it would delete.</li>
+</ul>
 
 
 
