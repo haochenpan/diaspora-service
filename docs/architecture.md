@@ -31,8 +31,10 @@ reads topics on one Amazon MSK cluster.
    memory ([State in memory](#state-in-memory)).
 
 Calls to Globus, IAM, DynamoDB and Kafka block, so the handlers run them
-in FastAPI's thread pool. On the event loop, they would stall every other
-request.
+in threads. On the event loop, they would stall every other request.
+Produce parsing and sends run at most 8 at once and consumer fetches at
+most 6, each with a limit of its own, since they hold the most memory.
+Every other blocking call shares a pool of 40 threads.
 
 The service reaches AWS with the key in `AWS_ACCESS_KEY_ID` and
 `AWS_SECRET_ACCESS_KEY`. Its Kafka clients connect to the brokers in
@@ -130,7 +132,9 @@ the service finds it by the subject, the namespace, the group name and the
 instance ID. Only the subject that created an instance can use it. A
 background thread looks every 30 seconds for instances idle for longer
 than `CONSUMER_INSTANCE_TIMEOUT_MS` (5 minutes by default) and closes them.
-When the process stops, it closes them all.
+When the process stops, it closes them all. A subject may hold 8
+instances and the service 100, which bounds the memory that idle
+instances and their fetches hold.
 
 `WebService` and `NamespaceService` each hold a lock. The lock in
 `WebService` serializes user and key operations, including the Kafka

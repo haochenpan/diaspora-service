@@ -152,7 +152,7 @@ The service holds at most 48 MiB of produce bodies and records at once, and at m
 
 The records' 30 s start once the body is read and parsed, and the records of a request share them to be acknowledged. A record not sent by then fails with 50003 and is not written; a record sent but not acknowledged by then fails with 50003 and may still be written. A 200 or a success in a 207 does not rule out a second copy either: the producer is not idempotent and retries a failed write within the 30 s, so a write that reached the cluster but whose acknowledgement was lost can be written twice. Consumers that need each record once should carry an id in the record and drop repeats.
 
-While the service cannot reach the Kafka cluster, it answers 503 for 5 s before it tries again, with `Retry-After` set to the seconds left. A topic that the namespace holds but the cluster does not list answers 404 once the cluster has answered twice without it and 2 s have passed (a topic just created can take a moment to reach every broker). The token, namespace and topic checks answer as on the consumer routes, with 401 or 404.
+While the service cannot reach the Kafka cluster, it answers 503 for 5 s before it tries again, with `Retry-After` set to the seconds left. A topic that the namespace holds but the cluster does not list answers 404 once the cluster has answered twice without it and 2 s have passed (a topic just created can take a moment to reach every broker). A failed token check answers 401 with `{"status": "error", "reason": ...}`, the body the user, key and topic routes give for it, and a namespace or topic not found answers 404 with 40401.
 
 | Code | Status | Meaning |
 | --- | --- | --- |
@@ -191,7 +191,7 @@ The routes follow Confluent's statuses and codes except where noted here.
 | More than one JSON value in a single-record body | Refused | Read as a stream of records | One request is one record; several go to `records:batch` |
 | Schema fields with type `BINARY`, `JSON` or `STRING` | Refused, 422 | Ignored | Without a schema registry the fields cannot mean what the client asked |
 | Payload errors in a record (a schema type or field, no type) | 422, `error_code` 42206 | 422, `error_code` 422 and `Error: 42206 : ...` in the message | The code where a client looks for it; Confluent already puts 42206 in `error_code` for an empty body and 42208 for an invalid batch, as here |
-| Token check failed | The consumer routes' 401 | 401 from the web server's HTTP authentication, without a Confluent error code; Confluent's 40101 is for a failed Kafka authentication | The same reply as the rest of Octopus |
+| Token check failed | 401 with `status` and `reason` | 401 from the web server's HTTP authentication, without a Confluent error code; Confluent's 40101 is for a failed Kafka authentication | The same body as the user, key and topic routes |
 | `partition_id` above 0 | 404, 40402, at once | Negative ids: 404, 40402. Ids past the partition count: the Kafka producer waits `max.block.ms`, then fails with "not present in metadata", which Confluent answers with 404, 40401 | Every topic has one partition, so the answer is known at once |
 | No key and no value | Refused, 400 | Sent | kafka-python cannot send it |
 | Null header value | Written empty | Written null | kafka-python cannot send a null header value |
@@ -234,3 +234,56 @@ curl -X DELETE "https://diaspora-web-service.qpp943wkvr7b2.us-east-1.cs.amazonli
 ```
 
 A consumer instance serves one request at a time. A request that waits more than 10 seconds for another request on the same instance returns 409 with error code 40904; retry it. The fetch `timeout` is capped at 30000 ms: a larger value waits 30000 ms.
+
+An instance returns records as `binary` (base64) or `json`, named in `format` in any case. Octopus runs no schema registry, so a create with `avro`, `jsonschema` or `protobuf` is refused with 422, as is any other format.
+
+Every topic has one partition, 0, and a request that names another partition is refused with 404. A seek or a commit with offsets takes only partitions assigned to the instance. A partition is assigned by `assignments`, or after a subscribe by the group once the instance has fetched. A seek or commit on any other partition is refused with 409. A seek to the beginning or end with an empty list seeks every assigned partition, and is refused with 409 if none is assigned. An instance either subscribes to topics or is assigned partitions: to switch, unsubscribe first, or the request is refused with 409.
+
+The consumer routes have these limits:
+
+- A user (`subject`) may hold 8 consumer instances, and the service 100 in all. A create past either is refused with 429. An instance stays until it is deleted, until it has been idle for `CONSUMER_INSTANCE_TIMEOUT_MS` (5 minutes by default), or until the service restarts.
+- A request may list at most as many topics, partitions or offsets as a namespace may hold topics (50, set by `MAX_TOPICS_PER_NAMESPACE`); a longer list is refused with 422. A request body may be 64 KiB; a larger one is refused with 413 before it is read.
+- A fetch asks the cluster for at most 1 MiB of records. A record larger than that still arrives, alone in its fetch, so a fetch can return one record of up to 8 MiB.
+- The service runs at most 6 fetches at once, and a fetch past those waits for one to finish. Under load, a reply can come later than its `timeout`.
+
+Every error reply of a consumer route is `{"error_code": <int>, "message": <str>}`. Error messages do not include Kafka's own error text.
+
+| Code | Status | Meaning |
+| --- | --- | --- |
+| 40002 | 400 | Kafka refused a topic name as invalid |
+| 40003 | 400 | The body is not valid JSON |
+| 40101 | 401 | The token check failed: the `subject` is not a UUID, or the token is malformed, inactive, another user's or without the scope |
+| 40301 | 403 | The service is not authorized for the topic or the consumer group |
+| 40401 | 404 | The namespace or topic is not found, in the namespace or in the cluster |
+| 40402 | 404 | A partition other than 0 |
+| 40403 | 404 | The consumer instance is not found |
+| 40902 | 409 | The group already has an instance of that name |
+| 40903 | 409 | A seek or commit on a partition not assigned to the instance, a subscribe while partitions are assigned or an assign while subscribed, or a commit the group refused because it rebalanced |
+| 40904 | 409 | Another request held the instance for more than 10 s; retry |
+| 41301 | 413 | The request body is over 64 KiB |
+| 422 | 422 | A header or field is missing or invalid, a list is too long, or the format is not `binary` or `json` |
+| 42204 | 422 | At create, `fetch.min.bytes` or `consumer.request.timeout.ms` is not a whole number or kafka-python refuses it; at subscribe, the list of topics is empty or `topic_pattern` is set |
+| 42901 | 429 | The user holds 8 instances or the service 100, or the cluster throttled the request |
+| 500 | 500 | An error inside the service |
+| 50002 | 500 | Kafka failed the request, or the service is shutting down or has no Kafka endpoint |
+| 50003 | 500 | A retriable Kafka error, or Kafka did not answer in time; retry |
+| 50302 | 503 | The service cannot reach the Kafka cluster; retry |
+
+#### Differences from Confluent's REST Proxy
+
+The consumer routes follow the statuses and codes of Confluent's REST Proxy v2 except where noted here.
+
+| Case | Octopus | Confluent | Why |
+| --- | --- | --- | --- |
+| Format `avro`, `jsonschema` or `protobuf` | Refused, 422, 422 | Decoded with a schema registry | Octopus runs no schema registry. Confluent refuses a format it does not know with 422, 422 |
+| Body not JSON | 400, 40003 | 400, 400 | The produce routes' code for the same case |
+| Body over 64 KiB | 413, 41301 | No limit of its own | It bounds the service's memory; the produce routes' code |
+| More than 8 instances for a user, or 100 in all | 429, 42901 | No limit | Each instance holds a Kafka client in the service's memory; 42901 is Confluent's code for too many requests |
+| A list longer than a namespace's topics | 422, 422 | No limit | A namespace holds no more topics, each with one partition, so a longer list names a topic or partition twice or one that does not exist |
+| Token check failed | 401, 40101 | 401 from the web server's HTTP authentication, without a Confluent error code; Confluent's 40101 is for a failed Kafka authentication | A code where a client looks for one |
+| The service fails to authenticate to Kafka | 500, 50002 | 401, 40101 | The credentials are the service's, not the caller's |
+| A commit the group refuses after a rebalance (`CommitFailedError`) | 409, 40903 | 500, 50002 | The client recovers by fetching again, then committing |
+| A commit for a partition not assigned to the instance | 409, 40903 | Passed to the Kafka consumer | The same answer as a seek on such a partition, which Confluent also answers with 409, 40903 |
+| A partition other than 0 | 404, 40402, at once | Passed to the Kafka consumer | Every topic has one partition |
+| Kafka reports an unknown topic or partition | 404, 40401 | 404, 40403 | Confluent also uses 40403 for an instance not found |
+| Most bytes a fetch asks for | 1 MiB | 50 MiB, the Kafka consumer's default `fetch.max.bytes` | With 50 MiB, one fetch from 50 topics took 128 MiB of memory in a test, and the service has 1 GB |
