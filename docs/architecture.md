@@ -86,14 +86,19 @@ service creates the user.
 | Kafka topic | `<namespace>.<topic>`, with 1 partition and replication factor 2 | `POST /api/v3/{namespace}/{topic}` | `DELETE /api/v3/{namespace}/{topic}`, `DELETE /api/v3/user` |
 | Kafka consumer group | `<namespace>.<group_name>` | the first consumer that joins it | not deleted by the service |
 
-The policy lets the IAM user connect to the cluster in `MSK_CLUSTER_NAME`;
-read and write the topics whose names start with the user's default
-namespace and a dot; and use any consumer group and transactional ID on
-the cluster. With the user's access key, a Kafka client therefore has the
-permissions to produce to and consume from the user's topics directly,
-without the service. When `IAM_USER_PERMISSIONS_BOUNDARY_ARN` is
-set, the service also sets the policy it names as the user's permissions
-boundary.
+The policy lets the IAM user connect to the cluster in `MSK_CLUSTER_NAME`,
+and use only the topics, consumer groups and transactional IDs whose names
+start with the user's default namespace and a dot. With the user's access
+key, a Kafka client can therefore produce to and consume from the user's
+topics directly, without the service, but its consumer group IDs and
+transactional IDs must have the same prefix, such as
+`ns-0123456789ab.workers`. The cluster refuses any other group or
+transactional ID with an authorization error, so no user can join,
+describe or commit offsets for another user's group, or fence another
+user's transactional producer. The consumer routes name their
+groups `<namespace>.<group_name>` and connect as the service, so this does
+not limit them. When `IAM_USER_PERMISSIONS_BOUNDARY_ARN` is set, the
+service also sets the policy it names as the user's permissions boundary.
 
 `POST /api/v3/key` returns the key stored for the user when the keys table
 holds one, with `fresh` set to `false`. Otherwise it creates the user and

@@ -143,11 +143,14 @@ class IAMService:
         subject_suffix = subject.replace('-', '')[-12:]
         base = f'{self.kafka_arn_prefix}'
         cluster = f'/{self.cluster_name}/*'
+        # Topics, consumer groups and transactional IDs are limited to
+        # names that start with the user's default namespace and a dot
+        namespace = f'ns-{subject_suffix}.*'
         resources = [
-            f'{base}:group{cluster}',
+            f'{base}:group{cluster}/{namespace}',
             f'{base}:cluster{cluster}',
-            f'{base}:transactional-id{cluster}',
-            f'{base}:topic{cluster}/ns-{subject_suffix}.*',
+            f'{base}:transactional-id{cluster}/{namespace}',
+            f'{base}:topic{cluster}/{namespace}',
         ]
         return {
             'Version': '2012-10-17',
