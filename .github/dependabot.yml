@@ -11,3 +11,9 @@ updates:
       github-actions:
         patterns:
           - "*"
+
+  - package-ecosystem: "docker"
+    directory: "/web_service"
+    schedule:
+      # Check for updates to the base image every month
+      interval: "monthly"
