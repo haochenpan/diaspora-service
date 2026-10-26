@@ -12,7 +12,7 @@
         <meta name="author" content="Haochen Pan">
       
       
-        <link rel="canonical" href="https://haochenpan.github.io/diaspora-service/main/3-deploying/">
+        <link rel="canonical" href="https://haochenpan.github.io/diaspora-service/latest/3-deploying/">
       
       
         <link rel="prev" href="../contributing/">
@@ -1548,6 +1548,13 @@ scale at 1.</p>
 instance. Clients then get <code>40403</code> and must create a new instance. A new
 instance in the same consumer group starts from the offsets the group last
 committed to Kafka.</p>
+<p>When the container gets SIGTERM, gunicorn gives the worker 30 s
+(<code>--graceful-timeout</code>) to stop and then kills it. The worker,
+<code>web_service.worker.Worker</code>, stops accepting connections and waits up to
+20 s for open requests, then cancels any still running. It then runs the
+service's shutdown, which closes the consumer instances and the producer
+in the remaining 10 s or so. A shutdown that takes longer is cut off when
+gunicorn kills the worker.</p>
 <h2 id="deploy-by-hand">Deploy by hand<a class="headerlink" href="#deploy-by-hand" title="Permanent link">&para;</a></h2>
 <h3 id="from-github">From GitHub<a class="headerlink" href="#from-github" title="Permanent link">&para;</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>gh<span class="w"> </span>workflow<span class="w"> </span>run<span class="w"> </span>deployment.yml<span class="w"> </span>--ref<span class="w"> </span>main
@@ -1580,7 +1587,8 @@ and clients and these docs use the current domain.</p>
 <li>
 <p>Build the image from the repository root. The Dockerfile pins
    <code>linux/amd64</code>, the platform Lightsail runs.</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>docker<span class="w"> </span>build<span class="w"> </span>-t<span class="w"> </span>docker<span class="w"> </span>-f<span class="w"> </span>web_service/Dockerfile<span class="w"> </span>.
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>docker<span class="w"> </span>build<span class="w"> </span>-t<span class="w"> </span>docker<span class="w"> </span>-f<span class="w"> </span>web_service/Dockerfile<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">    </span>--build-arg<span class="w"> </span><span class="nv">GIT_SHA</span><span class="o">=</span><span class="s2">"</span><span class="k">$(</span>git<span class="w"> </span>rev-parse<span class="w"> </span>HEAD<span class="k">)</span><span class="s2">"</span><span class="w"> </span>.
 </span></code></pre></div>
 </li>
 <li>

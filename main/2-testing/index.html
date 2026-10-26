@@ -12,7 +12,7 @@
         <meta name="author" content="Haochen Pan">
       
       
-        <link rel="canonical" href="https://haochenpan.github.io/diaspora-service/main/2-testing/">
+        <link rel="canonical" href="https://haochenpan.github.io/diaspora-service/latest/2-testing/">
       
       
         <link rel="prev" href="../1-running/">
@@ -1121,8 +1121,8 @@
   other files mark their live tests one by one.</li>
 </ul>
 <h2 id="run-the-unit-tests-locally">Run the unit tests locally<a class="headerlink" href="#run-the-unit-tests-locally" title="Permanent link">&para;</a></h2>
-<p>Install the dev extras first (<code>pip install -e ".[dev]"</code>, as in
-<a href="../1-running/#set-up">Running locally</a>). The service checks a few
+<p>Install the locked dependencies and dev tools first, as in
+<a href="../1-running/#set-up">Running locally</a>. The service checks a few
 environment variables at import, so give it placeholders, and point the
 AWS SDK away from any credentials you have:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nv">AWS_CONFIG_FILE</span><span class="o">=</span>/dev/null<span class="w"> </span><span class="se">\</span>
@@ -1190,6 +1190,13 @@ test writes to the production tables.</p>
 <td><code>unit</code></td>
 <td>unit</td>
 <td>before every deploy</td>
+<td>none</td>
+</tr>
+<tr>
+<td><code>image.yml</code></td>
+<td><code>image</code></td>
+<td>builds the image, starts it with placeholders, checks <code>/</code>, the version and the user, and checks that SIGTERM stops the container with exit code 0</td>
+<td>pull requests, manual dispatch</td>
 <td>none</td>
 </tr>
 </tbody>

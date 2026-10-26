@@ -12,7 +12,7 @@
         <meta name="author" content="Haochen Pan">
       
       
-        <link rel="canonical" href="https://haochenpan.github.io/diaspora-service/main/1-running/">
+        <link rel="canonical" href="https://haochenpan.github.io/diaspora-service/latest/1-running/">
       
       
         <link rel="prev" href="../architecture/">
@@ -1202,14 +1202,18 @@ rejects the placeholder client credentials, so they get <code>500</code>
 (<a href="../architecture/#authentication">Authentication</a> lists the other
 answers).</p>
 <h2 id="set-up">Set up<a class="headerlink" href="#set-up" title="Permanent link">&para;</a></h2>
-<p>The service needs Python 3.10 to 3.14. CI runs 3.14, and the container image
-runs 3.11. A full local run also needs AWS keys for the service's account
-and the ID and secret of the service's Globus confidential client. Without
-them, you can run the unit tests and start the service with placeholders.</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>python<span class="w"> </span>-m<span class="w"> </span>venv<span class="w"> </span>.venv
+<p>The service needs Python 3.14, which CI and the container image run. A
+full local run also needs AWS keys for the service's account and the ID
+and secret of the service's Globus confidential client. Without them, you
+can run the unit tests and start the service with placeholders.</p>
+<p>Install the locked dependencies, the service and the locked dev tools, as
+CI does (<a href="../contributing/#dependencies">Dependencies</a>):</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>python3.14<span class="w"> </span>-m<span class="w"> </span>venv<span class="w"> </span>.venv
 </span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>.<span class="w"> </span>.venv/bin/activate
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span><span class="s2">".[dev]"</span>
-</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>cp<span class="w"> </span>.env.example<span class="w"> </span>.env
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>pip<span class="w"> </span>install<span class="w"> </span>-r<span class="w"> </span>requirements.txt
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>pip<span class="w"> </span>install<span class="w"> </span>--no-deps<span class="w"> </span>-e<span class="w"> </span>.
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>pip<span class="w"> </span>install<span class="w"> </span>-r<span class="w"> </span>requirements-dev.txt<span class="w"> </span>-c<span class="w"> </span>requirements.txt
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>cp<span class="w"> </span>.env.example<span class="w"> </span>.env
 </span></code></pre></div>
 <p>The required values are keys for the production service's AWS account
 and the production service's Globus client, so read
@@ -1222,7 +1226,7 @@ takes every value literally.</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="o">(</span><span class="nb">set</span><span class="w"> </span>-a<span class="p">;</span><span class="w"> </span>.<span class="w"> </span>./.env<span class="p">;</span><span class="w"> </span><span class="nb">set</span><span class="w"> </span>+a<span class="p">;</span><span class="w"> </span><span class="nb">exec</span><span class="w"> </span>uvicorn<span class="w"> </span>web_service.main:app<span class="w"> </span>--port<span class="w"> </span><span class="m">8000</span><span class="w"> </span>--reload<span class="o">)</span>
 </span></code></pre></div>
 <p>As the container runs it, with gunicorn and one Uvicorn worker:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="o">(</span><span class="nb">set</span><span class="w"> </span>-a<span class="p">;</span><span class="w"> </span>.<span class="w"> </span>./.env<span class="p">;</span><span class="w"> </span><span class="nb">set</span><span class="w"> </span>+a<span class="p">;</span><span class="w"> </span><span class="nb">exec</span><span class="w"> </span>gunicorn<span class="w"> </span>--bind<span class="w"> </span><span class="m">127</span>.0.0.1:8000<span class="w"> </span>-k<span class="w"> </span>uvicorn.workers.UvicornWorker<span class="w"> </span>web_service.main:app<span class="o">)</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="o">(</span><span class="nb">set</span><span class="w"> </span>-a<span class="p">;</span><span class="w"> </span>.<span class="w"> </span>./.env<span class="p">;</span><span class="w"> </span><span class="nb">set</span><span class="w"> </span>+a<span class="p">;</span><span class="w"> </span><span class="nb">exec</span><span class="w"> </span>gunicorn<span class="w"> </span>--bind<span class="w"> </span><span class="m">127</span>.0.0.1:8000<span class="w"> </span>-k<span class="w"> </span>web_service.worker.Worker<span class="w"> </span>--graceful-timeout<span class="w"> </span><span class="m">30</span><span class="w"> </span>web_service.main:app<span class="o">)</span>
 </span></code></pre></div>
 <p>The parentheses run each command in a subshell, so the values from <code>.env</code>
 stay out of your shell. Run one worker only: the service keeps consumer
@@ -1236,7 +1240,11 @@ value of either in your shell can change the number of workers.</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>docker<span class="w"> </span>build<span class="w"> </span>-t<span class="w"> </span>diaspora-service<span class="w"> </span>-f<span class="w"> </span>web_service/Dockerfile<span class="w"> </span>.
 </span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>-p<span class="w"> </span><span class="m">127</span>.0.0.1:8000:8000<span class="w"> </span>--env-file<span class="w"> </span>.env<span class="w"> </span>diaspora-service
 </span></code></pre></div>
-<p>The Dockerfile pins the platform <code>linux/amd64</code>, which Lightsail runs.</p>
+<p>The Dockerfile pins the platform <code>linux/amd64</code>, which Lightsail runs. The
+image runs the service as a user other than root. To have the service
+report the commit in its version, as deployed images do, add
+<code>--build-arg GIT_SHA="$(git rev-parse HEAD)"</code> to <code>docker build</code>
+(<a href="../contributing/#releases">Releases</a>).</p>
 <h2 id="call-the-api">Call the API<a class="headerlink" href="#call-the-api" title="Permanent link">&para;</a></h2>
 <p>Every API route needs two headers: <code>subject</code>, the caller's Globus identity ID,
 and <code>authorization</code>, a Globus bearer token. The service accepts a token
