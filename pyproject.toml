@@ -56,8 +56,6 @@ dev = [
     "pytest-cov",
     "pytest-mock",
     "ruff>=0.2.0",
-    "tox",
-    "virtualenv",
 ]
 docs = [
     "black",
