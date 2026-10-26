@@ -247,7 +247,7 @@ Every topic has one partition, 0, and a request that names another partition is 
 
 The consumer routes have these limits:
 
-- A user (`subject`) may hold 8 consumer instances, and the service 16 in all. A create past either is refused with 429. An instance stays until it is deleted, until it has been idle for `CONSUMER_INSTANCE_TIMEOUT_MS` (5 minutes by default), or until the service restarts.
+- A user (`subject`) may hold 4 consumer instances, and the service 16 in all. A create past either is refused with 429. An instance stays until it is deleted, until it has been idle for `CONSUMER_INSTANCE_TIMEOUT_MS` (5 minutes by default), or until the service restarts.
 - A request may list at most as many topics, partitions or offsets as a namespace may hold topics (50, set by `MAX_TOPICS_PER_NAMESPACE`); a longer list is refused with 422. A request body may be 64 KiB; a larger one is refused with 413 before it is read.
 - A fetch asks each broker for at most 1 MiB of records. A broker still returns a first record larger than that, so a fetch can read a record of up to 8 MiB from each broker.
 - A reply holds at most 2 MiB of JSON. The records past that are left for the next fetch, which returns them first. A fetch always returns its first record, however large: a reply over 2 MiB holds that record alone and is sent in chunks, without a `Content-Length`.
@@ -271,7 +271,7 @@ Every error reply of a consumer route is `{"error_code": <int>, "message": <str>
 | 41301 | 413 | The request body is over 64 KiB |
 | 422 | 422 | A header or field is missing or invalid, a list is too long, or the format is not `binary` or `json` |
 | 42204 | 422 | At create, a setting breaks its rule above; at subscribe, the list of topics is empty or `topic_pattern` is set |
-| 42901 | 429 | The user holds 8 instances or the service 16, the user has 2 fetches in progress, no fetch turn came within the fetch's wait, or the cluster throttled the request |
+| 42901 | 429 | The user holds 4 instances or the service 16, the user has 2 fetches in progress, no fetch turn came within the fetch's wait, or the cluster throttled the request |
 | 500 | 500 | An error inside the service |
 | 50002 | 500 | Kafka failed the request, or the service has no Kafka endpoint |
 | 50003 | 500 | A retriable Kafka error, or Kafka did not answer in time; retry |
@@ -287,7 +287,7 @@ The consumer routes follow the statuses and codes of Confluent's REST Proxy v2 e
 | Format `avro`, `jsonschema` or `protobuf` | Refused, 422, 422 | Decoded with a schema registry | Octopus runs no schema registry. Confluent refuses a format it does not know with 422, 422 |
 | Body not JSON | 400, 40003 | 400, 400 | The produce routes' code for the same case |
 | Body over 64 KiB | 413, 41301 | No limit of its own | It bounds the service's memory; the produce routes' code |
-| More than 8 instances for a user, or 16 in all | 429, 42901 | No limit | Each instance holds a Kafka client in the service's memory; 42901 is Confluent's code for too many requests |
+| More than 4 instances for a user, or 16 in all | 429, 42901 | No limit | Each instance holds a Kafka client in the service's memory; 42901 is Confluent's code for too many requests |
 | A list longer than a namespace's topics | 422, 422 | No limit | A namespace holds no more topics, each with one partition, so a longer list names a topic or partition twice or one that does not exist |
 | Token check failed | 401, 40101 | 401 from the web server's HTTP authentication, without a Confluent error code; Confluent's 40101 is for a failed Kafka authentication | A code where a client looks for one |
 | The service fails to authenticate to Kafka | 500, 50002 | 401, 40101 | The credentials are the service's, not the caller's |

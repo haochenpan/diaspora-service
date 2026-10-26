@@ -81,7 +81,7 @@ REPLY_MAX_BYTES = 2 * 1024 * 1024
 # pausing the instance's partitions does not drop it. 16 instances on two
 # brokers can hold 256 MiB this way; see the consumer routes' memory in
 # docs/architecture.md.
-MAX_INSTANCES_PER_SUBJECT = 8
+MAX_INSTANCES_PER_SUBJECT = 4
 MAX_INSTANCES = 16
 # Fetch wait when neither the fetch nor the instance names one, and the
 # longest either may name

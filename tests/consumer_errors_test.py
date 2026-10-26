@@ -169,7 +169,7 @@ def test_instances_are_built_with_the_fetch_limits(
     assert built[0]['max_partition_fetch_bytes'] == MAX_PARTITION_FETCH_BYTES
 
 
-def test_a_subject_may_hold_eight_instances(client: TestClient) -> None:
+def test_a_subject_may_hold_four_instances(client: TestClient) -> None:
     for i in range(MAX_INSTANCES_PER_SUBJECT):
         assert _create(client, f'i{i}').status_code == 200
     response = _create(client, 'one-more')

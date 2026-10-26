@@ -132,7 +132,7 @@ the service finds it by the subject, the namespace, the group name and the
 instance ID. Only the subject that created an instance can use it. A
 background thread looks every 30 seconds for instances idle for longer
 than `CONSUMER_INSTANCE_TIMEOUT_MS` (5 minutes by default) and closes them.
-When the process stops, it closes them all. A subject may hold 8
+When the process stops, it closes them all. A subject may hold 4
 instances and the service 16.
 
 These limits bound the memory of the consumer routes:
