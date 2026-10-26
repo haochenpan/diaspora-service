@@ -196,9 +196,11 @@ class IAMService:
             subject: User subject ID
 
         Returns:
-            Dictionary with status (success/failure) and message
+            Dictionary with status (success/failure) and message; on
+            success, created says whether this call created the user
         """
         try:
+            created = False
             with contextlib.suppress(
                 self.iam.exceptions.EntityAlreadyExistsException,
             ):
@@ -213,6 +215,7 @@ class IAMService:
                         Path='/msk-users/',
                         UserName=subject,
                     )
+                created = True
 
             with contextlib.suppress(
                 self.iam.exceptions.EntityAlreadyExistsException,
@@ -236,6 +239,7 @@ class IAMService:
             return {
                 'status': 'success',
                 'message': f'User and policy created for {subject}',
+                'created': created,
             }
         except Exception as e:
             return _iam_failure('create user and policy', e)
@@ -400,6 +404,30 @@ class IAMService:
             }
         except Exception as e:
             return _iam_failure('create access key', e)
+
+    def has_access_key(self, subject: str, access_key_id: str) -> bool | None:
+        """Whether IAM holds the user's access key, and it is active.
+
+        Args:
+            subject: User subject ID
+            access_key_id: The key's ID
+
+        Returns:
+            True or False, or None when IAM did not answer
+        """
+        try:
+            keys = self.iam.list_access_keys(
+                UserName=subject,
+            )['AccessKeyMetadata']
+        except self.iam.exceptions.NoSuchEntityException:
+            return False
+        except Exception as e:
+            logger.warning('Failed to list access keys: %r', e)
+            return None
+        return any(
+            key['AccessKeyId'] == access_key_id and key['Status'] == 'Active'
+            for key in keys
+        )
 
     def delete_access_keys(self, subject: str) -> dict[str, Any]:
         """Delete all access keys for a user.
@@ -1643,9 +1671,10 @@ class WebService:
             namespace,
         )
         if namespace_result['status'] != 'success':
-            # If namespace creation fails, try to clean up IAM user
-            with contextlib.suppress(Exception):
-                self.iam_service.delete_user_and_policy(subject)
+            # Undo only an IAM user this call created
+            if iam_result.get('created'):
+                with contextlib.suppress(Exception):
+                    self.iam_service.delete_user_and_policy(subject)
             return {
                 'status': 'failure',
                 'message': (
@@ -1770,8 +1799,10 @@ class WebService:
         """Create an access key for a user.
 
         Creates user and namespace if they don't exist, then creates
-        a new access key and stores it. If a key already exists in DynamoDB,
-        returns it without creating a new one (idempotent behavior).
+        a new access key and stores it. If the key stored in DynamoDB is
+        still an active key in IAM, returns it without creating a new one
+        (idempotent behavior). A stored key that IAM no longer holds is
+        replaced; when IAM does not answer, the stored key is returned.
 
         This method is atomic - concurrent calls are serialized using a
         global lock.
@@ -1787,9 +1818,16 @@ class WebService:
         """
         # Use global lock to ensure atomicity
         with self._global_lock:
-            # Check if key already exists in DynamoDB (fast path)
+            # Return the stored key unless IAM says it is gone
             existing_key = self.namespace_service.dynamodb.get_key(subject)
-            if existing_key:
+            if (
+                existing_key
+                and self.iam_service.has_access_key(
+                    subject,
+                    existing_key['access_key'],
+                )
+                is not False
+            ):
                 return {
                     'status': 'success',
                     'message': f'Access key already exists for {subject}',

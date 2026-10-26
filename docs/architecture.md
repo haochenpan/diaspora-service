@@ -79,9 +79,9 @@ service creates the user.
 
 | Resource | Name | Created by | Deleted by |
 | --- | --- | --- | --- |
-| IAM user | the subject, under the path `/msk-users/` | `POST /api/v3/user`, or `POST /api/v3/key` when the keys table holds no key for the user | `DELETE /api/v3/user` |
+| IAM user | the subject, under the path `/msk-users/` | `POST /api/v3/user`, or `POST /api/v3/key` when the keys table holds no key that IAM still holds | `DELETE /api/v3/user` |
 | IAM managed policy, attached to the user | the subject, under the path `/msk-policy/` | the same as the user | `DELETE /api/v3/user` |
-| IAM access key | chosen by IAM | `POST /api/v3/key` | `POST /api/v3/key` when the keys table holds no key for the user, `DELETE /api/v3/key`, `DELETE /api/v3/user` |
+| IAM access key | chosen by IAM | `POST /api/v3/key` | `POST /api/v3/key` when the keys table holds no key that IAM still holds, `DELETE /api/v3/key`, `DELETE /api/v3/user` |
 | Default namespace | `ns-` and the last 12 characters of the subject without dashes | the same as the user | `DELETE /api/v3/user` |
 | Kafka topic | `<namespace>.<topic>`, with 1 partition and replication factor 2 | `POST /api/v3/{namespace}/{topic}` | `DELETE /api/v3/{namespace}/{topic}`, `DELETE /api/v3/user` |
 | Kafka consumer group | `<namespace>.<group_name>` | the first consumer that joins it | not deleted by the service |
@@ -106,7 +106,8 @@ brings the other users' policies up to date
 ([Update the users' IAM](5-runbook.md#update-the-users-iam)).
 
 `POST /api/v3/key` returns the key stored for the user when the keys table
-holds one, with `fresh` set to `false`. Otherwise it creates the user and
+holds one that IAM still holds as an active key, or when IAM does not
+answer the check, with `fresh` set to `false`. Otherwise it creates the user and
 the default namespace if they are missing, deletes every access key the IAM
 user holds, creates a new key, stores it, and returns it with `fresh` set
 to `true`. Both answers include `endpoint`, the value of `DEFAULT_SERVERS`.

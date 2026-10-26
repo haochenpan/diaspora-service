@@ -758,6 +758,7 @@ def test_create_user_namespace_fails_cleanup() -> None:
     iam_service.create_user_and_policy.return_value = {
         'status': 'success',
         'message': 'User created',
+        'created': True,
     }
     iam_service.delete_user_and_policy.return_value = {
         'status': 'success',
@@ -1277,6 +1278,7 @@ def test_create_user_namespace_already_exists() -> None:
     mock_iam.create_user_and_policy.return_value = {
         'status': 'success',
         'message': 'User created',
+        'created': True,
     }
 
     mock_namespace = MagicMock(spec=NamespaceService)
@@ -1299,6 +1301,65 @@ def test_create_user_namespace_already_exists() -> None:
     assert 'Failed to create namespace' in result['message']
     # Should attempt to clean up IAM user
     mock_iam.delete_user_and_policy.assert_called_once_with('test-subject')
+
+
+def test_create_user_keeps_an_iam_user_it_did_not_create() -> None:
+    """A taken namespace leaves an IAM user that existed before alone."""
+    mock_iam = MagicMock()
+    mock_iam.create_user_and_policy.return_value = {
+        'status': 'success',
+        'message': 'User and policy created for test-subject',
+        'created': False,
+    }
+    mock_namespace = MagicMock(spec=NamespaceService)
+    mock_namespace.generate_default.return_value = 'ns-test123'
+    mock_namespace.create_namespace.return_value = {
+        'status': 'failure',
+        'message': 'Namespace already taken: ns-test123',
+    }
+    web_service = WebService(
+        iam_service=mock_iam,
+        kafka_service=MagicMock(),
+        namespace_service=mock_namespace,
+    )
+
+    result = web_service.create_user('test-subject')
+
+    assert result['status'] == 'failure'
+    mock_iam.delete_user_and_policy.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ('user_exists', 'created'),
+    ((False, True), (True, False)),
+)
+def test_create_user_and_policy_says_whether_it_created_the_user(
+    user_exists: bool,
+    created: bool,
+) -> None:
+    """The created flag is False when the IAM user already existed."""
+    iam_service = IAMService(
+        account_id='123456789012',
+        region='us-east-1',
+        cluster_name='test-cluster',
+    )
+    exists = iam_service.iam.exceptions.EntityAlreadyExistsException(
+        {'Error': {'Code': 'EntityAlreadyExists'}},
+        'CreateUser',
+    )
+    with (
+        patch.object(
+            iam_service.iam,
+            'create_user',
+            side_effect=exists if user_exists else None,
+        ),
+        patch.object(iam_service.iam, 'create_policy'),
+        patch.object(iam_service.iam, 'attach_user_policy'),
+    ):
+        result = iam_service.create_user_and_policy('test-subject')
+
+    assert result['status'] == 'success'
+    assert result['created'] is created
 
 
 def test_delete_user_partial_failures() -> None:
@@ -2317,3 +2378,122 @@ def test_create_key_creating_the_user_does_not_deadlock() -> None:
     # Both locks are free afterwards
     assert not web_service._global_lock.locked()
     assert not namespace_service._global_lock.locked()
+
+
+@pytest.mark.parametrize(
+    ('key_id', 'status', 'expected'),
+    (
+        ('TESTKEYID00000000001', 'Active', True),
+        ('TESTKEYID00000000001', 'Inactive', False),
+        ('TESTKEYID00000000009', 'Active', False),
+    ),
+)
+def test_has_access_key(key_id: str, status: str, expected: bool) -> None:
+    """has_access_key is True only for the user's active key."""
+    iam_service = IAMService(
+        account_id='123456789012',
+        region='us-east-1',
+        cluster_name='test-cluster',
+    )
+    with Stubber(iam_service.iam) as stubber:
+        stubber.add_response(
+            'list_access_keys',
+            {
+                'AccessKeyMetadata': [
+                    {
+                        'UserName': 'test-user',
+                        'AccessKeyId': 'TESTKEYID00000000001',
+                        'Status': status,
+                    },
+                ],
+            },
+            {'UserName': 'test-user'},
+        )
+        assert iam_service.has_access_key('test-user', key_id) is expected
+
+
+@pytest.mark.parametrize(
+    ('code', 'expected'),
+    (('NoSuchEntity', False), ('ServiceFailure', None)),
+)
+def test_has_access_key_when_iam_refuses(
+    code: str,
+    expected: bool | None,
+) -> None:
+    """A missing user has no key; any other IAM error answers None."""
+    iam_service = IAMService(
+        account_id='123456789012',
+        region='us-east-1',
+        cluster_name='test-cluster',
+    )
+    with Stubber(iam_service.iam) as stubber:
+        stubber.add_client_error(
+            'list_access_keys',
+            service_error_code=code,
+            expected_params={'UserName': 'test-user'},
+        )
+        assert (
+            iam_service.has_access_key('test-user', 'TESTKEYID00000000001')
+            is expected
+        )
+
+
+def _key_service(holds_key: bool | None) -> tuple[WebService, MagicMock]:
+    """A WebService whose stored key IAM holds, lacks, or can't check."""
+    mock_iam = MagicMock()
+    mock_iam.has_access_key.return_value = holds_key
+    mock_iam.delete_access_keys.return_value = {'status': 'success'}
+    mock_iam.create_access_key.return_value = {
+        'status': 'success',
+        'access_key': 'NEWKEY',
+        'secret_key': 'new-secret',
+        'create_date': '2026-10-26T00:00:00+00:00',
+    }
+    mock_namespace = MagicMock(spec=NamespaceService)
+    mock_namespace.dynamodb = MagicMock()
+    mock_namespace.dynamodb.get_key.return_value = {
+        'access_key': 'OLDKEY',
+        'secret_key': 'old-secret',
+        'create_date': '2026-01-01T00:00:00+00:00',
+    }
+    web_service = WebService(
+        iam_service=mock_iam,
+        kafka_service=MagicMock(),
+        namespace_service=mock_namespace,
+    )
+    return web_service, mock_iam
+
+
+@pytest.mark.parametrize('holds_key', (True, None))
+def test_create_key_returns_the_stored_key(holds_key: bool | None) -> None:
+    """The stored key comes back if IAM holds it or does not answer."""
+    web_service, mock_iam = _key_service(holds_key)
+
+    result = web_service.create_key('test-subject')
+
+    assert result['access_key'] == 'OLDKEY'
+    assert result['fresh'] is False
+    mock_iam.has_access_key.assert_called_once_with('test-subject', 'OLDKEY')
+    mock_iam.create_access_key.assert_not_called()
+
+
+def test_create_key_replaces_a_key_iam_no_longer_holds() -> None:
+    """A stored key deleted in IAM is replaced by a new one."""
+    web_service, mock_iam = _key_service(False)
+
+    with patch.object(
+        web_service,
+        '_create_user',
+        return_value={'status': 'success', 'message': 'User created'},
+    ):
+        result = web_service.create_key('test-subject')
+
+    assert result['access_key'] == 'NEWKEY'
+    assert result['fresh'] is True
+    mock_iam.delete_access_keys.assert_called_once_with('test-subject')
+    web_service.namespace_service.dynamodb.store_key.assert_called_once_with(
+        subject='test-subject',
+        access_key='NEWKEY',
+        secret_key='new-secret',
+        create_date='2026-10-26T00:00:00+00:00',
+    )
