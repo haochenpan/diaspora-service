@@ -94,7 +94,10 @@ jobs:
         run: |
           git config --local user.name "GitHub Actions Bot"
           git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+      # main's docs go under /main/, with latest as an alias of main; the
+      # site's root redirects to latest, where the canonical links point
       - name: Deploy docs for main:latest to gh-pages branch
         run: |
           mike deploy --push --update-aliases main
           mike alias --push main latest
+          mike set-default --push latest

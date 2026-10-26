@@ -64,6 +64,11 @@ theme:
 
 plugins:
   - search
+  # mike deploys each version under /<version>/ and adds that to
+  # site_url. Point canonical links and the sitemap at the latest alias,
+  # which always holds the docs of main.
+  - mike:
+      canonical_version: latest
 
 watch:
   - mkdocs.yml
