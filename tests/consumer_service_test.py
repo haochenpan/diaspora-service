@@ -15,6 +15,7 @@ from unittest.mock import MagicMock
 from unittest.mock import patch
 
 import pytest
+from kafka.errors import KafkaError
 from kafka.errors import KafkaTimeoutError
 from kafka.structs import OffsetAndMetadata
 from kafka.structs import TopicPartition
@@ -374,7 +375,7 @@ def test_create_consumer_kafka_exception(
     with patch(
         'web_service.consumer_service.KafkaConsumer',
     ) as mock_kc_class:
-        mock_kc_class.side_effect = Exception('Connection refused')
+        mock_kc_class.side_effect = KafkaError('Connection refused')
         body, status = consumer_service.create_consumer(
             subject=SUBJECT,
             namespace=NAMESPACE,
@@ -382,8 +383,10 @@ def test_create_consumer_kafka_exception(
             name='fail-inst',
         )
     assert status == 500
-    assert body['error_code'] == 50002
-    assert 'Failed to create consumer' in body['message']
+    assert body == {
+        'error_code': 50002,
+        'message': 'Failed to create consumer: Kafka error (KafkaError)',
+    }
 
 
 def test_create_consumer_optional_params(
@@ -563,7 +566,7 @@ def test_subscribe_kafka_exception(
     mock_kafka_consumer: MagicMock,
 ) -> None:
     """Test subscribe handles KafkaConsumer.subscribe failure."""
-    mock_kafka_consumer.subscribe.side_effect = Exception('Subscribe failed')
+    mock_kafka_consumer.subscribe.side_effect = KafkaError('Subscribe failed')
     body, status = populated_service.subscribe(
         SUBJECT,
         NAMESPACE,
@@ -691,7 +694,7 @@ def test_unsubscribe_kafka_exception(
     mock_kafka_consumer: MagicMock,
 ) -> None:
     """Test unsubscribe handles exception."""
-    mock_kafka_consumer.unsubscribe.side_effect = Exception('Unsub failed')
+    mock_kafka_consumer.unsubscribe.side_effect = KafkaError('Unsub failed')
     body, status = populated_service.unsubscribe(
         SUBJECT,
         NAMESPACE,
@@ -796,7 +799,7 @@ def test_poll_records_kafka_exception(
     mock_kafka_consumer: MagicMock,
 ) -> None:
     """Test poll_records handles poll() failure."""
-    mock_kafka_consumer.poll.side_effect = Exception('Poll failed')
+    mock_kafka_consumer.poll.side_effect = KafkaError('Poll failed')
     body, status = populated_service.poll_records(
         SUBJECT,
         NAMESPACE,
@@ -866,6 +869,9 @@ def test_commit_offsets_with_explicit_offsets(
     mock_kafka_consumer: MagicMock,
 ) -> None:
     """Test commit_offsets with explicit offset list."""
+    mock_kafka_consumer.assignment.return_value = {
+        TopicPartition(f'{NAMESPACE}.t1', 0),
+    }
     offsets = [{'topic': 't1', 'partition': 0, 'offset': 42}]
     body, status = populated_service.commit_offsets(
         SUBJECT,
@@ -879,7 +885,7 @@ def test_commit_offsets_with_explicit_offsets(
     call_kwargs = mock_kafka_consumer.commit.call_args[1]
     tp = TopicPartition(f'{NAMESPACE}.t1', 0)
     assert tp in call_kwargs['offsets']
-    assert call_kwargs['offsets'][tp] == OffsetAndMetadata(42, None, None)
+    assert call_kwargs['offsets'][tp] == OffsetAndMetadata(42, '', -1)
     assert call_kwargs['timeout_ms'] == CONSUMER_OPERATION_TIMEOUT_MS
 
 
@@ -921,7 +927,7 @@ def test_commit_offsets_kafka_exception(
     mock_kafka_consumer: MagicMock,
 ) -> None:
     """Test commit_offsets handles commit failure."""
-    mock_kafka_consumer.commit.side_effect = Exception('Commit failed')
+    mock_kafka_consumer.commit.side_effect = KafkaError('Commit failed')
     body, status = populated_service.commit_offsets(
         SUBJECT,
         NAMESPACE,
@@ -946,7 +952,7 @@ def test_get_committed_success(
     mock_kafka_consumer.committed.side_effect = [42, None]
     partitions = [
         {'topic': 't1', 'partition': 0},
-        {'topic': 't1', 'partition': 1},
+        {'topic': 't2', 'partition': 0},
     ]
     body, status = populated_service.get_committed(
         SUBJECT,
@@ -982,7 +988,7 @@ def test_get_committed_kafka_exception(
     mock_kafka_consumer: MagicMock,
 ) -> None:
     """Test get_committed handles exception."""
-    mock_kafka_consumer.committed.side_effect = Exception('Failed')
+    mock_kafka_consumer.committed.side_effect = KafkaError('Failed')
     body, status = populated_service.get_committed(
         SUBJECT,
         NAMESPACE,
@@ -1038,7 +1044,7 @@ def test_assign_partitions_kafka_exception(
     mock_kafka_consumer: MagicMock,
 ) -> None:
     """Test assign_partitions handles exception."""
-    mock_kafka_consumer.assign.side_effect = Exception('Assign failed')
+    mock_kafka_consumer.assign.side_effect = KafkaError('Assign failed')
     body, status = populated_service.assign_partitions(
         SUBJECT,
         NAMESPACE,
@@ -1139,6 +1145,9 @@ def test_seek_success(
     mock_kafka_consumer: MagicMock,
 ) -> None:
     """Test seek calls consumer.seek with correct args."""
+    mock_kafka_consumer.assignment.return_value = {
+        TopicPartition(f'{NAMESPACE}.t1', 0),
+    }
     offsets = [{'topic': 't1', 'partition': 0, 'offset': 100}]
     body, status = populated_service.seek(
         SUBJECT,
@@ -1173,7 +1182,10 @@ def test_seek_kafka_exception(
     mock_kafka_consumer: MagicMock,
 ) -> None:
     """Test seek handles exception."""
-    mock_kafka_consumer.seek.side_effect = Exception('Seek failed')
+    mock_kafka_consumer.assignment.return_value = {
+        TopicPartition(f'{NAMESPACE}.t1', 0),
+    }
+    mock_kafka_consumer.seek.side_effect = KafkaError('Seek failed')
     body, status = populated_service.seek(
         SUBJECT,
         NAMESPACE,
@@ -1195,6 +1207,9 @@ def test_seek_to_beginning_success(
     mock_kafka_consumer: MagicMock,
 ) -> None:
     """Test seek_to_beginning calls consumer.seek_to_beginning."""
+    mock_kafka_consumer.assignment.return_value = {
+        TopicPartition(f'{NAMESPACE}.t1', 0),
+    }
     partitions = [{'topic': 't1', 'partition': 0}]
     body, status = populated_service.seek_to_beginning(
         SUBJECT,
@@ -1229,7 +1244,10 @@ def test_seek_to_beginning_kafka_exception(
     mock_kafka_consumer: MagicMock,
 ) -> None:
     """Test seek_to_beginning handles exception."""
-    mock_kafka_consumer.seek_to_beginning.side_effect = Exception('Failed')
+    mock_kafka_consumer.assignment.return_value = {
+        TopicPartition(f'{NAMESPACE}.t1', 0),
+    }
+    mock_kafka_consumer.seek_to_beginning.side_effect = KafkaError('Failed')
     body, status = populated_service.seek_to_beginning(
         SUBJECT,
         NAMESPACE,
@@ -1251,6 +1269,9 @@ def test_seek_to_end_success(
     mock_kafka_consumer: MagicMock,
 ) -> None:
     """Test seek_to_end calls consumer.seek_to_end."""
+    mock_kafka_consumer.assignment.return_value = {
+        TopicPartition(f'{NAMESPACE}.t1', 0),
+    }
     partitions = [{'topic': 't1', 'partition': 0}]
     body, status = populated_service.seek_to_end(
         SUBJECT,
@@ -1285,7 +1306,10 @@ def test_seek_to_end_kafka_exception(
     mock_kafka_consumer: MagicMock,
 ) -> None:
     """Test seek_to_end handles exception."""
-    mock_kafka_consumer.seek_to_end.side_effect = Exception('Failed')
+    mock_kafka_consumer.assignment.return_value = {
+        TopicPartition(f'{NAMESPACE}.t1', 0),
+    }
+    mock_kafka_consumer.seek_to_end.side_effect = KafkaError('Failed')
     body, status = populated_service.seek_to_end(
         SUBJECT,
         NAMESPACE,
@@ -1594,7 +1618,7 @@ def test_get_committed_bounds_each_lookup(
         INSTANCE_ID,
         partitions=[
             {'topic': 't1', 'partition': 0},
-            {'topic': 't1', 'partition': 1},
+            {'topic': 't2', 'partition': 0},
         ],
     )
     assert mock_kafka_consumer.committed.call_count == 2
@@ -1606,7 +1630,7 @@ def test_commit_timeout_is_a_kafka_failure(
     populated_service: ConsumerService,
     mock_kafka_consumer: MagicMock,
 ) -> None:
-    """A commit that times out answers like any other commit failure."""
+    """A commit that times out is a retriable Kafka failure (50003)."""
     mock_kafka_consumer.commit.side_effect = KafkaTimeoutError('timed out')
     body, status = populated_service.commit_offsets(
         SUBJECT,
@@ -1615,8 +1639,13 @@ def test_commit_timeout_is_a_kafka_failure(
         INSTANCE_ID,
     )
     assert status == 500
-    assert body['error_code'] == 50002
-    assert body['message'].startswith('Failed to commit offsets: ')
+    assert body == {
+        'error_code': 50003,
+        'message': (
+            'Failed to commit offsets: Kafka error (KafkaTimeoutError); '
+            'retry it'
+        ),
+    }
 
 
 def test_create_consumer_builds_outside_the_global_lock(

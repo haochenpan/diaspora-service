@@ -7,6 +7,15 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 from pydantic import Field
+from pydantic import field_validator
+
+# Formats a consumer instance decodes records in
+FORMATS = ('binary', 'json')
+# Formats Confluent decodes with a schema registry, which Octopus does not run
+SCHEMA_FORMATS = ('avro', 'jsonschema', 'protobuf')
+# Largest partition (int32) and offset (int64) the Kafka protocol encodes
+MAX_PARTITION = 2**31 - 1
+MAX_OFFSET = 2**63 - 1
 
 
 class CreateConsumerRequest(BaseModel):
@@ -22,8 +31,10 @@ class CreateConsumerRequest(BaseModel):
     format: str = Field(
         'binary',
         description=(
-            'Deserialization format: "binary", "json", "avro", '
-            '"jsonschema", or "protobuf". Defaults to "binary".'
+            'Deserialization format, "binary" or "json" in any case; '
+            'defaults to "binary". "avro", "jsonschema" and "protobuf" '
+            'need a schema registry, which Octopus does not run, and are '
+            'refused with 422.'
         ),
     )
     auto_offset_reset: str = Field(
@@ -52,6 +63,22 @@ class CreateConsumerRequest(BaseModel):
 
     model_config = {'populate_by_name': True}
 
+    @field_validator('format')
+    @classmethod
+    def _known_format(cls, value: str) -> str:
+        """Accept binary and json in any case, as Confluent does."""
+        lowered = value.lower()
+        if lowered in FORMATS:
+            return lowered
+        if lowered in SCHEMA_FORMATS:
+            raise ValueError(
+                f'format {value} needs a schema registry; Octopus runs no '
+                'schema registry, so use binary or json',
+            )
+        raise ValueError(
+            f'Invalid format type {value}; use binary or json',
+        )
+
 
 class SubscriptionRequest(BaseModel):
     """Request body for POST .../subscription."""
@@ -72,9 +99,9 @@ class SubscriptionRequest(BaseModel):
 class PartitionOffset(BaseModel):
     """A topic-partition-offset triple."""
 
-    topic: str
-    partition: int
-    offset: int
+    topic: str = Field(min_length=1)
+    partition: int = Field(ge=0, le=MAX_PARTITION)
+    offset: int = Field(ge=0, le=MAX_OFFSET)
 
 
 class OffsetsCommitRequest(BaseModel):
@@ -91,8 +118,8 @@ class OffsetsCommitRequest(BaseModel):
 class PartitionInfo(BaseModel):
     """A topic-partition pair."""
 
-    topic: str
-    partition: int
+    topic: str = Field(min_length=1)
+    partition: int = Field(ge=0, le=MAX_PARTITION)
 
 
 class OffsetsGetRequest(BaseModel):

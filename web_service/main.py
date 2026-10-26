@@ -13,6 +13,7 @@ from typing import TypeVar
 
 import anyio
 import uvicorn
+from fastapi import APIRouter
 from fastapi import Body
 from fastapi import FastAPI
 from fastapi import Header
@@ -30,6 +31,9 @@ from web_service.consumer_models import OffsetsGetRequest
 from web_service.consumer_models import SeekPartitionsRequest
 from web_service.consumer_models import SeekRequest
 from web_service.consumer_models import SubscriptionRequest
+from web_service.consumer_routes import ConsumerRoute
+from web_service.consumer_routes import error_response
+from web_service.consumer_routes import INVALID_REQUEST
 from web_service.consumer_service import ConsumerService
 from web_service.producer_models import BatchResult
 from web_service.producer_models import PRODUCE_BATCH_REQUEST_SCHEMA
@@ -70,6 +74,20 @@ _Prepared = TypeVar('_Prepared')
 # Fetch wait when the request names none, and the longest it may name
 DEFAULT_FETCH_TIMEOUT_MS = 5_000
 MAX_FETCH_TIMEOUT_MS = 30_000
+# Fetches that run at once, each on a thread of its own limiter. A fetch
+# of one 8 MiB record costs about 50 MiB while kafka-python reads and
+# decodes it and the reply is encoded, so 6 hold about 300 MiB.
+FETCH_MAX_CONCURRENT = 6
+# Threads of the pool that every other blocking call shares: the token
+# check, DynamoDB, the Kafka admin calls and the consumer calls other than
+# fetches. Produce parsing and sends and fetches have limiters of their
+# own, which bound their memory, so this bounds only how many calls may
+# wait at once; 40 is anyio's default, set here so an upgrade cannot
+# change it.
+SHARED_THREADS = 40
+# Code of a failed token check on the consumer routes: Confluent's code
+# for a failed authentication
+AUTHENTICATION_FAILED = 40101
 
 
 class DiasporaService:
@@ -130,11 +148,14 @@ class DiasporaService:
             ),
         )
 
+        # The most topics a namespace holds, and so the most topics or
+        # partitions a consumer request may list
+        self.max_topics = parse_max_topics_per_namespace(
+            os.getenv('MAX_TOPICS_PER_NAMESPACE'),
+        )
         namespace_service = NamespaceService(
             dynamodb_service=db_service,
-            max_topics_per_namespace=parse_max_topics_per_namespace(
-                os.getenv('MAX_TOPICS_PER_NAMESPACE'),
-            ),
+            max_topics_per_namespace=self.max_topics,
         )
 
         self.web_service = WebService(
@@ -158,6 +179,8 @@ class DiasporaService:
         self.produce_admission = ProduceAdmission()
         self.parse_limiter = anyio.CapacityLimiter(1)
         self.send_limiter = anyio.CapacityLimiter(PRODUCE_MAX_REQUESTS)
+        # Fetches in progress, on threads apart from the shared pool
+        self.fetch_limiter = anyio.CapacityLimiter(FETCH_MAX_CONCURRENT)
 
         self.app = FastAPI(
             title='Diaspora Web Service V3',
@@ -378,7 +401,10 @@ class DiasporaService:
         self,
         app: FastAPI,
     ) -> AsyncIterator[None]:
-        """Application lifespan: close consumers and the producer."""
+        """Application lifespan: size the threadpool; close consumers."""
+        anyio.to_thread.current_default_thread_limiter().total_tokens = (
+            SHARED_THREADS
+        )
         yield
         await run_in_threadpool(self.consumer_service.shutdown_all)
         await run_in_threadpool(self.producer_service.close)
@@ -450,6 +476,33 @@ class DiasporaService:
             return JSONResponse(content=err, status_code=404)
         return None
 
+    def _check_consumer_access(
+        self,
+        subject: str,
+        token: str,
+        namespace: str,
+    ) -> Response | None:
+        """Check the token and the namespace, in Confluent's error shape.
+
+        Returns:
+            The 401 or 404 response if a check fails, None if both pass
+        """
+        if err := self.auth.validate_access_token(subject, token):
+            reason = err.get('reason')
+            # The audience check's reason names the service's client id
+            if not isinstance(reason, str) or reason.startswith(
+                'Not in the audience set',
+            ):
+                reason = 'Token is not for this service.'
+            return error_response(
+                401,
+                AUTHENTICATION_FAILED,
+                f'Authentication failed: {reason}',
+            )
+        if err := self._validate_namespace(subject, namespace):
+            return JSONResponse(content=err, status_code=404)
+        return None
+
     def _serve_consumer(
         self,
         subject: str,
@@ -464,9 +517,24 @@ class DiasporaService:
         the event loop they would stall every other request and the
         worker's heartbeat to gunicorn.
         """
-        if err := self._check_access(subject, token, namespace):
+        if err := self._check_consumer_access(subject, token, namespace):
             return err
         return serve()
+
+    def _too_many(self, items: list[Any], what: str) -> Response | None:
+        """The 422 reply if a request lists more items than a namespace holds.
+
+        A namespace holds at most max_topics topics, each of one partition,
+        so a longer list of topics, partitions or offsets is a mistake.
+        """
+        if len(items) <= self.max_topics:
+            return None
+        return error_response(
+            422,
+            INVALID_REQUEST,
+            f'{len(items)} {what} listed; a request may list at most '
+            f'{self.max_topics}, the most topics a namespace holds',
+        )
 
     _NO_CONTENT = 204
 
@@ -483,87 +551,93 @@ class DiasporaService:
     # --- Consumer routes ---
 
     def add_consumer_routes(self) -> None:
-        """Add consumer REST API routes (Confluent v2 compatible)."""
+        """Add consumer REST API routes (Confluent v2 compatible).
+
+        Their route class answers every failure in Confluent's shape.
+        """
         base = '/api/v3/{namespace}/consumers'
+        router = APIRouter(route_class=ConsumerRoute)
 
         # 1. Create consumer instance
-        self.app.post(
+        router.post(
             f'{base}/{{group_name}}',
             tags=['Consumer'],
         )(self.create_consumer_instance)
 
         # 2. Delete consumer instance
-        self.app.delete(
+        router.delete(
             f'{base}/{{group_name}}/instances/{{instance_id}}',
             tags=['Consumer'],
         )(self.delete_consumer_instance)
 
         # 3. Subscribe
-        self.app.post(
+        router.post(
             f'{base}/{{group_name}}/instances/{{instance_id}}/subscription',
             tags=['Consumer'],
         )(self.subscribe_consumer)
 
         # 4. Get subscription
-        self.app.get(
+        router.get(
             f'{base}/{{group_name}}/instances/{{instance_id}}/subscription',
             tags=['Consumer'],
         )(self.get_consumer_subscription)
 
         # 5. Unsubscribe
-        self.app.delete(
+        router.delete(
             f'{base}/{{group_name}}/instances/{{instance_id}}/subscription',
             tags=['Consumer'],
         )(self.unsubscribe_consumer)
 
         # 6. Fetch records
-        self.app.get(
+        router.get(
             f'{base}/{{group_name}}/instances/{{instance_id}}/records',
             tags=['Consumer'],
         )(self.fetch_consumer_records)
 
         # 7. Commit offsets
-        self.app.post(
+        router.post(
             f'{base}/{{group_name}}/instances/{{instance_id}}/offsets',
             tags=['Consumer'],
         )(self.commit_consumer_offsets)
 
         # 8. Get committed offsets
-        self.app.get(
+        router.get(
             f'{base}/{{group_name}}/instances/{{instance_id}}/offsets',
             tags=['Consumer'],
         )(self.get_committed_offsets)
 
         # 9. Assign partitions
-        self.app.post(
+        router.post(
             f'{base}/{{group_name}}/instances/{{instance_id}}/assignments',
             tags=['Consumer'],
         )(self.assign_consumer_partitions)
 
         # 10. Get assignments
-        self.app.get(
+        router.get(
             f'{base}/{{group_name}}/instances/{{instance_id}}/assignments',
             tags=['Consumer'],
         )(self.get_consumer_assignments)
 
         # 11. Seek to offset
-        self.app.post(
+        router.post(
             f'{base}/{{group_name}}/instances/{{instance_id}}/positions',
             tags=['Consumer'],
         )(self.seek_consumer_positions)
 
         # 12. Seek to beginning
-        self.app.post(
+        router.post(
             f'{base}/{{group_name}}/instances'
             f'/{{instance_id}}/positions/beginning',
             tags=['Consumer'],
         )(self.seek_consumer_beginning)
 
         # 13. Seek to end
-        self.app.post(
+        router.post(
             f'{base}/{{group_name}}/instances/{{instance_id}}/positions/end',
             tags=['Consumer'],
         )(self.seek_consumer_end)
+
+        self.app.include_router(router)
 
     # --- Consumer endpoint handlers ---
 
@@ -658,6 +732,8 @@ class DiasporaService:
                     },
                     status_code=422,
                 )
+            if too_many := self._too_many(body.topics, 'topics'):
+                return too_many
             if err := self._validate_topics_in_namespace(
                 namespace,
                 body.topics,
@@ -734,7 +810,7 @@ class DiasporaService:
             serve,
         )
 
-    def fetch_consumer_records(
+    async def fetch_consumer_records(
         self,
         namespace: str,
         group_name: str,
@@ -753,9 +829,17 @@ class DiasporaService:
     ) -> Response:
         """Fetch data for subscribed topics or assigned partitions.
 
-        Uses def (not async def) so FastAPI runs it in a threadpool,
-        avoiding blocking the event loop during consumer.poll().
+        The access checks run in the shared threadpool, and the fetch on a
+        thread of the fetch limiter: at most FETCH_MAX_CONCURRENT fetches
+        run at once, and the others wait for a turn without a thread.
         """
+        if err := await run_in_threadpool(
+            self._check_consumer_access,
+            subject,
+            token,
+            namespace,
+        ):
+            return err
 
         def serve() -> Response:
             resp_body, status = self.consumer_service.poll_records(
@@ -769,9 +853,14 @@ class DiasporaService:
                 ),
                 max_bytes=max_bytes,
             )
+            # Encoding the reply is part of the fetch's memory, so it runs
+            # under the limiter too
             return self._consumer_response(resp_body, status)
 
-        return self._serve_consumer(subject, token, namespace, serve)
+        return await anyio.to_thread.run_sync(
+            serve,
+            limiter=self.fetch_limiter,
+        )
 
     async def commit_consumer_offsets(
         self,
@@ -788,6 +877,8 @@ class DiasporaService:
         def serve() -> Response:
             offsets = None
             if body and body.offsets:
+                if too_many := self._too_many(body.offsets, 'offsets'):
+                    return too_many
                 offsets = [o.model_dump() for o in body.offsets]
             resp_body, status = self.consumer_service.commit_offsets(
                 subject=subject,
@@ -818,15 +909,18 @@ class DiasporaService:
     ) -> Response:
         """Get last committed offsets for given partitions."""
         if err := await run_in_threadpool(
-            self._check_access,
+            self._check_consumer_access,
             subject,
             token,
             namespace,
         ):
             return err
-        # Confluent sends partitions in the GET request body
-        raw_body = await request.json()
-        req = OffsetsGetRequest(**raw_body)
+        # Confluent sends partitions in the GET request body; a body that
+        # is not JSON or fails validation raises, and the route class
+        # answers it
+        req = OffsetsGetRequest.model_validate_json(await request.body())
+        if too_many := self._too_many(req.partitions, 'partitions'):
+            return too_many
         partitions = [p.model_dump() for p in req.partitions]
         resp_body, status = await run_in_threadpool(
             self.consumer_service.get_committed,
@@ -851,6 +945,8 @@ class DiasporaService:
         """Manually assign partitions to this consumer."""
 
         def serve() -> Response:
+            if too_many := self._too_many(body.partitions, 'partitions'):
+                return too_many
             # Validate topics exist in namespace
             topics = list({p.topic for p in body.partitions})
             if err := self._validate_topics_in_namespace(
@@ -916,6 +1012,8 @@ class DiasporaService:
         """Override fetch offsets for the next set of records."""
 
         def serve() -> Response:
+            if too_many := self._too_many(body.offsets, 'offsets'):
+                return too_many
             offsets = [o.model_dump() for o in body.offsets]
             resp_body, status = self.consumer_service.seek(
                 subject=subject,
@@ -947,6 +1045,8 @@ class DiasporaService:
         """Seek to the first offset for given partitions."""
 
         def serve() -> Response:
+            if too_many := self._too_many(body.partitions, 'partitions'):
+                return too_many
             partitions = [p.model_dump() for p in body.partitions]
             resp_body, status = self.consumer_service.seek_to_beginning(
                 subject=subject,
@@ -978,6 +1078,8 @@ class DiasporaService:
         """Seek to the last offset for given partitions."""
 
         def serve() -> Response:
+            if too_many := self._too_many(body.partitions, 'partitions'):
+                return too_many
             partitions = [p.model_dump() for p in body.partitions]
             resp_body, status = self.consumer_service.seek_to_end(
                 subject=subject,

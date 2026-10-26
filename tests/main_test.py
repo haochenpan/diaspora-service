@@ -756,15 +756,16 @@ async def test_unsubscribe_consumer_auth_failure(
     mock_consumer_service.unsubscribe.assert_not_called()
 
 
-def test_fetch_consumer_records_auth_failure(
+@pytest.mark.asyncio
+async def test_fetch_consumer_records_auth_failure(
     mock_diaspora_service: DiasporaService,
     mock_auth_manager: MagicMock,
     mock_consumer_service: MagicMock,
     valid_subject: str,
 ) -> None:
-    """Test fetch_consumer_records returns 401 on auth failure (sync)."""
+    """Test fetch_consumer_records returns 401 on auth failure ."""
     _setup_auth_failure(mock_auth_manager)
-    response = mock_diaspora_service.fetch_consumer_records(
+    response = await mock_diaspora_service.fetch_consumer_records(
         namespace=CONSUMER_NS,
         group_name=CONSUMER_GROUP,
         instance_id=CONSUMER_INST,
@@ -805,9 +806,9 @@ async def test_get_committed_offsets_auth_failure(
     """Test get_committed_offsets returns 401 on auth failure."""
     _setup_auth_failure(mock_auth_manager)
     mock_request = AsyncMock()
-    mock_request.json.return_value = {
-        'partitions': [{'topic': 't1', 'partition': 0}],
-    }
+    mock_request.body.return_value = json.dumps(
+        {'partitions': [{'topic': 't1', 'partition': 0}]},
+    ).encode()
     response = await mock_diaspora_service.get_committed_offsets(
         namespace=CONSUMER_NS,
         group_name=CONSUMER_GROUP,
@@ -1062,7 +1063,8 @@ async def test_unsubscribe_consumer_namespace_failure(
     assert response.status_code == 404
 
 
-def test_fetch_consumer_records_namespace_failure(
+@pytest.mark.asyncio
+async def test_fetch_consumer_records_namespace_failure(
     mock_diaspora_service: DiasporaService,
     mock_web_service: MagicMock,
     mock_consumer_service: MagicMock,
@@ -1071,7 +1073,7 @@ def test_fetch_consumer_records_namespace_failure(
 ) -> None:
     """Test fetch_consumer_records returns 404 on namespace failure."""
     _setup_namespace_failure(mock_web_service)
-    response = mock_diaspora_service.fetch_consumer_records(
+    response = await mock_diaspora_service.fetch_consumer_records(
         namespace=CONSUMER_NS,
         group_name=CONSUMER_GROUP,
         instance_id=CONSUMER_INST,
@@ -1510,14 +1512,15 @@ async def test_unsubscribe_consumer_success(
     assert response.status_code == 204
 
 
-def test_fetch_consumer_records_success(
+@pytest.mark.asyncio
+async def test_fetch_consumer_records_success(
     mock_diaspora_service: DiasporaService,
     mock_web_service: MagicMock,
     mock_consumer_service: MagicMock,
     valid_subject: str,
     valid_token: str,
 ) -> None:
-    """Test fetch_consumer_records success path (sync)."""
+    """Test fetch_consumer_records success path ."""
     _setup_namespace_success(mock_web_service)
     mock_consumer_service.poll_records.return_value = (
         [
@@ -1531,7 +1534,7 @@ def test_fetch_consumer_records_success(
         ],
         200,
     )
-    response = mock_diaspora_service.fetch_consumer_records(
+    response = await mock_diaspora_service.fetch_consumer_records(
         namespace=CONSUMER_NS,
         group_name=CONSUMER_GROUP,
         instance_id=CONSUMER_INST,
@@ -1546,7 +1549,8 @@ def test_fetch_consumer_records_success(
     assert len(resp_body) == 1
 
 
-def test_fetch_consumer_records_default_timeout(
+@pytest.mark.asyncio
+async def test_fetch_consumer_records_default_timeout(
     mock_diaspora_service: DiasporaService,
     mock_web_service: MagicMock,
     mock_consumer_service: MagicMock,
@@ -1556,7 +1560,7 @@ def test_fetch_consumer_records_default_timeout(
     """Test fetch_consumer_records uses default timeout=5000."""
     _setup_namespace_success(mock_web_service)
     mock_consumer_service.poll_records.return_value = ([], 200)
-    mock_diaspora_service.fetch_consumer_records(
+    await mock_diaspora_service.fetch_consumer_records(
         namespace=CONSUMER_NS,
         group_name=CONSUMER_GROUP,
         instance_id=CONSUMER_INST,
@@ -1575,7 +1579,8 @@ def test_fetch_consumer_records_default_timeout(
     )
 
 
-def test_fetch_consumer_records_custom_timeout(
+@pytest.mark.asyncio
+async def test_fetch_consumer_records_custom_timeout(
     mock_diaspora_service: DiasporaService,
     mock_web_service: MagicMock,
     mock_consumer_service: MagicMock,
@@ -1585,7 +1590,7 @@ def test_fetch_consumer_records_custom_timeout(
     """Test fetch_consumer_records with custom timeout and max_bytes."""
     _setup_namespace_success(mock_web_service)
     mock_consumer_service.poll_records.return_value = ([], 200)
-    mock_diaspora_service.fetch_consumer_records(
+    await mock_diaspora_service.fetch_consumer_records(
         namespace=CONSUMER_NS,
         group_name=CONSUMER_GROUP,
         instance_id=CONSUMER_INST,
@@ -1673,9 +1678,9 @@ async def test_get_committed_offsets_success(
         200,
     )
     mock_request = AsyncMock()
-    mock_request.json.return_value = {
-        'partitions': [{'topic': 't1', 'partition': 0}],
-    }
+    mock_request.body.return_value = json.dumps(
+        {'partitions': [{'topic': 't1', 'partition': 0}]},
+    ).encode()
     response = await mock_diaspora_service.get_committed_offsets(
         namespace=CONSUMER_NS,
         group_name=CONSUMER_GROUP,
@@ -2102,7 +2107,10 @@ async def test_consumer_route_auth_off_loop(
         release=release,
     )
     assert response.status_code == 401
-    assert response.json() == error
+    assert response.json() == {
+        'error_code': 40101,
+        'message': 'Authentication failed: Token is inactive.',
+    }
     getattr(mock_consumer_service, call).assert_not_called()
 
 
