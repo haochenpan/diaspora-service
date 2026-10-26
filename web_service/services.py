@@ -33,6 +33,8 @@ TOPIC_EXISTS_RETRY_DELAY_S = 2
 # The most topics a namespace may hold when MAX_TOPICS_PER_NAMESPACE is
 # unset or invalid
 DEFAULT_MAX_TOPICS_PER_NAMESPACE = 50
+# The most versions IAM keeps of a managed policy
+MAX_POLICY_VERSIONS = 5
 
 logger = logging.getLogger(__name__)
 
@@ -225,6 +227,92 @@ class IAMService:
             return {
                 'status': 'failure',
                 'message': f'Failed to create user and policy: {e!s}',
+            }
+
+    def get_user_policy(self, subject: str) -> tuple[str, Any]:
+        """Return the user policy's default version and its document.
+
+        Args:
+            subject: User subject ID
+
+        Returns:
+            The default version's ID and its policy document, which boto3
+            returns parsed
+
+        Raises:
+            botocore.exceptions.ClientError: If IAM refuses either read,
+                for example NoSuchEntity when the policy does not exist
+        """
+        policy_arn = self._get_policy_arn(subject)
+        policy = self.iam.get_policy(PolicyArn=policy_arn)['Policy']
+        version = policy['DefaultVersionId']
+        document = self.iam.get_policy_version(
+            PolicyArn=policy_arn,
+            VersionId=version,
+        )['PolicyVersion']['Document']
+        return version, document
+
+    def update_user_policy(self, subject: str) -> dict[str, Any]:
+        """Make the user policy's default version the current template.
+
+        Nothing changes when the default version already matches
+        generate_user_policy. Otherwise a new version becomes the default;
+        when the policy already holds MAX_POLICY_VERSIONS versions, the
+        oldest version that is not the default is deleted first.
+
+        Args:
+            subject: User subject ID
+
+        Returns:
+            Dictionary with status (success/failure) and message; on
+            success also changed, old_version (the default before the
+            call) and new_version (the default after it)
+        """
+        policy_arn = self._get_policy_arn(subject)
+        document = self.generate_user_policy(subject)
+        try:
+            old_version, current = self.get_user_policy(subject)
+            if current == document:
+                return {
+                    'status': 'success',
+                    'message': f'Policy of {subject} is up to date',
+                    'changed': False,
+                    'old_version': old_version,
+                    'new_version': old_version,
+                }
+
+            versions = self.iam.list_policy_versions(
+                PolicyArn=policy_arn,
+            )['Versions']
+            if len(versions) >= MAX_POLICY_VERSIONS:
+                oldest = min(
+                    (v for v in versions if not v['IsDefaultVersion']),
+                    key=lambda v: v['CreateDate'],
+                )
+                self.iam.delete_policy_version(
+                    PolicyArn=policy_arn,
+                    VersionId=oldest['VersionId'],
+                )
+
+            new_version = self.iam.create_policy_version(
+                PolicyArn=policy_arn,
+                PolicyDocument=json.dumps(document),
+                SetAsDefault=True,
+            )['PolicyVersion']['VersionId']
+            return {
+                'status': 'success',
+                'message': (
+                    f'Policy of {subject} set to {new_version}, '
+                    f'was {old_version}'
+                ),
+                'changed': True,
+                'old_version': old_version,
+                'new_version': new_version,
+            }
+        except Exception as e:
+            return {
+                'status': 'failure',
+                'message': f'Failed to update policy: {e!s}',
             }
 
     def delete_user_and_policy(self, subject: str) -> dict[str, Any]:

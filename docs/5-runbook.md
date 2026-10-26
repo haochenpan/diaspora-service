@@ -1,8 +1,8 @@
 # Runbook
 
 Tasks for operating the deployed service: rolling back, reading the logs,
-triaging a failed deploy, watching the brokers' CPU credits and rotating
-credentials. [Deployment](3-deploying.md) describes the workflow, the
+triaging a failed deploy, watching the brokers' CPU credits, rotating
+credentials and updating the users' IAM policies. [Deployment](3-deploying.md) describes the workflow, the
 secrets and the container's environment that these tasks refer to. The
 Lightsail commands use the region `us-east-1`; angle brackets mark values
 to fill in.
@@ -225,3 +225,63 @@ Keep the client itself. Its ID is part of the scope every token must carry
 (`https://auth.globus.org/scopes/<SERVER_CLIENT_ID>/action_all`), so a new
 client would make the service reject every token issued for the old
 one.
+
+## Update the users' policies
+
+The service writes a user's IAM policy (`IAMService.generate_user_policy`
+in `web_service/services.py`) when it creates the user, so a change to that
+policy reaches only the users created after the change is deployed.
+`scripts/update_user_policies.py` brings the others up to date. It finds
+them by the names and paths the service gives them: IAM users under
+`/msk-users/` and managed policies under `/msk-policy/` whose names are
+subjects (UUIDs), and the subjects in `diaspora-users-table`. It skips the
+live tests' `test-subject-*` users. For each policy whose default version
+differs from the current policy, it adds the current policy as the new
+default version. IAM keeps at most five versions of a policy, so when a
+policy already has five, the script first deletes the oldest version that
+is not the default.
+
+Run it after the change is deployed, from a checkout of that commit with
+the dev install, with an administrator's credentials. Set
+`AWS_ACCOUNT_ID`, `AWS_ACCOUNT_REGION` and `MSK_CLUSTER_NAME` to the
+service's values, so that the script builds the same policy as the
+service.
+
+1. List what it would change:
+
+    ```bash
+    python scripts/update_user_policies.py
+    ```
+
+    It prints each policy it would update, each subject it skips, and the
+    counts. It changes nothing.
+
+2. Make the changes:
+
+    ```bash
+    python scripts/update_user_policies.py --apply
+    ```
+
+    It writes `user-policies-<UTC time>.json` in the current directory,
+    with each updated policy's ARN, its default version before the run and
+    its new one. Keep that file until the change has proved itself. The
+    run refuses to start if the file named by `--record` exists.
+
+3. Run step 1 again. It reports 0 policies to update; a second `--apply`
+   changes nothing.
+
+To undo a run, pass its record:
+
+```bash
+python scripts/update_user_policies.py --undo user-policies-<UTC time>.json
+```
+
+It makes each policy's version from before the run its default again.
+If a policy's default version has changed since the run, it reports that
+policy and leaves it as it is. The new versions stay in IAM as versions
+that are not the default.
+
+With `--boundary <policy ARN>`, the script also gives each of these IAM
+users that has no permissions boundary the policy as its boundary, and
+reports a user that has a different boundary. `--undo` leaves the
+boundaries in place.
