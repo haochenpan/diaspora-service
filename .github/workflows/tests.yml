@@ -37,11 +37,12 @@ jobs:
       cancel-in-progress: false
 
     env:
-      # The live tests' own identity when its keys are set, else the
-      # service's. The permissions boundary exists only for the former.
-      AWS_ACCESS_KEY_ID: ${{ secrets.LIVE_TESTS_AWS_ACCESS_KEY_ID || secrets.DOCKER_AWS_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.LIVE_TESTS_AWS_SECRET_ACCESS_KEY || secrets.DOCKER_AWS_SECRET_ACCESS_KEY }}
-      IAM_USER_PERMISSIONS_BOUNDARY_ARN: ${{ secrets.LIVE_TESTS_AWS_ACCESS_KEY_ID && format('arn:aws:iam::{0}:policy/diaspora-test/test-user-boundary', secrets.DOCKER_AWS_ACCOUNT_ID) || '' }}
+      # The live tests' own identity when both of its secrets are set,
+      # else the service's. The permissions boundary exists only for the
+      # former.
+      AWS_ACCESS_KEY_ID: ${{ secrets.LIVE_TESTS_AWS_ACCESS_KEY_ID && secrets.LIVE_TESTS_AWS_SECRET_ACCESS_KEY && secrets.LIVE_TESTS_AWS_ACCESS_KEY_ID || secrets.DOCKER_AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.LIVE_TESTS_AWS_ACCESS_KEY_ID && secrets.LIVE_TESTS_AWS_SECRET_ACCESS_KEY || secrets.DOCKER_AWS_SECRET_ACCESS_KEY }}
+      IAM_USER_PERMISSIONS_BOUNDARY_ARN: ${{ secrets.LIVE_TESTS_AWS_ACCESS_KEY_ID && secrets.LIVE_TESTS_AWS_SECRET_ACCESS_KEY && format('arn:aws:iam::{0}:policy/diaspora-test/test-user-boundary', secrets.DOCKER_AWS_ACCOUNT_ID) || '' }}
       # The tables the tests write; the sweep reads the service's tables.
       KEYS_TABLE_NAME: test-diaspora-keys-table
       USERS_TABLE_NAME: test-diaspora-users-table
