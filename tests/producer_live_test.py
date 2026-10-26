@@ -8,6 +8,7 @@ and Kafka are real.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import contextlib
 import json
@@ -191,3 +192,50 @@ async def test_produce_and_read_back(
     assert first.timestamp == timestamp_ms
     assert (second.key, second.value) == (None, b'\xff\x00')
     assert third.value == b'done'
+
+
+def _cluster_lists(live_service: Any, kafka_topic: str) -> bool:
+    """Whether the cluster lists the topic."""
+    admin = live_service.web_service.kafka_service._admin_client()
+    try:
+        return kafka_topic in admin.list_topics()
+    finally:
+        admin.close()
+
+
+async def test_produce_to_a_topic_the_cluster_lacks_creates_nothing(
+    live_service: Any,
+    live_topic: tuple[str, str, str],
+) -> None:
+    """A topic the namespace holds but the cluster lost answers 404.
+
+    The cluster creates a topic a producer asks about if the producer lets
+    it; the produce must not, so the topic stays gone.
+    """
+    subject, namespace, topic = live_topic
+    kafka_topic = f'{namespace}.{topic}'
+    kafka_service = live_service.web_service.kafka_service
+    deleted = kafka_service.delete_topic(namespace, topic)
+    assert deleted['status'] == 'success', deleted
+    deadline = time.monotonic() + 60
+    while _cluster_lists(live_service, kafka_topic):
+        assert time.monotonic() < deadline, 'the topic was not deleted'
+        await asyncio.sleep(1)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=live_service.app),
+        base_url='http://test',
+    ) as client:
+        response = await client.post(
+            f'/api/v3/{namespace}/topics/{topic}/records',
+            json={'value': {'type': 'STRING', 'data': 'lost'}},
+            headers={
+                'subject': subject,
+                'authorization': 'Bearer ' + 'a' * 50,
+            },
+        )
+    print(f'  Produce: {response.status_code} {response.text}')
+    assert response.status_code == 404
+    assert response.json()['error_code'] == 40401
+    await asyncio.sleep(2)
+    assert not _cluster_lists(live_service, kafka_topic)

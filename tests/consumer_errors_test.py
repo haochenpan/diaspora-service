@@ -64,6 +64,7 @@ from web_service.consumer_service import MAX_INSTANCES_PER_SUBJECT
 from web_service.consumer_service import MAX_PARTITION_FETCH_BYTES
 from web_service.consumer_service import REPLY_MAX_BYTES
 from web_service.main import DiasporaService
+from web_service.services import build_kafka_client
 
 SUBJECT = '123e4567-e89b-12d3-a456-426614174000'
 HEADERS = {'subject': SUBJECT, 'authorization': 'Bearer ' + 'a' * 50}
@@ -916,6 +917,31 @@ def test_half_built_consumer_is_closed(
     assert len(built) == 1
     assert len(closed) == 1
     assert _create(client).status_code == 200
+
+
+def test_network_clients_get_the_auto_create_setting() -> None:
+    """Each network client's metadata takes the setting, False when unset."""
+    networks: list[KafkaNetClient] = []
+
+    def build(**config: Any) -> list[KafkaNetClient]:
+        for setting in ({}, {'allow_auto_create_topics': True}):
+            networks.append(
+                config['kafka_client'](
+                    bootstrap_servers='broker.invalid:9098',
+                    **setting,
+                ),
+            )
+        return networks
+
+    try:
+        build_kafka_client(build)
+        assert [
+            network.cluster.config['allow_auto_create_topics']
+            for network in networks
+        ] == [False, True]
+    finally:
+        for network in networks:
+            network.close()
 
 
 # ============================================================================

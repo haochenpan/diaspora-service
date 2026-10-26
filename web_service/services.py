@@ -895,6 +895,11 @@ def build_kafka_client[T](build: Callable[..., T], **config: Any) -> T:
     is left running, since nothing holds it. Closing it stops its thread
     and its connections.
 
+    The network client's metadata is given the client's
+    allow_auto_create_topics, False when the settings leave it out:
+    kafka-python 3 builds that metadata without it, so a request for a
+    missing topic's metadata would have the cluster create the topic.
+
     Args:
         build: The client's class
         config: Its settings; the bootstrap waits at most
@@ -908,6 +913,10 @@ def build_kafka_client[T](build: Callable[..., T], **config: Any) -> T:
     def network_client(**settings: Any) -> KafkaNetClient:
         network = KafkaNetClient(**settings)
         started.append(network)
+        network.cluster.config['allow_auto_create_topics'] = settings.get(
+            'allow_auto_create_topics',
+            False,
+        )
         return network
 
     config.setdefault('bootstrap_timeout_ms', KAFKA_BOOTSTRAP_TIMEOUT_MS)
