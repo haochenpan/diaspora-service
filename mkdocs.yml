@@ -123,7 +123,9 @@ nav:
       - Runbook: 5-runbook.md
       - Acknowledgments: acknowledgments.md
   - Web Service:
-      - Documentation: web/api.md
-      - Examples: web/examples.md
+      - Overview: web/api.md
+      - Management API: web/management.md
+      - Produce API: web/produce.md
+      - Consume API: web/consume.md
   - Kafka Console:
       - Introduction: kafka-console/intro.md
