@@ -1096,9 +1096,11 @@ class DiasporaService:
 
         A record may be 8 MiB (8388608 bytes), counting its key, value,
         headers and about 100 bytes of Kafka's overhead; a body 16 MiB.
-        The service serves at most 8 produce requests holding 48 MiB at
-        once, and one user at most 2 holding 16 MiB; past that it answers
-        429 with `Retry-After`.
+        The service holds at most 48 MiB of produce bodies and records at
+        once, counting only the bytes that have arrived, and one user at
+        most 16 MiB in at most 2 requests; once read, a body takes one of
+        8 places for parsing and sending. Past a limit it answers 429 with
+        `Retry-After`.
 
         Error codes: 40002 dot in the topic name, 40003 body not one JSON
         object, 40004 more than one JSON value, 40005 invalid record
@@ -1188,9 +1190,10 @@ class DiasporaService:
             topic,
         ):
             return err
-        # A body without a Content-Length reserves its bytes as they arrive
+        # The body's bytes are reserved as they arrive, not as declared, so
+        # a stalled upload holds only what it has sent
         try:
-            reservation = self.produce_admission.admit(subject, declared or 0)
+            reservation = self.produce_admission.admit(subject)
         except RecordError as e:
             return self._produce_error(e)
         try:
@@ -1216,6 +1219,7 @@ class DiasporaService:
         """Read, parse and send an admitted produce request."""
         try:
             raw = await self._read_body(request, reservation)
+            reservation.start()
             prepared, records = await self._parse(raw, batch=batch)
             del raw
             # The body is gone; hold the records' bytes instead, which
@@ -1353,8 +1357,8 @@ class DiasporaService:
     ) -> bytearray:
         """Read an admitted request's body within READ_TIMEOUT_S.
 
-        A body without a Content-Length grows its reservation as its bytes
-        arrive.
+        The reservation grows with the bytes as they arrive, whatever the
+        Content-Length.
 
         Raises:
             RecordError: 408 if the body takes too long, 413 if it is too

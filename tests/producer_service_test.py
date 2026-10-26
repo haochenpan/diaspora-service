@@ -995,13 +995,21 @@ def _refused(call: Callable[[], Any]) -> RecordError:
     return caught.value
 
 
-def test_admission_bounds_requests() -> None:
+def test_admission_bounds_requests_past_their_read() -> None:
+    """Places are taken once a body is read, not on admission."""
     admission = ProduceAdmission(max_requests=2, max_body_bytes=100)
-    first = admission.admit('a', 1)
-    admission.admit('b', 1)
-    _refused(lambda: admission.admit('c', 1))
+    reading = [admission.admit(f'reader-{i}') for i in range(5)]
+    first = admission.admit('a')
+    first.start()
+    admission.admit('b').start()
+    late = admission.admit('c')
+    _refused(late.start)
+    assert admission.requests == 2
     first.release()
-    admission.admit('c', 1)
+    late.start()
+    for reservation in reading:
+        reservation.release()
+    assert admission.requests == 2
 
 
 def test_admission_bounds_body_bytes() -> None:
@@ -1010,9 +1018,11 @@ def test_admission_bounds_body_bytes() -> None:
         max_body_bytes=100,
         subject_max_body_bytes=100,
     )
-    first = admission.admit('a', 60)
-    _refused(lambda: admission.admit('b', 41))
-    second = admission.admit('b', 40)
+    first = admission.admit('a')
+    first.grow_to(60)
+    second = admission.admit('b')
+    _refused(lambda: second.grow_to(41))
+    second.grow_to(40)
     first.release()
     second.release()
     assert (admission.requests, admission.body_bytes) == (0, 0)
@@ -1025,27 +1035,34 @@ def test_admission_bounds_each_subject() -> None:
         subject_max_requests=2,
         subject_max_body_bytes=50,
     )
-    admission.admit('a', 10)
-    admission.admit('a', 10)
-    assert 'one user' in _refused(lambda: admission.admit('a', 0)).message
+    admission.admit('a')
+    admission.admit('a')
+    # Requests still sending their body count against the share
+    assert 'one user' in _refused(lambda: admission.admit('a')).message
     # Another subject is not held back, up to its own share of bytes
-    admission.admit('b', 50)
-    _refused(lambda: admission.admit('c', 51))
+    other = admission.admit('b')
+    other.grow_to(50)
+    _refused(lambda: other.grow_to(51))
 
 
-def test_reservation_grows_within_the_bounds() -> None:
+def test_reservation_grows_and_releases_once() -> None:
     admission = ProduceAdmission(
         max_requests=10,
         max_body_bytes=100,
         subject_max_body_bytes=60,
     )
-    reservation = admission.admit('a', 0)
+    reservation = admission.admit('a')
+    assert (reservation.body_bytes, admission.body_bytes) == (0, 0)
     reservation.grow_to(40)
     reservation.grow_to(30)  # never shrinks
     assert (reservation.body_bytes, admission.body_bytes) == (40, 40)
     _refused(lambda: reservation.grow_to(61))
-    other = admission.admit('b', 50)
+    other = admission.admit('b')
+    other.grow_to(50)
     _refused(lambda: reservation.grow_to(51))
+    reservation.start()
+    reservation.start()  # one place only
+    assert admission.requests == 1
     reservation.release()
     reservation.release()  # once only
     other.release()

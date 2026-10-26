@@ -9,13 +9,13 @@ A request goes through three stages, each bounded so that produce
 requests cannot exhaust the process's memory or the threads that serve
 every other route:
 
-1. Admission (ProduceAdmission): at most PRODUCE_MAX_REQUESTS requests and
-   PRODUCE_MAX_BODY_BYTES of declared body in flight; the rest are refused
-   at once.
+1. Admission (ProduceAdmission): the bytes a request has sent, and then
+   its records, count against PRODUCE_MAX_BODY_BYTES; once its body is
+   read, it takes one of PRODUCE_MAX_REQUESTS places. Each subject has a
+   share of both. A request past a bound is refused at once.
 2. Parsing (prepare_record, prepare_batch): one body at a time, after a
    cheap estimate of what parsing it would cost in memory.
-3. Sending (ProducerService.send): within the deadline the request took
-   when it arrived.
+3. Sending (ProducerService.send): within SEND_TIMEOUT_S of the parse.
 """
 
 from __future__ import annotations
@@ -77,13 +77,14 @@ TOPIC_GRACE_S = 2
 # the first can come from a request sent before the topic was asked for
 TOPIC_ANSWERS = 2
 
-# Requests in the produce path at once; each holds a thread of its own
-# limiter while it waits for the cluster
+# Requests past their body's read at once, parsing or sending; each holds
+# a thread of its own limiter while it waits for the cluster
 PRODUCE_MAX_REQUESTS = 8
-# Bytes the produce path holds at once: a body's Content-Length, or the
-# bytes of a chunked body read so far, and then its encoded records
+# Bytes the produce path holds at once: the bytes each body has sent so
+# far, whatever its Content-Length, and then its encoded records
 PRODUCE_MAX_BODY_BYTES = 48 * MIB
-# One subject's share of those bounds, so one user cannot take them all
+# One subject's share, so one user cannot take them all: its requests at
+# any stage, and its bytes
 PRODUCE_SUBJECT_MAX_REQUESTS = 2
 PRODUCE_SUBJECT_MAX_BODY_BYTES = 16 * MIB
 # Most a body may cost in memory to parse, by estimate_parse_cost
@@ -228,9 +229,12 @@ class OutgoingRecord:
 class ProduceAdmission:
     """Bound the produce requests in flight, by count and by bytes held.
 
-    Bounds the whole service and each subject's share of it. A request
-    that would pass a bound is refused at once rather than queued, so a
-    burst cannot hold memory or threads while it waits.
+    A request holds only the bytes it has sent (and then its records), so
+    a stalled upload holds no more than it sent. It takes one of the
+    service's places only once its body is read, so stalled uploads hold
+    none: a place is for parsing and sending. Each subject has a share of
+    both bounds. A request past a bound is refused at once rather than
+    queued, so a burst cannot hold memory or threads while it waits.
     """
 
     def __init__(
@@ -245,35 +249,28 @@ class ProduceAdmission:
         self.max_body_bytes = max_body_bytes
         self.subject_max_requests = subject_max_requests
         self.subject_max_body_bytes = subject_max_body_bytes
+        # Requests past their read, and bytes held, by all subjects
         self.requests = 0
         self.body_bytes = 0
-        # Requests and bytes in flight by subject
+        # Requests at any stage and bytes held, by subject
         self._subjects: dict[str, list[int]] = {}
         self._lock = threading.Lock()
 
-    def admit(self, subject: str, body_bytes: int) -> Reservation:
-        """Admit a request of subject holding body_bytes.
+    def admit(self, subject: str) -> Reservation:
+        """Admit a request of subject to send its body, holding nothing.
 
         Raises:
-            RecordError: 429 if a bound would be passed
+            RecordError: 429 if the subject has its most requests
         """
         with self._lock:
-            held = self._subjects.get(subject, [0, 0])
-            if self.requests >= self.max_requests:
-                raise _busy(
-                    f'The service is serving {self.max_requests} produce '
-                    'requests, the most it serves at once',
-                )
+            held = self._subjects.setdefault(subject, [0, 0])
             if held[0] >= self.subject_max_requests:
                 raise _busy(
                     f'You have {held[0]} produce requests in flight, the '
                     'most one user may',
                 )
-            self._check_bytes(held, body_bytes)
-            self.requests += 1
-            self.body_bytes += body_bytes
-            self._subjects[subject] = [held[0] + 1, held[1] + body_bytes]
-        return Reservation(self, subject, body_bytes)
+            held[0] += 1
+        return Reservation(self, subject)
 
     def _check_bytes(self, held: list[int], more: int) -> None:
         if self.body_bytes + more > self.max_body_bytes:
@@ -293,9 +290,24 @@ class ProduceAdmission:
             self.body_bytes += more
             held[1] += more
 
-    def _release(self, subject: str, body_bytes: int) -> None:
+    def _start(self) -> None:
         with self._lock:
-            self.requests -= 1
+            if self.requests >= self.max_requests:
+                raise _busy(
+                    f'The service is serving {self.max_requests} produce '
+                    'requests, the most it serves at once',
+                )
+            self.requests += 1
+
+    def _release(
+        self,
+        subject: str,
+        body_bytes: int,
+        *,
+        started: bool,
+    ) -> None:
+        with self._lock:
+            self.requests -= started
             self.body_bytes -= body_bytes
             held = self._subjects[subject]
             held[0] -= 1
@@ -307,16 +319,12 @@ class ProduceAdmission:
 class Reservation:
     """One admitted request's share of the produce bounds."""
 
-    def __init__(
-        self,
-        admission: ProduceAdmission,
-        subject: str,
-        body_bytes: int,
-    ) -> None:
-        """Initialize with the bytes admitted."""
+    def __init__(self, admission: ProduceAdmission, subject: str) -> None:
+        """Initialize holding no bytes and no place."""
         self._admission = admission
         self._subject = subject
-        self.body_bytes = body_bytes
+        self.body_bytes = 0
+        self.started = False
         self._released = False
 
     def grow_to(self, body_bytes: int) -> None:
@@ -329,11 +337,25 @@ class Reservation:
             self._admission._grow(self._subject, body_bytes - self.body_bytes)
             self.body_bytes = body_bytes
 
+    def start(self) -> None:
+        """Take one of the service's places, once the body is read.
+
+        Raises:
+            RecordError: 429 if every place is taken
+        """
+        if not self.started:
+            self._admission._start()
+            self.started = True
+
     def release(self) -> None:
         """Release the request's share; later calls do nothing."""
         if not self._released:
             self._released = True
-            self._admission._release(self._subject, self.body_bytes)
+            self._admission._release(
+                self._subject,
+                self.body_bytes,
+                started=self.started,
+            )
 
 
 def _busy(reason: str) -> RecordError:

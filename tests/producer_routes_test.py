@@ -994,12 +994,11 @@ async def test_one_user_past_its_share_gets_429(
     assert [r.status_code for r in replies] == [200] * 3
 
 
-async def test_stalled_bodies_past_the_byte_budget_get_429(
+async def test_stalled_bodies_hold_only_what_they_sent(
     service: DiasporaService,
     fake_producer: FakeProducer,
 ) -> None:
-    """Declared lengths hold the budget until the clients go away."""
-    count = PRODUCE_MAX_BODY_BYTES // MAX_BODY_BYTES
+    """Declared lengths reserve nothing, and reads take no place."""
     stalled = [
         _Stalled(
             service,
@@ -1007,9 +1006,42 @@ async def test_stalled_bodies_past_the_byte_budget_get_429(
             content_length=MAX_BODY_BYTES,
             subject=f'user-{i}',
         )
+        for i in range(PRODUCE_MAX_REQUESTS + 1)
+    ]
+    count = PRODUCE_MAX_REQUESTS + 1
+    await _until(lambda: service.produce_admission.body_bytes == count)
+    assert service.produce_admission.requests == 0
+    served = await _post(
+        service,
+        RECORDS,
+        {'value': VALUE},
+        headers=_headers('user-new'),
+    )
+    assert served.status_code == 200
+    # A client that goes away mid-body releases what it held
+    for request in stalled:
+        await request.leave()
+    assert _admitted(service) == (0, 0)
+
+
+async def test_bodies_past_the_byte_budget_get_429_mid_read(
+    service: DiasporaService,
+    fake_producer: FakeProducer,
+) -> None:
+    """Bytes sent hold the budget until the clients go away."""
+    count = PRODUCE_MAX_BODY_BYTES // MAX_BODY_BYTES
+    sent = b' ' * (MAX_BODY_BYTES - 1)
+    stalled = [
+        _Stalled(
+            service,
+            [sent],
+            content_length=MAX_BODY_BYTES,
+            subject=f'user-{i}',
+        )
         for i in range(count)
     ]
-    await _until(lambda: _admitted(service)[1] == PRODUCE_MAX_BODY_BYTES)
+    held = count * len(sent)
+    await _until(lambda: service.produce_admission.body_bytes == held)
     refused = await _post(
         service,
         RECORDS,
@@ -1019,7 +1051,6 @@ async def test_stalled_bodies_past_the_byte_budget_get_429(
     assert refused.status_code == 429
     assert refused.json()['error_code'] == 42901
     assert 'bytes' in refused.json()['message']
-    # A client that goes away mid-body releases what it held
     for request in stalled:
         await request.leave()
     assert _admitted(service) == (0, 0)
@@ -1027,12 +1058,18 @@ async def test_stalled_bodies_past_the_byte_budget_get_429(
     assert served.status_code == 200
 
 
-async def test_chunked_body_reserves_bytes_as_they_arrive(
+@pytest.mark.parametrize('content_length', (None, 5000))
+async def test_body_reserves_bytes_as_they_arrive(
     service: DiasporaService,
     fake_producer: FakeProducer,
+    content_length: int | None,
 ) -> None:
-    stalled = _Stalled(service, [b' ' * 1000, b' ' * 500], content_length=None)
-    await _until(lambda: _admitted(service) == (1, 1500))
+    stalled = _Stalled(
+        service,
+        [b' ' * 1000, b' ' * 500],
+        content_length=content_length,
+    )
+    await _until(lambda: _admitted(service) == (0, 1500))
     await stalled.leave()
     assert _admitted(service) == (0, 0)
 
