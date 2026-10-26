@@ -80,12 +80,15 @@ coverage report
   `test-namespace-<16 hex>.test-topic-<16 hex>` or
   `ns-test<8 hex>.test-topic-<suffix>` (with the suffixes the tests use)
   whose namespace the service has no record of and that is not the default
-  namespace of another IAM user. It also still deletes leftovers with the
-  names the tests used before (`test-subject-<16 hex>`,
-  `ns-<12 hex>.test-topic-<suffix>`). Kafka keeps no creation time for
-  topics, so topics are not filtered by age: a local live run around the
-  nightly time can lose its topics. Without `--apply` the script only
-  lists what it would delete.
+  namespace of another IAM user. It also selects leftovers with the names
+  the tests used before (`test-subject-<16 hex>`,
+  `ns-<12 hex>.test-topic-<suffix>`). The live tests' own identity can
+  delete IAM users and policies with those names, but it cannot see or
+  delete topics with those names; only the service's keys can (see
+  [Create the identity](#create-the-identity)). Kafka keeps no creation
+  time for topics, so topics are not filtered by age: a local live run
+  around the nightly time can lose its topics. Without `--apply` the
+  script only lists what it would delete.
 
 ## The live tests' AWS identity
 
@@ -93,15 +96,20 @@ The live tests and the sweep run against the service's production account
 and MSK cluster, as an IAM user of their own whose policy lets them touch
 only what they create. Its keys are the repository secrets
 `LIVE_TESTS_AWS_ACCESS_KEY_ID` and `LIVE_TESTS_AWS_SECRET_ACCESS_KEY`;
-while those are not set, `live` uses the service's keys.
+while either of them is not set, `live` uses the service's keys.
 
 The policy, [`tests/live_identity/identity-policy.json`](https://github.com/haochenpan/diaspora-service/blob/main/tests/live_identity/identity-policy.json),
 allows:
 
-- IAM users and their managed policies named `test-subject-*` under
-  `/msk-users/` and `/msk-policy/`: create, attach, list, delete, and
-  create and delete access keys. A user can be created, or given a policy,
+- Creating IAM users under `/msk-users/` and managed policies under
+  `/msk-policy/` whose names are `test-subject-test` followed by exactly
+  8 characters, attaching such a policy to such a user, and creating
+  access keys for such a user. A user can be created, or given a policy,
   only with the boundary below as its permissions boundary.
+- Reading any IAM user named `test-subject-*`, detaching its policies,
+  deleting its access keys and deleting it, and deleting any policy of
+  that name, so the sweep also removes test users named the way the tests
+  used to name them.
 - Listing all IAM users and policies, which the sweep needs.
 - Reading and writing items in the three `test-diaspora-*` tables.
 - In the service's own tables, reading only the global namespace list and
@@ -137,9 +145,24 @@ hex digits, which never starts with `ns-test`.
 
 ### Create the identity
 
-Run these with an administrator's credentials. Fill in the account ID,
-region, MSK cluster name and the cluster's UUID (the last part of its ARN,
-from `aws kafka list-clusters-v2`):
+Run these with an administrator's credentials, at a time when no live run
+is in progress.
+
+First, with the service's keys, delete everything earlier live runs left
+behind, whatever its age. The identity cannot see or delete the topics
+named the way the tests used to name them, and the test users named that
+way have no permissions boundary. The sweep reads the region and the
+bootstrap servers from `AWS_ACCOUNT_REGION` and `DEFAULT_SERVERS`. Without
+`--apply` it lists what it would delete:
+
+```bash
+python scripts/sweep_test_resources.py --min-age-hours 0
+python scripts/sweep_test_resources.py --apply --min-age-hours 0
+```
+
+Then create the boundary, the identity's policy, the user and its access
+key. Fill in the account ID, region, MSK cluster name and the cluster's
+UUID (the last part of its ARN, from `aws kafka list-clusters-v2`):
 
 ```bash
 ACCOUNT_ID=<account-id>
@@ -165,18 +188,33 @@ aws iam attach-user-policy --user-name diaspora-live-tests \
 aws iam create-access-key --user-name diaspora-live-tests
 ```
 
+Do not name the user `test-subject-*`, or its policy would let it manage
+itself.
+
 Store the key's `AccessKeyId` and `SecretAccessKey` as the repository
-secrets `LIVE_TESTS_AWS_ACCESS_KEY_ID` and
-`LIVE_TESTS_AWS_SECRET_ACCESS_KEY`. Do not name the user `test-subject-*`,
-or its policy would let it manage itself. Once the secrets are set, `live`
-also sets `IAM_USER_PERMISSIONS_BOUNDARY_ARN` to
+secrets. Each command prompts for the value, which keeps the key out of
+the shell history:
+
+```bash
+gh secret set LIVE_TESTS_AWS_ACCESS_KEY_ID --repo haochenpan/diaspora-service
+gh secret set LIVE_TESTS_AWS_SECRET_ACCESS_KEY --repo haochenpan/diaspora-service
+```
+
+Once both secrets are set, `live` runs as the identity and sets
+`IAM_USER_PERMISSIONS_BOUNDARY_ARN` to
 `arn:aws:iam::<account-id>:policy/diaspora-test/test-user-boundary`.
 
 To change what the identity may do, edit the template and apply it as a
-new default version of the policy:
+new default version of the policy. IAM keeps at most five versions of a
+policy, so when it holds five, first delete the oldest version that is
+not the default, replacing `v1` below with the ID the list prints with
+the earliest date:
 
 ```bash
-aws iam create-policy-version --set-as-default \
-  --policy-arn "arn:aws:iam::$ACCOUNT_ID:policy/diaspora-test/diaspora-live-tests" \
+POLICY_ARN="arn:aws:iam::$ACCOUNT_ID:policy/diaspora-test/diaspora-live-tests"
+aws iam list-policy-versions --policy-arn "$POLICY_ARN" \
+  --query 'Versions[?!IsDefaultVersion].[VersionId,CreateDate]' --output text
+aws iam delete-policy-version --policy-arn "$POLICY_ARN" --version-id v1
+aws iam create-policy-version --set-as-default --policy-arn "$POLICY_ARN" \
   --policy-document "$(render tests/live_identity/identity-policy.json)"
 ```
