@@ -33,6 +33,7 @@ from web_service.producer_service import batch_reply
 from web_service.producer_service import build_record
 from web_service.producer_service import estimate_parse_cost
 from web_service.producer_service import format_timestamp
+from web_service.producer_service import KAFKA_RETRIABLE_ERROR
 from web_service.producer_service import MAX_BATCH_ENTRIES
 from web_service.producer_service import MAX_BODY_BYTES
 from web_service.producer_service import MAX_PARSE_COST
@@ -1543,6 +1544,26 @@ def test_send_waits_until_the_deadline_only(
     timeout = fake_producer.futures[0].timeout
     assert timeout is not None
     assert 19 < timeout <= 20
+
+
+def test_send_times_out_a_record_still_pending_at_the_deadline(
+    producer_service: ProducerService,
+    fake_producer: FakeProducer,
+) -> None:
+    """A wait that starts with no time left and gets no metadata times out."""
+    real_send = fake_producer.send
+
+    def unanswered(topic: str, **kwargs: Any) -> FakeFuture:
+        future = real_send(topic, **kwargs)
+        # kafka-python's get(timeout=0) of a pending record returns None
+        future.metadata = None
+        return future
+
+    fake_producer.send = unanswered  # type: ignore[method-assign]
+    [result] = producer_service.send(KAFKA_TOPIC, [_record()], _deadline())
+    assert isinstance(result, RecordError)
+    assert (result.status, result.error_code) == (500, KAFKA_RETRIABLE_ERROR)
+    assert 'did not acknowledge' in result.message
 
 
 def test_send_shares_one_deadline(

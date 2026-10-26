@@ -42,6 +42,7 @@ from kafka.errors import MessageSizeTooLargeError
 from kafka.errors import RecordListTooLargeError
 from kafka.errors import UnknownTopicOrPartitionError
 from kafka.producer.future import FutureRecordMetadata
+from kafka.producer.future import RecordMetadata
 from kafka.record.default_records import DefaultRecordBatchBuilder
 
 from web_service.services import build_kafka_client
@@ -951,6 +952,25 @@ def _topic_not_found() -> RecordError:
     return RecordError(404, TOPIC_NOT_FOUND, 'Topic not found.')
 
 
+def _acknowledgement(
+    future: FutureRecordMetadata,
+    deadline: float,
+) -> RecordMetadata:
+    """A sent record's metadata, once the cluster acknowledges it.
+
+    Raises:
+        KafkaTimeoutError: If the cluster has not acknowledged the record
+            by the deadline (time.monotonic())
+        Exception: The error the send failed with
+    """
+    metadata = future.get(timeout=max(0.0, deadline - time.monotonic()))
+    if metadata is None:
+        # kafka-python returns None, rather than raising, for a record
+        # still unacknowledged when the wait starts with no time left
+        raise KafkaTimeoutError('No acknowledgement by the deadline')
+    return metadata
+
+
 class ProducerService:
     """Produce records to Kafka for REST API requests."""
 
@@ -1096,9 +1116,7 @@ class ProducerService:
                 results.append(future)
                 continue
             try:
-                metadata = future.get(
-                    timeout=max(0.0, deadline - time.monotonic()),
-                )
+                metadata = _acknowledgement(future, deadline)
             except Exception as e:
                 results.append(_kafka_failure(e, sent=True))
                 continue
