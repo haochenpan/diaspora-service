@@ -44,10 +44,24 @@ jobs:
         run: |
           aws sts get-caller-identity > /dev/null
 
+      # A pinned lightsailctl release, checked against the SHA-256 in the
+      # release's lightsailctl_<version>_checksums.txt before it is used.
+      # The AWS CLI finds it on PATH in the push step.
       - name: Install AWS Lightsail plugin
+        env:
+          LIGHTSAILCTL_VERSION: 1.0.8
+          LIGHTSAILCTL_SHA256: 73108f256907306ddd7fc90ff9209b8e9b256a14586c31d63222b4f58281d146  # pragma: allowlist secret
         run: |
-          sudo curl "https://s3.us-west-2.amazonaws.com/lightsailctl/latest/linux-amd64/lightsailctl" -o "/usr/local/bin/lightsailctl"
-          sudo chmod +x /usr/local/bin/lightsailctl
+          archive="lightsailctl_${LIGHTSAILCTL_VERSION}_linux_amd64.tar.gz"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/$archive" \
+              "https://github.com/aws/lightsailctl/releases/download/v${LIGHTSAILCTL_VERSION}/${archive}"
+          echo "$LIGHTSAILCTL_SHA256  $RUNNER_TEMP/$archive" | sha256sum --check --strict
+
+          install_dir="$RUNNER_TEMP/lightsailctl"
+          mkdir -p "$install_dir"
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$install_dir" lightsailctl
+          "$install_dir/lightsailctl" --version
+          echo "$install_dir" >> "$GITHUB_PATH"
 
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
