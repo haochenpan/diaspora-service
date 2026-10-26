@@ -7,6 +7,7 @@ import contextlib
 import json
 import logging
 import os
+import threading
 import time
 import warnings
 from typing import Any
@@ -14,10 +15,12 @@ from unittest.mock import MagicMock
 from unittest.mock import patch
 
 import pytest
+from kafka.errors import KafkaTimeoutError
 from kafka.structs import OffsetAndMetadata
 from kafka.structs import TopicPartition
 
 from web_service.consumer_service import _encode_value
+from web_service.consumer_service import CONSUMER_OPERATION_TIMEOUT_MS
 from web_service.consumer_service import ConsumerService
 from web_service.consumer_service import ManagedConsumer
 
@@ -457,7 +460,10 @@ def test_delete_consumer_success(
     )
     assert status == 204
     assert body is None
-    mock_kafka_consumer.close.assert_called_once_with(autocommit=False)
+    mock_kafka_consumer.close.assert_called_once_with(
+        autocommit=False,
+        timeout_ms=CONSUMER_OPERATION_TIMEOUT_MS,
+    )
     # Consumer should be removed from registry
     assert len(populated_service._consumers) == 0
 
@@ -872,6 +878,7 @@ def test_commit_offsets_with_explicit_offsets(
     tp = TopicPartition(f'{NAMESPACE}.t1', 0)
     assert tp in call_kwargs['offsets']
     assert call_kwargs['offsets'][tp] == OffsetAndMetadata(42, None, None)
+    assert call_kwargs['timeout_ms'] == CONSUMER_OPERATION_TIMEOUT_MS
 
 
 def test_commit_offsets_without_offsets(
@@ -888,7 +895,9 @@ def test_commit_offsets_without_offsets(
     )
     assert status == 200
     assert body is None
-    mock_kafka_consumer.commit.assert_called_once_with()
+    mock_kafka_consumer.commit.assert_called_once_with(
+        timeout_ms=CONSUMER_OPERATION_TIMEOUT_MS,
+    )
 
 
 def test_commit_offsets_not_found(
@@ -1314,8 +1323,14 @@ def test_shutdown_all_closes_consumers(
         format_type='binary',
     )
     consumer_service.shutdown_all()
-    mock1.close.assert_called_once_with(autocommit=False)
-    mock2.close.assert_called_once_with(autocommit=False)
+    mock1.close.assert_called_once_with(
+        autocommit=False,
+        timeout_ms=CONSUMER_OPERATION_TIMEOUT_MS,
+    )
+    mock2.close.assert_called_once_with(
+        autocommit=False,
+        timeout_ms=CONSUMER_OPERATION_TIMEOUT_MS,
+    )
     assert len(consumer_service._consumers) == 0
 
 
@@ -1389,7 +1404,10 @@ def test_reaper_cleans_expired_consumers(
 
     # Consumer should have been reaped
     assert len(consumer_service._consumers) == 0
-    mock_consumer.close.assert_called_once_with(autocommit=False)
+    mock_consumer.close.assert_called_once_with(
+        autocommit=False,
+        timeout_ms=CONSUMER_OPERATION_TIMEOUT_MS,
+    )
 
 
 def test_reaper_does_not_reap_active_consumers(
@@ -1428,6 +1446,359 @@ def test_reaper_does_not_reap_active_consumers(
     # Consumer should still be present
     assert len(consumer_service._consumers) == 1
     mock_consumer.close.assert_not_called()
+
+
+# ============================================================================
+# Unit Tests - Bounded waits and instance locking
+# ============================================================================
+
+# Each instance operation, with the arguments that pass validation
+_INSTANCE_OPS: list[tuple[str, dict[str, Any], str]] = [
+    ('subscribe', {'topics': ['t1']}, 'subscribe'),
+    ('get_subscription', {}, 'subscription'),
+    ('unsubscribe', {}, 'unsubscribe'),
+    ('poll_records', {}, 'poll'),
+    ('commit_offsets', {}, 'commit'),
+    (
+        'get_committed',
+        {'partitions': [{'topic': 't1', 'partition': 0}]},
+        'committed',
+    ),
+    (
+        'assign_partitions',
+        {'partitions': [{'topic': 't1', 'partition': 0}]},
+        'assign',
+    ),
+    ('get_assignments', {}, 'assignment'),
+    (
+        'seek',
+        {'offsets': [{'topic': 't1', 'partition': 0, 'offset': 1}]},
+        'seek',
+    ),
+    (
+        'seek_to_beginning',
+        {'partitions': [{'topic': 't1', 'partition': 0}]},
+        'seek_to_beginning',
+    ),
+    (
+        'seek_to_end',
+        {'partitions': [{'topic': 't1', 'partition': 0}]},
+        'seek_to_end',
+    ),
+    ('delete_consumer', {}, 'close'),
+]
+
+
+def _managed(populated: ConsumerService) -> ManagedConsumer:
+    return populated._consumers[(SUBJECT, NAMESPACE, GROUP_NAME, INSTANCE_ID)]
+
+
+def _new_managed(instance_id: str) -> ManagedConsumer:
+    return ManagedConsumer(
+        consumer=MagicMock(),
+        subject='u',
+        namespace='ns',
+        group_name='g',
+        instance_id=instance_id,
+        format_type='binary',
+    )
+
+
+@pytest.mark.parametrize(('method', 'kwargs', 'kafka_call'), _INSTANCE_OPS)
+def test_busy_instance_returns_409(
+    populated_service: ConsumerService,
+    mock_kafka_consumer: MagicMock,
+    method: str,
+    kwargs: dict[str, Any],
+    kafka_call: str,
+) -> None:
+    """A request on an instance another request holds gets 409, not a wait."""
+    populated_service.lock_timeout_s = 0.05
+    managed = _managed(populated_service)
+    managed.lock.acquire()
+    try:
+        body, status = getattr(populated_service, method)(
+            SUBJECT,
+            NAMESPACE,
+            GROUP_NAME,
+            INSTANCE_ID,
+            **kwargs,
+        )
+    finally:
+        managed.lock.release()
+    assert status == 409
+    assert body == {
+        'error_code': 40904,
+        'message': 'Consumer instance is busy with another request.',
+    }
+    getattr(mock_kafka_consumer, kafka_call).assert_not_called()
+    # The busy instance is kept
+    assert len(populated_service._consumers) == 1
+
+
+@pytest.mark.parametrize(('method', 'kwargs', 'kafka_call'), _INSTANCE_OPS)
+def test_instance_closed_while_waiting_returns_404(
+    populated_service: ConsumerService,
+    mock_kafka_consumer: MagicMock,
+    method: str,
+    kwargs: dict[str, Any],
+    kafka_call: str,
+) -> None:
+    """A request that finds the instance closed once it gets the lock: 404."""
+    _managed(populated_service).closed = True
+    body, status = getattr(populated_service, method)(
+        SUBJECT,
+        NAMESPACE,
+        GROUP_NAME,
+        INSTANCE_ID,
+        **kwargs,
+    )
+    assert status == 404
+    assert body['error_code'] == 40403
+    getattr(mock_kafka_consumer, kafka_call).assert_not_called()
+
+
+def test_instance_lock_waits_for_a_short_request(
+    populated_service: ConsumerService,
+    mock_kafka_consumer: MagicMock,
+) -> None:
+    """A request waits for another that finishes within the lock timeout."""
+    managed = _managed(populated_service)
+    managed.lock.acquire()
+    timer = threading.Timer(0.05, managed.lock.release)
+    timer.start()
+    body, status = populated_service.get_subscription(
+        SUBJECT,
+        NAMESPACE,
+        GROUP_NAME,
+        INSTANCE_ID,
+    )
+    timer.join()
+    assert status == 200
+    assert body == {'topics': []}
+
+
+def test_get_committed_bounds_each_lookup(
+    populated_service: ConsumerService,
+    mock_kafka_consumer: MagicMock,
+) -> None:
+    """Every committed() call gets a timeout within the operation bound."""
+    mock_kafka_consumer.committed.return_value = 7
+    populated_service.get_committed(
+        SUBJECT,
+        NAMESPACE,
+        GROUP_NAME,
+        INSTANCE_ID,
+        partitions=[
+            {'topic': 't1', 'partition': 0},
+            {'topic': 't1', 'partition': 1},
+        ],
+    )
+    assert mock_kafka_consumer.committed.call_count == 2
+    for c in mock_kafka_consumer.committed.call_args_list:
+        assert 0 < c.kwargs['timeout_ms'] <= CONSUMER_OPERATION_TIMEOUT_MS
+
+
+def test_commit_timeout_is_a_kafka_failure(
+    populated_service: ConsumerService,
+    mock_kafka_consumer: MagicMock,
+) -> None:
+    """A commit that times out answers like any other commit failure."""
+    mock_kafka_consumer.commit.side_effect = KafkaTimeoutError('timed out')
+    body, status = populated_service.commit_offsets(
+        SUBJECT,
+        NAMESPACE,
+        GROUP_NAME,
+        INSTANCE_ID,
+    )
+    assert status == 500
+    assert body['error_code'] == 50002
+    assert body['message'].startswith('Failed to commit offsets: ')
+
+
+def test_create_consumer_builds_outside_the_global_lock(
+    consumer_service: ConsumerService,
+) -> None:
+    """A slow constructor holds back neither other creates nor the lock."""
+    slow_started = threading.Event()
+    release = threading.Event()
+    lock_free_during_build: list[bool] = []
+
+    def _construct(**kwargs: Any) -> MagicMock:
+        if kwargs['group_id'] == f'{NAMESPACE}.slow-group':
+            slow_started.set()
+            free = consumer_service._global_lock.acquire(blocking=False)
+            if free:
+                consumer_service._global_lock.release()
+            lock_free_during_build.append(free)
+            release.wait(timeout=5)
+        return MagicMock()
+
+    results: dict[str, tuple[Any, int]] = {}
+
+    def _slow_create() -> None:
+        results['slow'] = consumer_service.create_consumer(
+            subject=SUBJECT,
+            namespace=NAMESPACE,
+            group_name='slow-group',
+            name='slow',
+        )
+
+    with patch(
+        'web_service.consumer_service.KafkaConsumer',
+        side_effect=_construct,
+    ):
+        thread = threading.Thread(target=_slow_create)
+        thread.start()
+        try:
+            assert slow_started.wait(timeout=5)
+            # Another instance's create completes meanwhile
+            fast_body, fast_status = consumer_service.create_consumer(
+                subject=SUBJECT,
+                namespace=NAMESPACE,
+                group_name=GROUP_NAME,
+                name='fast',
+            )
+            # A second create of the name being built is refused
+            dup_body, dup_status = consumer_service.create_consumer(
+                subject=SUBJECT,
+                namespace=NAMESPACE,
+                group_name='slow-group',
+                name='slow',
+            )
+            # The instance being built is not served yet
+            _sub_body, sub_status = consumer_service.get_subscription(
+                SUBJECT,
+                NAMESPACE,
+                'slow-group',
+                'slow',
+            )
+        finally:
+            release.set()
+            thread.join(timeout=5)
+
+    assert fast_status == 200
+    assert fast_body['instance_id'] == 'fast'
+    assert dup_status == 409
+    assert dup_body['error_code'] == 40902
+    assert sub_status == 404
+    assert lock_free_during_build == [True]
+    assert results['slow'][1] == 200
+    assert (SUBJECT, NAMESPACE, 'slow-group', 'slow') in (
+        consumer_service._consumers
+    )
+    assert consumer_service._pending == set()
+
+
+def test_create_consumer_failure_frees_the_name(
+    consumer_service: ConsumerService,
+) -> None:
+    """A failed build drops its reservation, so the name can be retried."""
+    with patch('web_service.consumer_service.KafkaConsumer') as mock_kc:
+        mock_kc.side_effect = Exception('Connection refused')
+        _body, status = consumer_service.create_consumer(
+            subject=SUBJECT,
+            namespace=NAMESPACE,
+            group_name=GROUP_NAME,
+            name='retry-inst',
+        )
+        assert status == 500
+        assert consumer_service._pending == set()
+        assert consumer_service._consumers == {}
+
+        mock_kc.side_effect = None
+        mock_kc.return_value = MagicMock()
+        body, status = consumer_service.create_consumer(
+            subject=SUBJECT,
+            namespace=NAMESPACE,
+            group_name=GROUP_NAME,
+            name='retry-inst',
+        )
+    assert status == 200
+    assert body['instance_id'] == 'retry-inst'
+
+
+def test_reaper_skips_busy_and_closes_idle(
+    consumer_service: ConsumerService,
+) -> None:
+    """The reaper keeps an expired instance in use and closes an idle one.
+
+    The idle one is closed under its own lock, outside the global lock.
+    """
+    consumer_service.lock_timeout_s = 0.05
+    idle = _new_managed('idle')
+    busy = _new_managed('busy')
+    idle.last_access = time.monotonic() - 600
+    busy.last_access = time.monotonic() - 600
+    consumer_service._consumers[('u', 'ns', 'g', 'idle')] = idle
+    consumer_service._consumers[('u', 'ns', 'g', 'busy')] = busy
+
+    seen: dict[str, bool] = {}
+
+    def _close(**_kwargs: Any) -> None:
+        seen['instance_lock_held'] = idle.lock.locked()
+        free = consumer_service._global_lock.acquire(blocking=False)
+        if free:
+            consumer_service._global_lock.release()
+        seen['global_lock_free'] = free
+
+    idle.consumer.close.side_effect = _close
+    busy.lock.acquire()
+    try:
+        consumer_service._reap_once()
+    finally:
+        busy.lock.release()
+
+    idle.consumer.close.assert_called_once_with(
+        autocommit=False,
+        timeout_ms=CONSUMER_OPERATION_TIMEOUT_MS,
+    )
+    assert seen == {'instance_lock_held': True, 'global_lock_free': True}
+    assert idle.closed
+    busy.consumer.close.assert_not_called()
+    assert not busy.closed
+    assert list(consumer_service._consumers) == [('u', 'ns', 'g', 'busy')]
+
+    # Once free, the busy one is reaped on a later round
+    consumer_service._reap_once()
+    busy.consumer.close.assert_called_once()
+    assert consumer_service._consumers == {}
+
+
+def test_reaper_keeps_instance_used_since_scan(
+    consumer_service: ConsumerService,
+) -> None:
+    """An instance used while the reaper waited for its lock is kept."""
+    managed = _new_managed('inst')
+    consumer_service._consumers[('u', 'ns', 'g', 'inst')] = managed
+    # Expired at the scan, used before the reaper got its lock
+    with patch.object(managed, 'is_expired', side_effect=[True, False]):
+        consumer_service._reap_once()
+    managed.consumer.close.assert_not_called()
+    assert len(consumer_service._consumers) == 1
+    assert not managed.lock.locked()
+
+
+def test_shutdown_all_skips_busy_instance(
+    consumer_service: ConsumerService,
+) -> None:
+    """Shutdown closes idle instances and leaves one still in use."""
+    consumer_service.lock_timeout_s = 0.05
+    idle = _new_managed('idle')
+    busy = _new_managed('busy')
+    consumer_service._consumers[('u', 'ns', 'g', 'idle')] = idle
+    consumer_service._consumers[('u', 'ns', 'g', 'busy')] = busy
+    busy.lock.acquire()
+    try:
+        consumer_service.shutdown_all()
+    finally:
+        busy.lock.release()
+    idle.consumer.close.assert_called_once_with(
+        autocommit=False,
+        timeout_ms=CONSUMER_OPERATION_TIMEOUT_MS,
+    )
+    busy.consumer.close.assert_not_called()
+    assert consumer_service._consumers == {}
 
 
 # ============================================================================
