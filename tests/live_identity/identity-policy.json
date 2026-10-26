@@ -28,7 +28,7 @@
       "Sid": "CreateTestUsersOnlyWithTheBoundary",
       "Effect": "Allow",
       "Action": "iam:CreateUser",
-      "Resource": "arn:aws:iam::<account-id>:user/msk-users/test-subject-*",
+      "Resource": "arn:aws:iam::<account-id>:user/msk-users/test-subject-test????????",
       "Condition": {
         "StringEquals": {
           "iam:PermissionsBoundary": "arn:aws:iam::<account-id>:policy/diaspora-test/test-user-boundary"
@@ -39,15 +39,27 @@
       "Sid": "AttachTestPoliciesOnlyToBoundedTestUsers",
       "Effect": "Allow",
       "Action": "iam:AttachUserPolicy",
-      "Resource": "arn:aws:iam::<account-id>:user/msk-users/test-subject-*",
+      "Resource": "arn:aws:iam::<account-id>:user/msk-users/test-subject-test????????",
       "Condition": {
         "ArnLike": {
-          "iam:PolicyARN": "arn:aws:iam::<account-id>:policy/msk-policy/test-subject-*"
+          "iam:PolicyARN": "arn:aws:iam::<account-id>:policy/msk-policy/test-subject-test????????"
         },
         "StringEquals": {
           "iam:PermissionsBoundary": "arn:aws:iam::<account-id>:policy/diaspora-test/test-user-boundary"
         }
       }
+    },
+    {
+      "Sid": "CreateKeysOnlyForCurrentTestUsers",
+      "Effect": "Allow",
+      "Action": "iam:CreateAccessKey",
+      "Resource": "arn:aws:iam::<account-id>:user/msk-users/test-subject-test????????"
+    },
+    {
+      "Sid": "CreateTestPolicies",
+      "Effect": "Allow",
+      "Action": "iam:CreatePolicy",
+      "Resource": "arn:aws:iam::<account-id>:policy/msk-policy/test-subject-test????????"
     },
     {
       "Sid": "DetachTestPoliciesFromTestUsers",
@@ -64,10 +76,9 @@
       }
     },
     {
-      "Sid": "ManageTestUserKeysAndDeleteTestUsers",
+      "Sid": "DeleteTestUserKeysAndTestUsers",
       "Effect": "Allow",
       "Action": [
-        "iam:CreateAccessKey",
         "iam:DeleteAccessKey",
         "iam:DeleteUser"
       ],
@@ -77,10 +88,9 @@
       ]
     },
     {
-      "Sid": "ManageTestPolicies",
+      "Sid": "DeleteTestPolicies",
       "Effect": "Allow",
       "Action": [
-        "iam:CreatePolicy",
         "iam:DeletePolicy",
         "iam:ListPolicyVersions",
         "iam:DeletePolicyVersion"
@@ -112,6 +122,9 @@
           "dynamodb:LeadingKeys": [
             "__global_namespaces__"
           ]
+        },
+        "Null": {
+          "dynamodb:LeadingKeys": "false"
         }
       }
     },
@@ -126,6 +139,9 @@
             "test-namespace-*",
             "ns-test*"
           ]
+        },
+        "Null": {
+          "dynamodb:LeadingKeys": "false"
         }
       }
     },
