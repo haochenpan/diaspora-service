@@ -1100,8 +1100,7 @@ reads topics on one Amazon MSK cluster.</p>
 <li><code>KafkaService</code> creates and deletes topics with a Kafka admin client.</li>
 </ul>
 </li>
-<li>The consumer routes, under <code>/api/v2/consumers</code> and their deprecated
-   aliases under <code>/api/v3/{namespace}/consumers</code>, call <code>ConsumerService</code>
+<li>The consumer routes, under <code>/api/v2/consumers</code>, call <code>ConsumerService</code>
    in <code>web_service/consumer_service.py</code>, which keeps Kafka consumers in
    memory (<a href="#state-in-memory">State in memory</a>).</li>
 </ol>
@@ -1267,7 +1266,7 @@ When the process stops, it closes them all at once, within 8 s in all.
 An instance created with <code>auto.commit.enable</code> set to <code>true</code> commits its
 positions before it closes, at a delete, at the reaper's close and at
 shutdown (<a href="../web/api/#instance-lifecycle">Instance lifecycle</a>). A subject
-may hold 4 instances and the service 16.</p>
+may hold 4 instances and the service 12.</p>
 <p>These limits bound the memory of the consumer routes:</p>
 <ul>
 <li>An idle instance holds what kafka-python fetched ahead for its next
@@ -1291,8 +1290,8 @@ may hold 4 instances and the service 16.</p>
   arrays took 180 MiB, which the bound refuses.</li>
 </ul>
 <p>The service's worst case on a cluster of two brokers adds up as follows.
-The measured numbers come from tests on macOS against one local broker;
-the others are derived from the code.</p>
+The measured numbers come from tests on macOS against one local broker,
+except where the row says otherwise; the others are derived from the code.</p>
 <table>
 <thead>
 <tr>
@@ -1308,14 +1307,14 @@ the others are derived from the code.</p>
 <td>Measured</td>
 </tr>
 <tr>
-<td>Records fetched ahead by 16 instances, 8 MiB from each of 2 brokers</td>
-<td>256 MiB</td>
+<td>Records fetched ahead by 12 instances, 8 MiB from each of 2 brokers</td>
+<td>192 MiB</td>
 <td>Derived; one broker's 8 MiB per instance was measured</td>
 </tr>
 <tr>
-<td>16 instances' clients, sockets and heartbeat threads</td>
-<td>16 MiB</td>
-<td>Measured at 0.3 to 0.6 MiB each, rounded up to 1 MiB</td>
+<td>12 instances' clients, TLS connections and heartbeat threads</td>
+<td>54 MiB</td>
+<td>Measured against the cluster at 4.1 to 4.2 MiB each, rounded up to 4.5 MiB. This corrects the 1 MiB each measured against the local broker without TLS</td>
 </tr>
 <tr>
 <td>3 fetches, each with an 8 MiB record from each of 2 brokers</td>
@@ -1334,15 +1333,18 @@ the others are derived from the code.</p>
 </tr>
 <tr>
 <td>Total</td>
-<td>907 MiB</td>
+<td>881 MiB</td>
 <td></td>
 </tr>
 </tbody>
 </table>
-<p>That leaves about 117 MiB of the node's 1 GB. In the same tests, with
-12 idle instances holding 64 MiB of fetched-ahead records, 4 fetches of
-one 8 MiB record each raised the service from 99 MiB to 320 MiB as
-base64 and to 350 MiB as JSON of control characters.</p>
+<p>That leaves about 143 MiB of the node's 1 GB. Creating and deleting 16
+instances round after round, under the earlier cap of 16, in the
+service's image on a quarter of a CPU, raised the service's memory by 60 to 70 MiB, which that covers. In
+the local tests, with 12 idle instances holding 64 MiB of fetched-ahead
+records, 4 fetches of one 8 MiB record each raised the service from
+99 MiB to 320 MiB as base64 and to 350 MiB as JSON of control
+characters.</p>
 <p><code>WebService</code> and <code>NamespaceService</code> each hold a lock. The lock in
 <code>WebService</code> serializes user and key operations, including the Kafka
 topic deletes of <code>DELETE /api/v3/user</code>. The lock in <code>NamespaceService</code>
