@@ -1,0 +1,1822 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Documentation for Diaspora Service">
+      
+      
+        <meta name="author" content="Haochen Pan">
+      
+      
+        <link rel="canonical" href="https://haochenpan.github.io/diaspora-service/latest/web/management/">
+      
+      
+        <link rel="prev" href="../api/">
+      
+      
+        <link rel="next" href="../produce/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../static/octopus.svg">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.0">
+    
+    
+      
+        <title>Management API - Diaspora Service Documentation</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.57a0d79d.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.fb2fffe2.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CUbuntu+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Ubuntu Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="cyan">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#management-api" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="Diaspora Service Documentation" class="md-header__button md-logo" aria-label="Diaspora Service Documentation" data-md-component="logo">
+      
+  <img src="../../static/octopus.svg" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Diaspora Service Documentation
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Management API
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme)" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="cyan"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m14.3 16-.7-2h-3.2l-.7 2H7.8L11 7h2l3.2 9zM20 8.69V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12zm-9.15 3.96h2.3L12 9z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="cyan"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_2" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="blue" data-md-color-accent="cyan"  aria-label="Switch to system preference"  type="radio" name="__palette" id="__palette_2">
+    
+      <label class="md-header__button md-icon" title="Switch to system preference" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="Share" aria-label="Share" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/haochenpan/diaspora-service" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    haochenpan/diaspora-service
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../.." class="md-tabs__link">
+          
+  
+  
+  Development
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../api/" class="md-tabs__link">
+          
+  
+  
+  Web Service
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../kafka-console/intro/" class="md-tabs__link">
+          
+  
+  
+  Kafka Console
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="Diaspora Service Documentation" class="md-nav__button md-logo" aria-label="Diaspora Service Documentation" data-md-component="logo">
+      
+  <img src="../../static/octopus.svg" alt="logo">
+
+    </a>
+    Diaspora Service Documentation
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/haochenpan/diaspora-service" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    haochenpan/diaspora-service
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_1" >
+        
+          
+          <label class="md-nav__link" for="__nav_1" id="__nav_1_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_1_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_1">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Development
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Introduction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../1-running/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Running
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../2-testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contributing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../3-deploying/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../4-monitoring/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Monitoring
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../5-runbook/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runbook
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../acknowledgments/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Acknowledgments
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Web Service
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Web Service
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Management API
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Management API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#replies" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Replies
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#names-and-limits" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Names and limits
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#users" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Users
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Users">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#create-user" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Create user
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#delete-user" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Delete user
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#keys" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Keys
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Keys">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#create-key" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Create key
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#delete-key" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Delete key
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#namespaces" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Namespaces
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Namespaces">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#list-namespaces-and-topics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        List namespaces and topics
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#topics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Topics
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Topics">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#create-topic" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Create topic
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#delete-topic" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Delete topic
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recreate-topic" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recreate topic
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../produce/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Produce API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../consume/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Consume API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Kafka Console
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Kafka Console
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../kafka-console/intro/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Introduction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#replies" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Replies
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#names-and-limits" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Names and limits
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#users" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Users
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Users">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#create-user" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Create user
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#delete-user" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Delete user
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#keys" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Keys
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Keys">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#create-key" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Create key
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#delete-key" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Delete key
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#namespaces" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Namespaces
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Namespaces">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#list-namespaces-and-topics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        List namespaces and topics
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#topics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Topics
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Topics">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#create-topic" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Create topic
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#delete-topic" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Delete topic
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recreate-topic" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recreate topic
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+                
+
+
+
+
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="management-api">Management API<a class="headerlink" href="#management-api" title="Permanent link">&para;</a></h1>
+<p>The management routes create a user and its access key, list the user's namespaces and topics, and create, delete and recreate topics. They are under <code>/api/v3</code>:</p>
+<table>
+<thead>
+<tr>
+<th>Route</th>
+<th>Does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="#create-user"><code>POST /api/v3/user</code></a></td>
+<td>Creates the IAM user and the default namespace</td>
+</tr>
+<tr>
+<td><a href="#delete-user"><code>DELETE /api/v3/user</code></a></td>
+<td>Deletes the default namespace's topics, the namespace, the key and the IAM user</td>
+</tr>
+<tr>
+<td><a href="#create-key"><code>POST /api/v3/key</code></a></td>
+<td>Returns the user's access key, creating the user, the namespace and the key if needed</td>
+</tr>
+<tr>
+<td><a href="#delete-key"><code>DELETE /api/v3/key</code></a></td>
+<td>Deletes the user's access keys</td>
+</tr>
+<tr>
+<td><a href="#list-namespaces-and-topics"><code>GET /api/v3/namespace</code></a></td>
+<td>Lists the user's namespaces and their topics</td>
+</tr>
+<tr>
+<td><a href="#create-topic"><code>POST /api/v3/{namespace}/{topic}</code></a></td>
+<td>Creates a topic</td>
+</tr>
+<tr>
+<td><a href="#delete-topic"><code>DELETE /api/v3/{namespace}/{topic}</code></a></td>
+<td>Deletes a topic and its records</td>
+</tr>
+<tr>
+<td><a href="#recreate-topic"><code>PUT /api/v3/{namespace}/{topic}/recreate</code></a></td>
+<td>Deletes a topic and creates it again, empty</td>
+</tr>
+</tbody>
+</table>
+<p>Every route takes the <code>subject</code> and <code>authorization</code> headers (<a href="../api/#getting-subject-and-authorization">Getting <code>subject</code> and <code>authorization</code></a>) and no body. The examples use the variables that page exports: <code>$SUBJECT</code>, <code>$AUTHORIZATION</code> and <code>$NAMESPACE</code>.</p>
+<p>The SDK's <code>Client</code> calls these routes with <code>create_user</code>, <code>delete_user</code>, <code>create_key</code>, <code>delete_key</code>, <code>list_namespaces</code>, <code>create_topic</code>, <code>delete_topic</code> and <code>recreate_topic</code>, in the default namespace. <a href="https://github.com/globus-labs/diaspora-event-sdk/blob/main/diaspora_event_sdk/examples/DiasporaDemo.ipynb">DiasporaDemo.ipynb</a> shows them, and the Kafka producer and consumer that use the key.</p>
+<h2 id="replies">Replies<a class="headerlink" href="#replies" title="Permanent link">&para;</a></h2>
+<p>A management route answers HTTP 200 with a JSON object whose <code>status</code> says how the request went, so a client must read <code>status</code>, not the HTTP status:</p>
+<ul>
+<li><code>"status": "success"</code>: the request was done. <code>message</code> says what was done, and each route adds its own fields, given below.</li>
+<li><code>"status": "failure"</code>: the request was refused or failed. <code>message</code> says why; the messages are given below for each route.</li>
+<li><code>"status": "error"</code>: the token check failed. <code>reason</code> says why, as in the table below, and nothing else is done.</li>
+</ul>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="p">{</span><span class="nt">"status"</span><span class="p">:</span><span class="w"> </span><span class="s2">"failure"</span><span class="p">,</span><span class="w"> </span><span class="nt">"message"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Namespace ns-0123456789ab not found for 01234567-89ab-cdef-0123-456789abcdef"</span><span class="p">}</span>
+</span></code></pre></div>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="p">{</span><span class="nt">"status"</span><span class="p">:</span><span class="w"> </span><span class="s2">"error"</span><span class="p">,</span><span class="w"> </span><span class="nt">"reason"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Token is inactive."</span><span class="p">}</span>
+</span></code></pre></div>
+<p>The token check runs first on every route and fails with one of these reasons:</p>
+<table>
+<thead>
+<tr>
+<th><code>reason</code></th>
+<th>Cause</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Invalid user ID; expected UUID.</code></td>
+<td><code>subject</code> is not a UUID</td>
+</tr>
+<tr>
+<td><code>Auth token must start with "Bearer ".</code></td>
+<td><code>authorization</code> does not start with <code>Bearer</code></td>
+</tr>
+<tr>
+<td><code>Invalid token format.</code></td>
+<td>The token after <code>Bearer</code> is not 33 to 254 letters, digits or underscores</td>
+</tr>
+<tr>
+<td><code>Token is inactive.</code></td>
+<td>Globus reports the token as expired, revoked or unknown</td>
+</tr>
+<tr>
+<td><code>Token does not belong to the user.</code></td>
+<td>The token's identity is not <code>subject</code></td>
+</tr>
+<tr>
+<td><code>Not in the audience set. introspected = [...] server_client_id = ...</code></td>
+<td>The token is not for this service; the reason lists the token's audiences and the service's client ID</td>
+</tr>
+<tr>
+<td><code>Token lacks the scope for action.</code></td>
+<td>The token lacks the service's <code>action_all</code> scope</td>
+</tr>
+</tbody>
+</table>
+<p>Two replies have a real HTTP status:</p>
+<ul>
+<li>A request without the <code>subject</code> or <code>authorization</code> header answers 422 with FastAPI's <code>{"detail": [...]}</code>, which names each missing header.</li>
+<li>An error the service does not handle, such as a DynamoDB or Globus Auth call that fails, answers 500 with the text <code>Internal Server Error</code>. What the request did before the error stays done; retry it, since every route can be repeated.</li>
+</ul>
+<h2 id="names-and-limits">Names and limits<a class="headerlink" href="#names-and-limits" title="Permanent link">&para;</a></h2>
+<ul>
+<li>A user's default namespace is <code>ns-</code> followed by the last 12 characters of the subject without dashes, such as <code>ns-0123456789ab</code> for the subject <code>01234567-89ab-cdef-0123-456789abcdef</code>. <code>POST /api/v3/user</code> and <code>POST /api/v3/key</code> create it. No route creates or deletes another namespace.</li>
+<li>A topic name is 3 to 32 characters, each a letter, a digit, <code>-</code> or <code>_</code>, and does not start or end with <code>-</code> or <code>_</code>. Names are case-sensitive.</li>
+<li>The topic <code>my-topic</code> of the namespace <code>ns-0123456789ab</code> is the Kafka topic <code>ns-0123456789ab.my-topic</code>. Every topic has one partition and replication factor 2.</li>
+<li>A namespace holds at most 50 topics, a limit the service sets with the <code>MAX_TOPICS_PER_NAMESPACE</code> environment variable. Creating a new topic in a namespace that already holds that many returns <code>"status": "failure"</code> with a message that says to delete a topic first. Once a create adds a topic and leaves the namespace with at least 90% of the limit (45 of 50), the reply appends a warning to <code>message</code> and returns the same sentence in a <code>warning</code> field, which is absent otherwise. At 45 of 50 the warning reads "Namespace my-namespace now holds 45 of 50 topics; a create fails once it holds 50, so delete topics you no longer need." and at 50 of 50 it reads "Namespace my-namespace now holds 50 of 50 topics, the most allowed; delete a topic before you create another." Repeating the create of a topic that already exists, recreating a topic and deleting one are not limited.</li>
+<li>The service tries each create or delete of a Kafka topic up to 3 times before it reports a failure.</li>
+</ul>
+<p>Every route can be repeated: a second create of something that exists, or a delete of something that is gone, succeeds.</p>
+<h2 id="users">Users<a class="headerlink" href="#users" title="Permanent link">&para;</a></h2>
+<h3 id="create-user">Create user<a class="headerlink" href="#create-user" title="Permanent link">&para;</a></h3>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span><span class="s2">"https://diaspora-web-service.qpp943wkvr7b2.us-east-1.cs.amazonlightsail.com/api/v3/user"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"subject: </span><span class="nv">$SUBJECT</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"authorization: </span><span class="nv">$AUTHORIZATION</span><span class="s2">"</span>
+</span></code></pre></div>
+<p><code>POST /api/v3/user</code> creates an IAM user named by the subject, and an IAM policy that lets it use, on the Kafka cluster, only topics, consumer group IDs and transactional IDs that start with the default namespace and a dot. It then creates the default namespace. A user, policy or namespace that already exists is kept. The route creates no access key: <a href="#create-key"><code>POST /api/v3/key</code></a> does, and creates the user too, so a client that wants a key needs only that route.</p>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="p">{</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">"status"</span><span class="p">:</span><span class="w"> </span><span class="s2">"success"</span><span class="p">,</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span><span class="nt">"message"</span><span class="p">:</span><span class="w"> </span><span class="s2">"User 01234567-89ab-cdef-0123-456789abcdef created with namespace ns-0123456789ab"</span><span class="p">,</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">  </span><span class="nt">"subject"</span><span class="p">:</span><span class="w"> </span><span class="s2">"01234567-89ab-cdef-0123-456789abcdef"</span><span class="p">,</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">  </span><span class="nt">"namespace"</span><span class="p">:</span><span class="w"> </span><span class="s2">"ns-0123456789ab"</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="p">}</span>
+</span></code></pre></div>
+<table>
+<thead>
+<tr>
+<th><code>message</code> of a failure</th>
+<th>Cause</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Failed to create IAM user: Failed to create user and policy: &lt;IAM error&gt;</code></td>
+<td>IAM refused a call</td>
+</tr>
+<tr>
+<td><code>Failed to create namespace: Namespace already taken: &lt;namespace&gt;</code></td>
+<td>Another user holds the default namespace's name; the service deletes the IAM user</td>
+</tr>
+</tbody>
+</table>
+<h3 id="delete-user">Delete user<a class="headerlink" href="#delete-user" title="Permanent link">&para;</a></h3>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>curl<span class="w"> </span>-X<span class="w"> </span>DELETE<span class="w"> </span><span class="s2">"https://diaspora-web-service.qpp943wkvr7b2.us-east-1.cs.amazonlightsail.com/api/v3/user"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"subject: </span><span class="nv">$SUBJECT</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"authorization: </span><span class="nv">$AUTHORIZATION</span><span class="s2">"</span>
+</span></code></pre></div>
+<p><code>DELETE /api/v3/user</code> deletes, in this order: each topic of the default namespace, from the cluster and then from the namespace, with its records; the default namespace; the stored access key; and the IAM user, with its access keys and its policy. Consumer instances the user holds are not closed; they read nothing from the deleted topics. Deleting a user that does not exist succeeds.</p>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="p">{</span><span class="nt">"status"</span><span class="p">:</span><span class="w"> </span><span class="s2">"success"</span><span class="p">,</span><span class="w"> </span><span class="nt">"message"</span><span class="p">:</span><span class="w"> </span><span class="s2">"User 01234567-89ab-cdef-0123-456789abcdef deleted"</span><span class="p">}</span>
+</span></code></pre></div>
+<table>
+<thead>
+<tr>
+<th><code>message</code> of a failure</th>
+<th>Cause</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Cannot delete user &lt;subject&gt;: user has &lt;n&gt; additional namespace(s). Delete namespaces first.</code></td>
+<td>The user holds namespaces other than the default one; nothing is deleted</td>
+</tr>
+<tr>
+<td><code>Failed to delete Kafka topic: Failed to delete Kafka topic &lt;namespace&gt;.&lt;topic&gt; after 3 attempts: the Kafka cluster did not complete it; retry shortly</code></td>
+<td>The cluster did not delete a topic. The topics deleted before it stay deleted; that topic, the rest, the namespace, the key and the user are kept</td>
+</tr>
+<tr>
+<td><code>Failed to delete IAM user: Failed to delete user and policy: &lt;IAM error&gt;</code></td>
+<td>IAM refused a call. The topics, the namespace and the stored key are already deleted</td>
+</tr>
+</tbody>
+</table>
+<h2 id="keys">Keys<a class="headerlink" href="#keys" title="Permanent link">&para;</a></h2>
+<h3 id="create-key">Create key<a class="headerlink" href="#create-key" title="Permanent link">&para;</a></h3>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span><span class="s2">"https://diaspora-web-service.qpp943wkvr7b2.us-east-1.cs.amazonlightsail.com/api/v3/key"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"subject: </span><span class="nv">$SUBJECT</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"authorization: </span><span class="nv">$AUTHORIZATION</span><span class="s2">"</span>
+</span></code></pre></div>
+<p><code>POST /api/v3/key</code> returns the user's AWS access key and the cluster's endpoint:</p>
+<ul>
+<li>If the service holds a key for the user, it returns that key, with <code>"fresh": false</code> and the message <code>Access key already exists for &lt;subject&gt;</code>. It creates nothing and does not check the key with IAM, so every call returns the same key until <a href="#delete-key"><code>DELETE /api/v3/key</code></a> deletes it.</li>
+<li>Otherwise it creates the user and the default namespace as <a href="#create-user"><code>POST /api/v3/user</code></a> does, deletes every access key the IAM user has, creates one, stores it, and returns it with <code>"fresh": true</code>.</li>
+</ul>
+<p>To replace a key, delete it and create one.</p>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="p">{</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span><span class="nt">"status"</span><span class="p">:</span><span class="w"> </span><span class="s2">"success"</span><span class="p">,</span>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">  </span><span class="nt">"message"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Access key created for 01234567-89ab-cdef-0123-456789abcdef"</span><span class="p">,</span>
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">  </span><span class="nt">"access_key"</span><span class="p">:</span><span class="w"> </span><span class="s2">"&lt;access key ID&gt;"</span><span class="p">,</span>
+</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="w">  </span><span class="nt">"secret_key"</span><span class="p">:</span><span class="w"> </span><span class="s2">"&lt;secret access key&gt;"</span><span class="p">,</span>
+</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="w">  </span><span class="nt">"create_date"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2026-10-26T15:04:05+00:00"</span><span class="p">,</span>
+</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="w">  </span><span class="nt">"endpoint"</span><span class="p">:</span><span class="w"> </span><span class="s2">"&lt;bootstrap servers&gt;"</span><span class="p">,</span>
+</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="w">  </span><span class="nt">"fresh"</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
+</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="p">}</span>
+</span></code></pre></div>
+<p><code>create_date</code> is when IAM created the key, in ISO 8601 with a UTC offset. <code>endpoint</code> is the cluster's bootstrap servers for IAM authentication, a comma-separated list of <code>host:port</code>, or an empty string if the service has none set. The reply holds the secret key: keep it out of logs and notebooks you share.</p>
+<p>The key lets a Kafka client connect to the cluster at <code>endpoint</code>, with MSK IAM authentication. Such a client may use only topics, consumer group IDs and transactional IDs that start with your default namespace and a dot, such as <code>ns-0123456789ab.workers</code>; the cluster refuses any other with an authorization error (<code>GroupAuthorizationFailedError</code> in kafka-python for a group).</p>
+<table>
+<thead>
+<tr>
+<th><code>message</code> of a failure</th>
+<th>Cause</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Failed to create user: Failed to create IAM user: ...</code> or <code>Failed to create user: Failed to create namespace: ...</code></td>
+<td>Creating the user failed, as in <a href="#create-user">Create user</a></td>
+</tr>
+<tr>
+<td><code>Failed to delete existing IAM access keys: Failed to delete access keys: &lt;IAM error&gt;</code></td>
+<td>IAM refused to list or delete the user's keys</td>
+</tr>
+<tr>
+<td><code>Failed to create IAM access key: Failed to create access key: &lt;IAM error&gt;</code></td>
+<td>IAM refused to create the key</td>
+</tr>
+</tbody>
+</table>
+<p>If the service cannot store a new key, the reply is 500 and the key is not returned; a retry deletes it and creates another.</p>
+<h3 id="delete-key">Delete key<a class="headerlink" href="#delete-key" title="Permanent link">&para;</a></h3>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>curl<span class="w"> </span>-X<span class="w"> </span>DELETE<span class="w"> </span><span class="s2">"https://diaspora-web-service.qpp943wkvr7b2.us-east-1.cs.amazonlightsail.com/api/v3/key"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"subject: </span><span class="nv">$SUBJECT</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"authorization: </span><span class="nv">$AUTHORIZATION</span><span class="s2">"</span>
+</span></code></pre></div>
+<p><code>DELETE /api/v3/key</code> deletes every access key of the IAM user, then the key the service stores. Kafka clients can no longer connect with the key. The user, the namespace and the topics are kept, and the produce and consume routes, which take the Globus token, still work. Deleting a key that does not exist, or the key of a user that does not exist, succeeds.</p>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="p">{</span><span class="nt">"status"</span><span class="p">:</span><span class="w"> </span><span class="s2">"success"</span><span class="p">,</span><span class="w"> </span><span class="nt">"message"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Access key deleted for 01234567-89ab-cdef-0123-456789abcdef"</span><span class="p">}</span>
+</span></code></pre></div>
+<table>
+<thead>
+<tr>
+<th><code>message</code> of a failure</th>
+<th>Cause</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Failed to delete IAM access keys: Failed to delete access keys: &lt;IAM error&gt;</code></td>
+<td>IAM refused to list or delete the keys. The stored key is kept, since it may still be valid</td>
+</tr>
+</tbody>
+</table>
+<h2 id="namespaces">Namespaces<a class="headerlink" href="#namespaces" title="Permanent link">&para;</a></h2>
+<h3 id="list-namespaces-and-topics">List namespaces and topics<a class="headerlink" href="#list-namespaces-and-topics" title="Permanent link">&para;</a></h3>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>curl<span class="w"> </span>-X<span class="w"> </span>GET<span class="w"> </span><span class="s2">"https://diaspora-web-service.qpp943wkvr7b2.us-east-1.cs.amazonlightsail.com/api/v3/namespace"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"subject: </span><span class="nv">$SUBJECT</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"authorization: </span><span class="nv">$AUTHORIZATION</span><span class="s2">"</span>
+</span></code></pre></div>
+<p><code>GET /api/v3/namespace</code> lists the user's namespaces and the topics each holds, both sorted by name. The topics are those the service records for the namespace, named without it; the route does not ask the cluster. A user not yet created has no namespaces.</p>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="p">{</span>
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="w">  </span><span class="nt">"status"</span><span class="p">:</span><span class="w"> </span><span class="s2">"success"</span><span class="p">,</span>
+</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="w">  </span><span class="nt">"message"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Found 1 namespaces for 01234567-89ab-cdef-0123-456789abcdef"</span><span class="p">,</span>
+</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="w">  </span><span class="nt">"namespaces"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"ns-0123456789ab"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"my-topic"</span><span class="p">,</span><span class="w"> </span><span class="s2">"other-topic"</span><span class="p">]}</span>
+</span><span id="__span-11-5"><a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="p">}</span>
+</span></code></pre></div>
+<p>The route fails only on the token check or with a 500.</p>
+<h2 id="topics">Topics<a class="headerlink" href="#topics" title="Permanent link">&para;</a></h2>
+<p>The topic routes take the namespace and the topic, named without the namespace, in the path. The namespace must be one the user holds; for any other, a route fails with the message <code>Namespace &lt;namespace&gt; not found for &lt;subject&gt;</code>, and asks nothing of the cluster.</p>
+<h3 id="create-topic">Create topic<a class="headerlink" href="#create-topic" title="Permanent link">&para;</a></h3>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span><span class="s2">"https://diaspora-web-service.qpp943wkvr7b2.us-east-1.cs.amazonlightsail.com/api/v3/</span><span class="nv">$NAMESPACE</span><span class="s2">/my-topic"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"subject: </span><span class="nv">$SUBJECT</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"authorization: </span><span class="nv">$AUTHORIZATION</span><span class="s2">"</span>
+</span></code></pre></div>
+<p><code>POST /api/v3/{namespace}/{topic}</code> checks the topic's name and the namespace, adds the topic to the namespace, and creates the Kafka topic. If the cluster does not create it, the route removes the topic from the namespace again. If the namespace already holds the topic, the reply is a success with the message <code>Topic &lt;topic&gt; already exists in &lt;namespace&gt;</code>, the topic is not counted again, and the Kafka topic is created if the cluster lacks it.</p>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="p">{</span><span class="nt">"status"</span><span class="p">:</span><span class="w"> </span><span class="s2">"success"</span><span class="p">,</span><span class="w"> </span><span class="nt">"message"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Topic my-topic created in ns-0123456789ab"</span><span class="p">,</span><span class="w"> </span><span class="nt">"topics"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"my-topic"</span><span class="p">]}</span>
+</span></code></pre></div>
+<p><code>topics</code> lists the namespace's topics after the create. Near the limit, <code>message</code> ends with a warning and the reply has a <code>warning</code> field (<a href="#names-and-limits">Names and limits</a>).</p>
+<table>
+<thead>
+<tr>
+<th><code>message</code> of a failure</th>
+<th>Cause</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Name must be between 3 and 32 characters</code></td>
+<td>The topic name is too short or too long</td>
+</tr>
+<tr>
+<td><code>Name can only contain letters, numbers, dash, and underscore</code></td>
+<td>The topic name has another character, such as a dot</td>
+</tr>
+<tr>
+<td><code>Name cannot start or end with hyphen or underscore</code></td>
+<td>The topic name starts or ends with <code>-</code> or <code>_</code></td>
+</tr>
+<tr>
+<td><code>Namespace &lt;namespace&gt; not found for &lt;subject&gt;</code></td>
+<td>The user does not hold the namespace</td>
+</tr>
+<tr>
+<td><code>Namespace &lt;namespace&gt; already holds 50 topics, the most allowed is 50; delete a topic to create another.</code></td>
+<td>The namespace is at the limit</td>
+</tr>
+<tr>
+<td><code>Namespace &lt;namespace&gt; holds &lt;n&gt; topics, more than the 50 allowed; delete &lt;k&gt; topic(s) to create another.</code></td>
+<td>The namespace is past the limit, which was lowered after it was filled</td>
+</tr>
+<tr>
+<td><code>Failed to create Kafka topic: Failed to create Kafka topic &lt;namespace&gt;.&lt;topic&gt; after 3 attempts: the Kafka cluster did not complete it; retry shortly</code></td>
+<td>The cluster did not create the topic</td>
+</tr>
+</tbody>
+</table>
+<p>The name is checked before the namespace.</p>
+<h3 id="delete-topic">Delete topic<a class="headerlink" href="#delete-topic" title="Permanent link">&para;</a></h3>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>curl<span class="w"> </span>-X<span class="w"> </span>DELETE<span class="w"> </span><span class="s2">"https://diaspora-web-service.qpp943wkvr7b2.us-east-1.cs.amazonlightsail.com/api/v3/</span><span class="nv">$NAMESPACE</span><span class="s2">/my-topic"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"subject: </span><span class="nv">$SUBJECT</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"authorization: </span><span class="nv">$AUTHORIZATION</span><span class="s2">"</span>
+</span></code></pre></div>
+<p><code>DELETE /api/v3/{namespace}/{topic}</code> deletes the Kafka topic, with every record in it, and then removes the topic from the namespace. A topic the cluster does not have counts as deleted. If the cluster does not delete the topic, the namespace keeps it, so a retry can delete it. A produce request to a deleted topic answers 404, and a consumer instance subscribed to it reads nothing from it.</p>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="p">{</span><span class="nt">"status"</span><span class="p">:</span><span class="w"> </span><span class="s2">"success"</span><span class="p">,</span><span class="w"> </span><span class="nt">"message"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Topic my-topic deleted from ns-0123456789ab"</span><span class="p">,</span><span class="w"> </span><span class="nt">"topics"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"other-topic"</span><span class="p">]}</span>
+</span></code></pre></div>
+<p><code>topics</code> lists the namespace's topics after the delete. Deleting a topic the namespace does not hold succeeds with the message <code>Topic &lt;topic&gt; not found in &lt;namespace&gt;</code>; the route still deletes the Kafka topic of that name if the cluster has one, and then says <code>deleted</code>.</p>
+<table>
+<thead>
+<tr>
+<th><code>message</code> of a failure</th>
+<th>Cause</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Namespace &lt;namespace&gt; not found for &lt;subject&gt;</code></td>
+<td>The user does not hold the namespace</td>
+</tr>
+<tr>
+<td><code>Invalid topic name &lt;topic&gt;</code></td>
+<td>The topic name contains a dot. No other name rule is checked</td>
+</tr>
+<tr>
+<td><code>Failed to delete Kafka topic: Failed to delete Kafka topic &lt;namespace&gt;.&lt;topic&gt; after 3 attempts: the Kafka cluster did not complete it; retry shortly</code></td>
+<td>The cluster did not delete the topic</td>
+</tr>
+</tbody>
+</table>
+<h3 id="recreate-topic">Recreate topic<a class="headerlink" href="#recreate-topic" title="Permanent link">&para;</a></h3>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>curl<span class="w"> </span>-X<span class="w"> </span>PUT<span class="w"> </span><span class="s2">"https://diaspora-web-service.qpp943wkvr7b2.us-east-1.cs.amazonlightsail.com/api/v3/</span><span class="nv">$NAMESPACE</span><span class="s2">/my-topic/recreate"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"subject: </span><span class="nv">$SUBJECT</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-16-3"><a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"authorization: </span><span class="nv">$AUTHORIZATION</span><span class="s2">"</span>
+</span></code></pre></div>
+<p><code>PUT /api/v3/{namespace}/{topic}/recreate</code> deletes the Kafka topic and creates it again with the same name, so the topic keeps its name and loses every record. The topic must be one the namespace holds, and the namespace's topics do not change. The route deletes the topic, waits 5 s, and creates it; while the cluster still holds the old topic, it tries the create again after 2 s, 3 times in all. So a recreate takes at least 5 s. Use it to empty a topic.</p>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="p">{</span><span class="nt">"status"</span><span class="p">:</span><span class="w"> </span><span class="s2">"success"</span><span class="p">,</span><span class="w"> </span><span class="nt">"message"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Topic recreated"</span><span class="p">}</span>
+</span></code></pre></div>
+<table>
+<thead>
+<tr>
+<th><code>message</code> of a failure</th>
+<th>Cause</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Namespace &lt;namespace&gt; not found for &lt;subject&gt;</code></td>
+<td>The user does not hold the namespace</td>
+</tr>
+<tr>
+<td><code>Topic &lt;topic&gt; not found in &lt;namespace&gt;</code></td>
+<td>The namespace does not hold the topic</td>
+</tr>
+<tr>
+<td><code>Failed to delete Kafka topic &lt;namespace&gt;.&lt;topic&gt; after 3 attempts: the Kafka cluster did not complete it; retry shortly</code></td>
+<td>The cluster did not delete the topic</td>
+</tr>
+<tr>
+<td><code>Failed to create Kafka topic &lt;namespace&gt;.&lt;topic&gt; after 3 attempts: it still exists; retry shortly</code></td>
+<td>The cluster was still deleting the old topic</td>
+</tr>
+<tr>
+<td><code>Failed to create Kafka topic &lt;namespace&gt;.&lt;topic&gt; after 3 attempts: the Kafka cluster did not complete it; retry shortly</code></td>
+<td>The cluster did not create the topic</td>
+</tr>
+<tr>
+<td><code>Kafka endpoint is not configured</code></td>
+<td>The service runs without a cluster</td>
+</tr>
+</tbody>
+</table>
+<p>After a failed create the namespace still holds the topic, but the cluster may not: produce requests to it answer 404 until a retry of the recreate, or a <a href="#create-topic">create</a> of the topic, makes it again.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Copyright &copy; 2023—Present Diaspora Team
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["content.code.annotate", "content.code.copy", "navigation.path", "navigation.sections", "navigation.tabs", "navigation.top", "navigation.tracking", "search.highlight", "search.share", "search.suggest", "toc.follow"], "search": "../../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.c21346df.min.js"></script>
+      
+    
+  </body>
+</html>

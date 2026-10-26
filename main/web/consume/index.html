@@ -1,0 +1,1757 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Documentation for Diaspora Service">
+      
+      
+        <meta name="author" content="Haochen Pan">
+      
+      
+        <link rel="canonical" href="https://haochenpan.github.io/diaspora-service/latest/web/consume/">
+      
+      
+        <link rel="prev" href="../produce/">
+      
+      
+        <link rel="next" href="../../kafka-console/intro/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../static/octopus.svg">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.0">
+    
+    
+      
+        <title>Consume API - Diaspora Service Documentation</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.57a0d79d.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.fb2fffe2.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CUbuntu+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Ubuntu Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="cyan">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#consume-api" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="Diaspora Service Documentation" class="md-header__button md-logo" aria-label="Diaspora Service Documentation" data-md-component="logo">
+      
+  <img src="../../static/octopus.svg" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Diaspora Service Documentation
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Consume API
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme)" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="cyan"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m14.3 16-.7-2h-3.2l-.7 2H7.8L11 7h2l3.2 9zM20 8.69V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12zm-9.15 3.96h2.3L12 9z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="cyan"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_2" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="blue" data-md-color-accent="cyan"  aria-label="Switch to system preference"  type="radio" name="__palette" id="__palette_2">
+    
+      <label class="md-header__button md-icon" title="Switch to system preference" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="Share" aria-label="Share" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/haochenpan/diaspora-service" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    haochenpan/diaspora-service
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../.." class="md-tabs__link">
+          
+  
+  
+  Development
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../api/" class="md-tabs__link">
+          
+  
+  
+  Web Service
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../kafka-console/intro/" class="md-tabs__link">
+          
+  
+  
+  Kafka Console
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="Diaspora Service Documentation" class="md-nav__button md-logo" aria-label="Diaspora Service Documentation" data-md-component="logo">
+      
+  <img src="../../static/octopus.svg" alt="logo">
+
+    </a>
+    Diaspora Service Documentation
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/haochenpan/diaspora-service" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    haochenpan/diaspora-service
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_1" >
+        
+          
+          <label class="md-nav__link" for="__nav_1" id="__nav_1_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_1_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_1">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Development
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Introduction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../1-running/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Running
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../2-testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contributing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../3-deploying/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../4-monitoring/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Monitoring
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../5-runbook/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runbook
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../acknowledgments/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Acknowledgments
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Web Service
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Web Service
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../management/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Management API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../produce/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Produce API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Consume API
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Consume API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Examples
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#routes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Routes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#records" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Records
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#instances-fetches-and-commits" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Instances, fetches and commits
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#instance-lifecycle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Instance lifecycle
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#limits" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Limits
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#errors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Errors
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#differences-from-confluents-rest-proxy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Differences from Confluent's REST Proxy
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-earlier-apiv3-consumer-routes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The earlier /api/v3 consumer routes
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Kafka Console
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Kafka Console
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../kafka-console/intro/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Introduction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Examples
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#routes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Routes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#records" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Records
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#instances-fetches-and-commits" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Instances, fetches and commits
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#instance-lifecycle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Instance lifecycle
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#limits" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Limits
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#errors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Errors
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#differences-from-confluents-rest-proxy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Differences from Confluent's REST Proxy
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-earlier-apiv3-consumer-routes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The earlier /api/v3 consumer routes
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+                
+
+
+
+
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="consume-api">Consume API<a class="headerlink" href="#consume-api" title="Permanent link">&para;</a></h1>
+<p>The consumer routes take the paths and bodies of Confluent's REST Proxy v2, under <code>/api/v2/consumers</code>. They act in the caller's default namespace, <code>ns-</code> and the last 12 characters of the subject without dashes (<code>$NAMESPACE</code>). Topics are named without the namespace, and the group <code>my-group</code> is the Kafka consumer group <code>$NAMESPACE.my-group</code>. Every route takes the <code>subject</code> and <code>authorization</code> headers (<a href="../api/#getting-subject-and-authorization">Getting <code>subject</code> and <code>authorization</code></a>).</p>
+<p>The SDK's <code>RESTConsumer</code> wraps these routes, and creates an instance again when the service has dropped it (<a href="#instance-lifecycle">Instance lifecycle</a>). <a href="https://github.com/globus-labs/diaspora-event-sdk/blob/main/diaspora_event_sdk/examples/ConsumerRESTDemo.ipynb">ConsumerRESTDemo.ipynb</a> consumes records with plain HTTP requests and then with the SDK.</p>
+<h2 id="examples">Examples<a class="headerlink" href="#examples" title="Permanent link">&para;</a></h2>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># Create consumer instance</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span><span class="s2">"https://diaspora-web-service.qpp943wkvr7b2.us-east-1.cs.amazonlightsail.com/api/v2/consumers/my-group"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"subject: </span><span class="nv">$SUBJECT</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"authorization: </span><span class="nv">$AUTHORIZATION</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/vnd.kafka.v2+json"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">'{"name": "my-instance", "format": "json", "auto.offset.reset": "earliest"}'</span>
+</span></code></pre></div>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="p">{</span><span class="nt">"instance_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"my-instance"</span><span class="p">,</span><span class="w"> </span><span class="nt">"base_uri"</span><span class="p">:</span><span class="w"> </span><span class="s2">"https://diaspora-web-service.qpp943wkvr7b2.us-east-1.cs.amazonlightsail.com/api/v2/consumers/my-group/instances/my-instance"</span><span class="p">}</span>
+</span></code></pre></div>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">INSTANCE</span><span class="o">=</span><span class="s2">"https://diaspora-web-service.qpp943wkvr7b2.us-east-1.cs.amazonlightsail.com/api/v2/consumers/my-group/instances/my-instance"</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="c1"># Subscribe to a list of topics (topic patterns are not supported)</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span><span class="s2">"</span><span class="nv">$INSTANCE</span><span class="s2">/subscription"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"subject: </span><span class="nv">$SUBJECT</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"authorization: </span><span class="nv">$AUTHORIZATION</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/vnd.kafka.v2+json"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">'{"topics": ["my-topic"]}'</span>
+</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>
+</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="c1"># Fetch records of a json instance</span>
+</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a>curl<span class="w"> </span>-X<span class="w"> </span>GET<span class="w"> </span><span class="s2">"</span><span class="nv">$INSTANCE</span><span class="s2">/records?timeout=5000"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"subject: </span><span class="nv">$SUBJECT</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-13"><a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"authorization: </span><span class="nv">$AUTHORIZATION</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-14"><a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"Accept: application/vnd.kafka.json.v2+json"</span>
+</span></code></pre></div>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="p">[{</span><span class="nt">"topic"</span><span class="p">:</span><span class="w"> </span><span class="s2">"my-topic"</span><span class="p">,</span><span class="w"> </span><span class="nt">"key"</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="p">,</span><span class="w"> </span><span class="nt">"value"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"step"</span><span class="p">:</span><span class="w"> </span><span class="mi">7</span><span class="p">,</span><span class="w"> </span><span class="nt">"loss"</span><span class="p">:</span><span class="w"> </span><span class="mf">0.31</span><span class="p">},</span><span class="w"> </span><span class="nt">"partition"</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="nt">"offset"</span><span class="p">:</span><span class="w"> </span><span class="mi">12</span><span class="p">,</span><span class="w"> </span><span class="nt">"headers"</span><span class="p">:</span><span class="w"> </span><span class="p">[{</span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"trace"</span><span class="p">,</span><span class="w"> </span><span class="nt">"value"</span><span class="p">:</span><span class="w"> </span><span class="s2">"AAE="</span><span class="p">}]}]</span>
+</span></code></pre></div>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># Commit offsets</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span><span class="s2">"</span><span class="nv">$INSTANCE</span><span class="s2">/offsets"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"subject: </span><span class="nv">$SUBJECT</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"authorization: </span><span class="nv">$AUTHORIZATION</span><span class="s2">"</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="c1"># Delete consumer instance</span>
+</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>curl<span class="w"> </span>-X<span class="w"> </span>DELETE<span class="w"> </span><span class="s2">"</span><span class="nv">$INSTANCE</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"subject: </span><span class="nv">$SUBJECT</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"authorization: </span><span class="nv">$AUTHORIZATION</span><span class="s2">"</span>
+</span></code></pre></div>
+<h2 id="routes">Routes<a class="headerlink" href="#routes" title="Permanent link">&para;</a></h2>
+<p>In this table, <code>…</code> stands for <code>/api/v2/consumers/{group}/instances/{instance}</code>. A route with no body in the table takes none.</p>
+<table>
+<thead>
+<tr>
+<th>Route</th>
+<th>Body</th>
+<th>Success</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>POST /api/v2/consumers/{group}</code></td>
+<td><code>name</code>, <code>format</code>, <code>auto.offset.reset</code>, <code>auto.commit.enable</code>, <code>fetch.min.bytes</code> and <code>consumer.request.timeout.ms</code>, each optional; no body takes every default</td>
+<td>200, <code>{"instance_id", "base_uri"}</code></td>
+</tr>
+<tr>
+<td><code>DELETE …</code></td>
+<td></td>
+<td>204</td>
+</tr>
+<tr>
+<td><code>POST …/subscription</code></td>
+<td><code>{"topics": [...]}</code></td>
+<td>204</td>
+</tr>
+<tr>
+<td><code>GET …/subscription</code></td>
+<td></td>
+<td>200, <code>{"topics": [...]}</code></td>
+</tr>
+<tr>
+<td><code>DELETE …/subscription</code></td>
+<td></td>
+<td>204</td>
+</tr>
+<tr>
+<td><code>POST …/assignments</code></td>
+<td><code>{"partitions": [{"topic", "partition"}]}</code></td>
+<td>204</td>
+</tr>
+<tr>
+<td><code>GET …/assignments</code></td>
+<td></td>
+<td>200, <code>{"partitions": [...]}</code></td>
+</tr>
+<tr>
+<td><code>POST …/offsets</code></td>
+<td><code>{"offsets": [{"topic", "partition", "offset", "metadata"}]}</code>, or none to commit every position</td>
+<td>200, <code>[]</code></td>
+</tr>
+<tr>
+<td><code>GET …/offsets</code></td>
+<td><code>{"partitions": [{"topic", "partition"}]}</code></td>
+<td>200, <code>{"offsets": [{"topic", "partition", "offset", "metadata"}]}</code></td>
+</tr>
+<tr>
+<td><code>POST …/positions</code></td>
+<td><code>{"offsets": [{"topic", "partition", "offset"}]}</code></td>
+<td>204</td>
+</tr>
+<tr>
+<td><code>POST …/positions/beginning</code></td>
+<td><code>{"partitions": [...]}</code></td>
+<td>204</td>
+</tr>
+<tr>
+<td><code>POST …/positions/end</code></td>
+<td><code>{"partitions": [...]}</code></td>
+<td>204</td>
+</tr>
+<tr>
+<td><code>GET …/records</code></td>
+<td>none; the query takes <code>timeout</code> and <code>max_bytes</code></td>
+<td>200, a list of records</td>
+</tr>
+</tbody>
+</table>
+<p><code>base_uri</code> is the instance's absolute URL. The scheme and host come from the <code>X-Forwarded-Proto</code> and <code>X-Forwarded-Host</code> headers when present and when they hold a plain scheme (<code>http</code> or <code>https</code>) and host, and otherwise from the request's <code>Host</code> and scheme.</p>
+<p>A request body may have the content type <code>application/vnd.kafka.v2+json</code>, another v2 type (<code>application/vnd.kafka.binary.v2+json</code>, <code>application/vnd.kafka.json.v2+json</code> and the <code>avro</code>, <code>jsonschema</code> and <code>protobuf</code> ones), <code>application/json</code>, or none. Any other type is refused with 415 and error code 415. Every reply but a fetch's has the type <code>application/vnd.kafka.v2+json</code>.</p>
+<h2 id="records">Records<a class="headerlink" href="#records" title="Permanent link">&para;</a></h2>
+<p>A fetch chooses its reply's type from the <code>Accept</code> header, as Confluent's REST Proxy does. <code>application/vnd.kafka.binary.v2+json</code>, <code>application/vnd.kafka.v2+json</code>, <code>*/*</code> or no <code>Accept</code> reads a binary instance, and <code>application/vnd.kafka.json.v2+json</code> reads a json instance; the reply has the type chosen. A type of the other format is refused with 406 and error code 40601. An <code>Accept</code> that names no v2 type, such as <code>application/json</code>, is refused with 406 and error code 406. HTTP libraries that send <code>Accept: */*</code> or <code>application/json</code> by default must set the header to read a json instance.</p>
+<p>Each record is <code>{"topic", "key", "value", "partition", "offset", "headers"}</code>, as in Confluent's REST Proxy v2, plus <code>headers</code> in the produce routes' form: a list of <code>{"name": string, "value": base64 string or null}</code>. A binary instance returns keys and values as base64, so it returns the bytes exactly. A json instance returns a key or value that is one JSON value as that value, written as it was produced, and any other UTF-8 text as a JSON string of the text. So the produce routes' <code>JSON</code> keys and values come back as JSON, and <code>STRING</code> ones as strings. A client cannot tell <code>"abc"</code> produced as JSON from <code>abc</code> produced as text; produce JSON-typed keys and values for json instances, or read with a binary instance.</p>
+<p>A json instance cannot return a key or value that is not UTF-8. A record with one ends its partition's part of the reply: the records before it are returned, the partition is sought back to it, and the other partitions go on. A fetch whose first record has one is refused with 408 and error code 40801, and so is every fetch after it, until the client seeks past the record or reads it with a binary instance. The check that a key or value is one JSON value is stricter than Confluent's: text after the value, as in <code>{"a":1} {"b":2}</code>, makes the whole of it text. A check that would take more than 32 MiB of memory is not made, and the value is returned as text. A JSON string of ASCII text is checked up to about 15 MiB, larger than any record, but an array of small objects (<code>[{"a":1},...]</code>) only up to about 1.5 MiB, and a deeply nested array less.</p>
+<h2 id="instances-fetches-and-commits">Instances, fetches and commits<a class="headerlink" href="#instances-fetches-and-commits" title="Permanent link">&para;</a></h2>
+<p>A consumer instance serves one request at a time. A request that waits more than 10 seconds for another request on the same instance returns 409 with error code 40904; retry it. A fetch does not wait: if another request holds the instance, it returns 409 with 40904 at once.</p>
+<p>At create, the group and <code>name</code> are each 1 to 128 letters, digits, dots, dashes or underscores, starting with a letter or a digit; without a name, the service picks 12 hex digits. Confluent's deprecated <code>id</code> field, if set, is taken as the name. <code>auto.offset.reset</code> must be <code>earliest</code>, <code>latest</code> (the default) or <code>none</code>, and <code>auto.commit.enable</code> must be <code>true</code> or <code>false</code> (the default), in any case. <code>fetch.min.bytes</code> and <code>consumer.request.timeout.ms</code> must be whole numbers of at least 0, given as numbers or strings. A create that breaks one of these rules is refused with 422 and error code 42204, and the message names the group, the name or the setting. <code>fetch.min.bytes</code> is passed to the Kafka consumer. <code>consumer.request.timeout.ms</code> is how long a fetch that names no <code>timeout</code> waits for records, 5000 ms if it is not set; it is not passed to the Kafka consumer.</p>
+<p>A fetch waits for records for its <code>timeout</code>, in milliseconds. A <code>timeout</code> of 0 or less, or none, waits for the instance's <code>consumer.request.timeout.ms</code>. Either wait is capped at 30000 ms. As in Confluent's REST Proxy, <code>max_bytes</code> counts the bytes of the records' keys and values, and a reply holds fewer than that; unlike there, the first record is returned however large. 0, a negative value or none sets no limit but the reply's 2 MiB. The records left out come first in the next fetch. A fetch polls in turns of at most half a second (see <a href="#limits">Limits</a>), and its turns and its waits for a turn together take no longer than its <code>timeout</code>. It returns as soon as a turn finds records, and returns <code>[]</code> if none did.</p>
+<p>A commit with offsets names, for each partition, the offset of the last record the client processed, as in Confluent's REST Proxy, and the group commits the next one, with the offset's <code>metadata</code> if given. A commit without a body commits the position of each assigned partition, which is already the next record to read. So after a commit of offset 41, or after a commit without a body once a fetch returned offset 41, <code>GET …/offsets</code> returns 42 for that partition. It leaves out a partition the group has not committed, and a request without a body is refused with 404 and 40402, as in Confluent's REST Proxy.</p>
+<p>An instance returns records as <code>binary</code> or <code>json</code>, named in <code>format</code> in any case. Octopus runs no schema registry, so a create with <code>avro</code>, <code>jsonschema</code> or <code>protobuf</code> is refused with 422, as is any other format.</p>
+<p>Every topic has one partition, 0, and a request that names another partition is refused with 404. A seek or a commit with offsets takes only partitions assigned to the instance. A partition is assigned by <code>assignments</code>, or after a subscribe by the group once the instance has fetched. A seek or commit on any other partition is refused with 409. A seek to the beginning or end with an empty list seeks every assigned partition, and is refused with 409 if none is assigned. An instance either subscribes to topics or is assigned partitions: to switch, unsubscribe first, or the request is refused with 409.</p>
+<p>A subscribe or an assign takes only topics the namespace holds, and refuses any other with 404 and 40401. A topic the namespace holds but the cluster does not list, such as one deleted while an instance reads it, is not created by the subscription or the assignment: the instance's fetches return no records from it.</p>
+<h2 id="instance-lifecycle">Instance lifecycle<a class="headerlink" href="#instance-lifecycle" title="Permanent link">&para;</a></h2>
+<p>An instance lives in the memory of the one worker that created it. A deploy or a restart of the service drops every instance, and an instance idle for <code>CONSUMER_INSTANCE_TIMEOUT_MS</code> (5 minutes by default; the service looks every 30 s) is closed. The next request for an instance that is gone gets 404 with error code 40403.</p>
+<p>An instance created with <code>auto.commit.enable</code> set to <code>true</code> commits its positions at these times, and no others:</p>
+<ul>
+<li>During a fetch, when 5 s or more have passed since its last commit: the Kafka consumer commits the positions it had before that fetch's poll.</li>
+<li>When it is assigned partitions or unsubscribes, and, while it is subscribed, before its group rebalances during a fetch: the Kafka consumer commits its positions first.</li>
+<li>When it is deleted, when the service closes it for being idle, and when the service shuts down, before it closes. The commit waits at most 5 s; at shutdown, all the instances share 8 s.</li>
+</ul>
+<p>Its position in a partition is the record after the last one a fetch returned to the client: records that a reply left out, that did not reach the client, or that a fetch cancelled at shutdown had polled are sought back to before any commit. An idle instance stays in its consumer group until the service closes it, so the commit at that close goes through. A commit that fails or runs out of time is logged, and the instance closes anyway, so the group keeps its earlier commit; at shutdown, an instance still busy after 8 s is neither committed nor closed. An instance without auto-commit commits nothing by itself: only the client's commits count.</p>
+<p>After a 404 with 40403, the client creates the instance again with the same group and name, subscribes or assigns again, and fetches. The group starts from its last commit, so the records fetched after that commit come again; a client that needs each record once should carry an id in the record and drop repeats. A group that has never committed starts where the instance's <code>auto.offset.reset</code> says, and with <code>latest</code>, the default, it skips the records produced while no instance was reading.</p>
+<h2 id="limits">Limits<a class="headerlink" href="#limits" title="Permanent link">&para;</a></h2>
+<p>The consumer routes have these limits:</p>
+<ul>
+<li>A user (<code>subject</code>) may hold 4 consumer instances, and the service 12 in all. A create past either is refused with 429.</li>
+<li>A request may list at most as many topics, partitions or offsets as a namespace may hold topics (50, set by <code>MAX_TOPICS_PER_NAMESPACE</code>); a longer list is refused with 422. A request body may be 64 KiB; a larger one is refused with 413 before it is read.</li>
+<li>A fetch asks each broker for at most 1 MiB of records. A broker still returns a first record larger than that, so a fetch can read a record of up to 8 MiB from each broker.</li>
+<li>A reply holds at most 2 MiB of JSON. The records past that are left for the next fetch, which returns them first. A fetch always returns its first record, however large: a reply over 2 MiB holds that record alone and is sent in chunks, without a <code>Content-Length</code>.</li>
+<li>A user may have 2 fetches in progress. A fetch past those is refused at once with 429 and error code 42901.</li>
+<li>The service polls for 3 fetches at once, in turns of at most half a second, which fetches take in the order they ask. A turn that finds nothing goes to the back of the line; a turn that finds records keeps its place until its reply is sent. So a fetch whose records are ready waits about half a second for every 3 fetches ahead of it: about 1.5 s behind 11 quiet long polls, the most there can be, since the service holds 12 instances and an instance serves one fetch at a time. Replies being sent hold their turns longer. The default wait of 5000 ms gets through behind 11 quiet long polls; a shorter <code>timeout</code> can be refused. A fetch that gets no turn within its wait for records is refused with 429 and 42901. Like the refusal for a user's third fetch, it carries <code>Retry-After: 1</code> and fetches nothing.</li>
+<li>A reply must be sent within 30 s. A reply whose sending has begun and takes longer is not fetched again: the service closes the connection, and the next fetch starts after the reply's records. A reply over 2 MiB holds one record of up to 8 MiB, which takes up to about 10.7 MiB as base64 and up to 48 MiB as the JSON string of text of control characters, so a client may need to read such a reply at 1.6 MiB/s or faster. In <code>binary</code>, the reply for an 8 MiB record is about 10.7 MiB, which needs about 0.36 MiB/s. The skipped records stay in the topic, and the positions route can seek back to them, to the offset after the last record the client received, until a commit without a body, or auto-commit, commits past them. <code>max_bytes</code> does not make a one-record reply smaller.</li>
+<li>A reply the client did not receive is fetched again by the next fetch, unless it was already handed to the network or took more than 30 s to send. This covers a client that leaves while its fetch polls or while a reply is sent, and a reply that fails to encode. The service cannot tell whether a client read a reply it handed to the network whole, so such a reply counts as received, as a reply read by a Kafka consumer does.</li>
+<li>When a reply is cut at 2 MiB or at <code>max_bytes</code>, the partitions take turns to come first in the next replies, so one partition's records cannot keep another's out. Within a partition, records keep their order.</li>
+</ul>
+<h2 id="errors">Errors<a class="headerlink" href="#errors" title="Permanent link">&para;</a></h2>
+<p>Every error reply of a consumer route is <code>{"error_code": &lt;int&gt;, "message": &lt;str&gt;}</code>, with two exceptions: a path that matches no route answers 404, and a method a route does not take answers 405, both with FastAPI's <code>{"detail": &lt;str&gt;}</code>. Error messages do not include Kafka's own error text.</p>
+<table>
+<thead>
+<tr>
+<th>Code</th>
+<th>Status</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>40002</td>
+<td>400</td>
+<td>Kafka refused a topic name or the request as invalid, or the cluster does not support the request (<code>UnsupportedVersionError</code>)</td>
+</tr>
+<tr>
+<td>40003</td>
+<td>400</td>
+<td>The body is not valid JSON</td>
+</tr>
+<tr>
+<td>40101</td>
+<td>401</td>
+<td>The token check failed: the <code>subject</code> is not a UUID, or the token is malformed, inactive, another user's or without the scope</td>
+</tr>
+<tr>
+<td>40301</td>
+<td>403</td>
+<td>The service is not authorized for the topic or the consumer group</td>
+</tr>
+<tr>
+<td>40401</td>
+<td>404</td>
+<td>The namespace or topic is not found, in the namespace or in the cluster</td>
+</tr>
+<tr>
+<td>40402</td>
+<td>404</td>
+<td>A partition other than 0, or <code>GET …/offsets</code> without a body</td>
+</tr>
+<tr>
+<td>40403</td>
+<td>404</td>
+<td>The consumer instance is not found</td>
+</tr>
+<tr>
+<td>406</td>
+<td>406</td>
+<td>A fetch's <code>Accept</code> names no v2 type</td>
+</tr>
+<tr>
+<td>40601</td>
+<td>406</td>
+<td>A fetch's <code>Accept</code> names a format other than the instance's</td>
+</tr>
+<tr>
+<td>40801</td>
+<td>408</td>
+<td>A json instance's next record has a key or value that is not UTF-8</td>
+</tr>
+<tr>
+<td>40902</td>
+<td>409</td>
+<td>The group already has an instance of that name</td>
+</tr>
+<tr>
+<td>40903</td>
+<td>409</td>
+<td>A seek or commit on a partition not assigned to the instance, a subscribe while partitions are assigned or an assign while subscribed, or a commit the group refused because it rebalanced</td>
+</tr>
+<tr>
+<td>40904</td>
+<td>409</td>
+<td>Another request held the instance for more than 10 s; retry</td>
+</tr>
+<tr>
+<td>41301</td>
+<td>413</td>
+<td>The request body is over 64 KiB</td>
+</tr>
+<tr>
+<td>415</td>
+<td>415</td>
+<td>The request's content type is not a v2 type or <code>application/json</code></td>
+</tr>
+<tr>
+<td>422</td>
+<td>422</td>
+<td>A header or field is missing or invalid, a list is too long, or the format is not <code>binary</code> or <code>json</code></td>
+</tr>
+<tr>
+<td>42204</td>
+<td>422</td>
+<td>At create, the name or a setting breaks its rule in <a href="#instances-fetches-and-commits">Instances, fetches and commits</a>; at subscribe, the list of topics is empty or <code>topic_pattern</code> is set</td>
+</tr>
+<tr>
+<td>42901</td>
+<td>429</td>
+<td>The user holds 4 instances or the service 12, the user has 2 fetches in progress, the fetch got no turn within its wait, or the cluster throttled the request</td>
+</tr>
+<tr>
+<td>500</td>
+<td>500</td>
+<td>An error inside the service</td>
+</tr>
+<tr>
+<td>50002</td>
+<td>500</td>
+<td>Kafka failed the request, or the service has no Kafka endpoint</td>
+</tr>
+<tr>
+<td>50003</td>
+<td>500</td>
+<td>A retriable Kafka error, or Kafka did not answer in time; retry</td>
+</tr>
+<tr>
+<td>503</td>
+<td>503</td>
+<td>A create while the service shuts down; retry once it is back</td>
+</tr>
+<tr>
+<td>50302</td>
+<td>503</td>
+<td>The service cannot reach the Kafka cluster; retry</td>
+</tr>
+</tbody>
+</table>
+<h2 id="differences-from-confluents-rest-proxy">Differences from Confluent's REST Proxy<a class="headerlink" href="#differences-from-confluents-rest-proxy" title="Permanent link">&para;</a></h2>
+<p>The consumer routes follow the paths, bodies, statuses and codes of Confluent's REST Proxy v2 except where noted here.</p>
+<table>
+<thead>
+<tr>
+<th>Case</th>
+<th>Octopus</th>
+<th>Confluent</th>
+<th>Why</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Namespace and topic names</td>
+<td>The routes act in the caller's default namespace; topics and groups are named without it</td>
+<td>No namespaces</td>
+<td>Each user's topics and groups are prefixed with the user's namespace</td>
+</tr>
+<tr>
+<td>Group and instance names</td>
+<td>1 to 128 letters, digits, dots, dashes or underscores, starting with a letter or digit; else 422, 42204</td>
+<td>No rule</td>
+<td>Both are segments of <code>base_uri</code>, and clients drop a segment such as <code>..</code></td>
+</tr>
+<tr>
+<td>Request content type <code>application/json</code></td>
+<td>Accepted</td>
+<td>415, 415</td>
+<td>Clients that send JSON as <code>application/json</code> keep working</td>
+</tr>
+<tr>
+<td>Record headers</td>
+<td>Each record has <code>headers</code></td>
+<td>v2 records have none</td>
+<td>The produce routes write headers, so the consumer routes return them</td>
+</tr>
+<tr>
+<td>A json key or value that is UTF-8 text but not JSON</td>
+<td>Returned as a JSON string of the text</td>
+<td>408, 40801</td>
+<td>A topic with text, such as the produce routes' <code>STRING</code> values, does not block a json instance</td>
+</tr>
+<tr>
+<td>A json key or value that is not UTF-8</td>
+<td>408, 40801 when it is the first in the reply; otherwise the records before it are returned and the next fetch starts at it</td>
+<td>408, 40801, and the records the fetch had read are not returned</td>
+<td>No record is lost</td>
+</tr>
+<tr>
+<td>Text after a JSON value, as in <code>{"a":1} {"b":2}</code></td>
+<td>The whole is text, returned as a string</td>
+<td>The first value is returned and the rest ignored</td>
+<td>The value is returned as it was produced</td>
+</tr>
+<tr>
+<td><code>max_bytes</code></td>
+<td>The first record is returned however large</td>
+<td>A first record of <code>max_bytes</code> bytes or more is not returned, so every fetch returns <code>[]</code></td>
+<td>A fetch always moves on</td>
+</tr>
+<tr>
+<td>Format <code>avro</code>, <code>jsonschema</code> or <code>protobuf</code></td>
+<td>Refused, 422, 422</td>
+<td>Decoded with a schema registry</td>
+<td>Octopus runs no schema registry. Confluent refuses a format it does not know with 422, 422</td>
+</tr>
+<tr>
+<td>Body not JSON</td>
+<td>400, 40003</td>
+<td>400, 400</td>
+<td>The produce routes' code for the same case</td>
+</tr>
+<tr>
+<td>Body over 64 KiB</td>
+<td>413, 41301</td>
+<td>No limit of its own</td>
+<td>It bounds the service's memory; the produce routes' code</td>
+</tr>
+<tr>
+<td>More than 4 instances for a user, or 12 in all</td>
+<td>429, 42901</td>
+<td>No limit</td>
+<td>Each instance holds a Kafka client in the service's memory; 42901 is Confluent's code for too many requests</td>
+</tr>
+<tr>
+<td>A list longer than a namespace's topics</td>
+<td>422, 422</td>
+<td>No limit</td>
+<td>A namespace holds no more topics, each with one partition, so a longer list names a topic or partition twice or one that does not exist</td>
+</tr>
+<tr>
+<td>Token check failed</td>
+<td>401, 40101</td>
+<td>401 from the web server's HTTP authentication, without a Confluent error code; Confluent's 40101 is for a failed Kafka authentication</td>
+<td>A code where a client looks for one</td>
+</tr>
+<tr>
+<td>The service fails to authenticate to Kafka</td>
+<td>500, 50002</td>
+<td>401, 40101</td>
+<td>The credentials are the service's, not the caller's</td>
+</tr>
+<tr>
+<td>A commit the group refuses after a rebalance (<code>CommitFailedError</code>)</td>
+<td>409, 40903</td>
+<td>500, 50002</td>
+<td>The client recovers by fetching again, then committing</td>
+</tr>
+<tr>
+<td>A commit for a partition not assigned to the instance</td>
+<td>409, 40903</td>
+<td>Passed to the Kafka consumer</td>
+<td>The same answer as a seek on such a partition, which Confluent also answers with 409, 40903</td>
+</tr>
+<tr>
+<td>A partition other than 0</td>
+<td>404, 40402, at once</td>
+<td>Passed to the Kafka consumer</td>
+<td>Every topic has one partition</td>
+</tr>
+<tr>
+<td>Kafka reports an unknown topic or partition</td>
+<td>404, 40401</td>
+<td>404, 40403</td>
+<td>Confluent also uses 40403 for an instance not found</td>
+</tr>
+<tr>
+<td>Most bytes a fetch asks for</td>
+<td>1 MiB</td>
+<td>50 MiB, the Kafka consumer's default <code>fetch.max.bytes</code></td>
+<td>With 50 MiB, one fetch from 50 topics took 128 MiB of memory in a test, and the service has 1 GB</td>
+</tr>
+<tr>
+<td>More than 2 fetches for a user, or no turn to poll within the fetch's wait</td>
+<td>429, 42901, with <code>Retry-After: 1</code></td>
+<td>No limit</td>
+<td>Each fetch can hold a record of 8 MiB from each broker in the service's memory</td>
+</tr>
+<tr>
+<td>Reply over 2 MiB of JSON</td>
+<td>The records past 2 MiB are left for the next fetch; a first record over 2 MiB is returned alone</td>
+<td>Up to <code>max_bytes</code> bytes, and the proxy's <code>consumer.request.max.bytes</code></td>
+<td>It bounds the service's memory</td>
+</tr>
+<tr>
+<td>A json key or value whose check would take over 32 MiB, such as a large deeply nested array</td>
+<td>Returned as a JSON string of its text</td>
+<td>Decoded</td>
+<td>It bounds the service's memory</td>
+</tr>
+<tr>
+<td><code>timeout</code></td>
+<td>0 or less, or none, waits for the instance's <code>consumer.request.timeout.ms</code>; a positive <code>timeout</code> waits for itself; either wait is capped at 30000 ms</td>
+<td>0 or less, or none, waits for <code>consumer.request.timeout.ms</code>; a positive <code>timeout</code> waits for the smaller of itself and <code>consumer.request.timeout.ms</code></td>
+<td>A client can wait longer than its instance's default, up to 30 s</td>
+</tr>
+<tr>
+<td><code>consumer.request.timeout.ms</code></td>
+<td>The wait of a fetch that names no <code>timeout</code>, 5000 ms if not set, capped at 30000 ms; not passed to the Kafka consumer</td>
+<td>The same, with the proxy's own default and no cap</td>
+<td>The 30 s cap on every fetch wait</td>
+</tr>
+<tr>
+<td><code>fetch.min.bytes</code></td>
+<td>Passed to the Kafka consumer, so each broker waits for that many bytes before it replies</td>
+<td>The least bytes the proxy gathers for a reply before the wait ends</td>
+<td>The service gathers no records past one poll of the Kafka consumer</td>
+</tr>
+<tr>
+<td>Commit of offset N</td>
+<td>The group commits N + 1, the next record to read</td>
+<td>The same</td>
+<td>kafka-python's <code>commit</code> takes the next record to read, so the service adds the 1</td>
+</tr>
+</tbody>
+</table>
+<h2 id="the-earlier-apiv3-consumer-routes">The earlier <code>/api/v3</code> consumer routes<a class="headerlink" href="#the-earlier-apiv3-consumer-routes" title="Permanent link">&para;</a></h2>
+<p>The consumer routes of earlier versions, under <code>/api/v3/{namespace}/consumers</code>, are removed, and a request to them is refused with 404, or with 405 for a group named <code>recreate</code>, whose path is the topic recreate route's. Clients use <code>/api/v2/consumers</code>, which acts in the caller's default namespace.</p>
+<p>A client of the earlier routes also sees these changes:</p>
+<ul>
+<li>A request body with a content type other than a v2 type or <code>application/json</code> is refused with 415. <code>curl -d</code> without <code>-H "Content-Type: ..."</code> sends <code>application/x-www-form-urlencoded</code>, so it is refused.</li>
+<li>A create with a group or name that breaks the rule in <a href="#instances-fetches-and-commits">Instances, fetches and commits</a> is refused with 422, including an empty name, which the earlier routes took.</li>
+<li><code>base_uri</code> is an absolute URL. A client that built an instance's URL as the host followed by <code>base_uri</code> must use <code>base_uri</code> alone.</li>
+<li>A fetch from a json instance must send <code>Accept: application/vnd.kafka.json.v2+json</code>. Without it, or with <code>*/*</code>, it is refused with 406 and 40601, and with <code>application/json</code> with 406 and 406.</li>
+<li>A json instance returns JSON keys and values as JSON values, not as strings, and records carry <code>headers</code>.</li>
+<li>A json instance refuses a fetch whose first record has a key or value that is not UTF-8 with 408 and 40801, where the earlier routes returned it as base64. Read such records with a binary instance.</li>
+<li>Replies have the content type <code>application/vnd.kafka.v2+json</code>, or a fetch's chosen v2 type, not <code>application/json</code>.</li>
+<li><code>max_bytes</code> counts bytes, a commit answers <code>[]</code>, and <code>GET …/offsets</code> leaves out partitions never committed.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Copyright &copy; 2023—Present Diaspora Team
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["content.code.annotate", "content.code.copy", "navigation.path", "navigation.sections", "navigation.tabs", "navigation.top", "navigation.tracking", "search.highlight", "search.share", "search.suggest", "toc.follow"], "search": "../../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.c21346df.min.js"></script>
+      
+    
+  </body>
+</html>

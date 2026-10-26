@@ -829,7 +829,7 @@
   <span class="md-ellipsis">
     
   
-    Documentation
+    Overview
   
 
     
@@ -850,14 +850,70 @@
   
   
     <li class="md-nav__item">
-      <a href="../web/examples/" class="md-nav__link">
+      <a href="../web/management/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Examples
+    Management API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../web/produce/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Produce API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../web/consume/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Consume API
   
 
     
@@ -1265,7 +1321,7 @@ than <code>CONSUMER_INSTANCE_TIMEOUT_MS</code> (5 minutes by default) and closes
 When the process stops, it closes them all at once, within 8 s in all.
 An instance created with <code>auto.commit.enable</code> set to <code>true</code> commits its
 positions before it closes, at a delete, at the reaper's close and at
-shutdown (<a href="../web/api/#instance-lifecycle">Instance lifecycle</a>). A subject
+shutdown (<a href="../web/consume/#instance-lifecycle">Instance lifecycle</a>). A subject
 may hold 4 instances and the service 12.</p>
 <p>These limits bound the memory of the consumer routes:</p>
 <ul>

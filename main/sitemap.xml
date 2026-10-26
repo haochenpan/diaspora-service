@@ -45,7 +45,15 @@
          <lastmod>2026-10-26</lastmod>
     </url>
     <url>
-         <loc>https://haochenpan.github.io/diaspora-service/latest/web/examples/</loc>
+         <loc>https://haochenpan.github.io/diaspora-service/latest/web/consume/</loc>
+         <lastmod>2026-10-26</lastmod>
+    </url>
+    <url>
+         <loc>https://haochenpan.github.io/diaspora-service/latest/web/management/</loc>
+         <lastmod>2026-10-26</lastmod>
+    </url>
+    <url>
+         <loc>https://haochenpan.github.io/diaspora-service/latest/web/produce/</loc>
          <lastmod>2026-10-26</lastmod>
     </url>
 </urlset>
