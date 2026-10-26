@@ -116,6 +116,17 @@ SHARED_THREADS = 40
 AUTHENTICATION_FAILED = 40101
 
 
+def service_version() -> str:
+    """The package's version, followed by the commit the image is built from.
+
+    The image sets GIT_SHA to that commit. Without it, as in a local run,
+    the version is the package's alone.
+    """
+    version = importlib_metadata.version('diaspora_service')
+    commit = os.getenv('GIT_SHA', '').strip()
+    return f'{version}+{commit[:12]}' if commit else version
+
+
 def fetch_wait_ms(timeout: int | None, default_wait_ms: int | None) -> int:
     """How long a fetch waits for records.
 
@@ -456,7 +467,7 @@ class DiasporaService:
         self.app = FastAPI(
             title='Diaspora Web Service V3',
             docs_url='/',
-            version=importlib_metadata.version('diaspora_service'),
+            version=service_version(),
             lifespan=self._lifespan,
         )
         self.add_routes()

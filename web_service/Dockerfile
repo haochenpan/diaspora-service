@@ -16,6 +16,10 @@ RUN pip install --no-cache-dir --no-deps .
 RUN useradd --create-home diaspora
 USER diaspora
 
+# The commit the image is built from; the service adds it to its version
+ARG GIT_SHA=
+ENV GIT_SHA=$GIT_SHA
+
 # One worker, since consumer instances live in its memory. On SIGTERM,
 # gunicorn gives the worker 30 s to finish requests and shut down before
 # it kills it.

@@ -118,6 +118,36 @@ fail on such a pull request, regenerate the files with `--upgrade`
 instead. Dependabot also proposes new builds and patch releases of the
 image's Python 3.14, but not a new minor or major version of Python.
 
+## Releases
+
+Each change that users can see, such as a new route or a change to a
+response, gets a release:
+
+1. In the pull request that makes the change, bump `version` in
+   `pyproject.toml`.
+2. Once it is merged, tag the commit on `main` with `v` and the version,
+   and push the tag:
+
+    ```bash
+    git tag vX.Y.Z <commit>
+    git push origin vX.Y.Z
+    ```
+
+3. Publish a GitHub release from the tag, with notes that GitHub generates
+   from the pull requests merged since the previous release:
+
+    ```bash
+    gh release create vX.Y.Z --verify-tag --generate-notes
+    ```
+
+The service reports its version, followed by `+` and the first 12
+characters of the commit its image was built from, as `info.version` in
+`/openapi.json`, and the API documentation at `/` shows it:
+
+```bash
+curl -sS https://diaspora-web-service.qpp943wkvr7b2.us-east-1.cs.amazonlightsail.com/openapi.json | jq -r .info.version
+```
+
 ## Commits and pull requests
 
 - Branch from `main`, and name the branch after the kind of change and

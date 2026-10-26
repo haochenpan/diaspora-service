@@ -147,7 +147,10 @@ docker run --rm -p 127.0.0.1:8000:8000 --env-file .env diaspora-service
 ```
 
 The Dockerfile pins the platform `linux/amd64`, which Lightsail runs. The
-image runs the service as a user other than root.
+image runs the service as a user other than root. To have the service
+report the commit in its version, as deployed images do, add
+`--build-arg GIT_SHA="$(git rev-parse HEAD)"` to `docker build`
+([Releases](contributing.md#releases)).
 
 ## Call the API
 
