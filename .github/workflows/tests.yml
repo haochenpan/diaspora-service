@@ -5,12 +5,30 @@ on:
     branches: [main, test-me-*]
     tags: '**'
   pull_request:
+  schedule:
+    # Nightly live tests, followed by the sweep of what they left behind.
+    - cron: '17 7 * * *'
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
-  tests:
-    name: tests (${{ matrix.os }}, ${{ matrix.python }})
+  unit:
+    uses: ./.github/workflows/unit-tests.yml
+
+  # The integration set runs against the live AWS account and MSK cluster,
+  # so it runs only on main, nightly and by hand, one run at a time.
+  live:
+    name: live (${{ matrix.os }}, ${{ matrix.python }})
+    if: >-
+      github.event_name == 'schedule'
+      || github.event_name == 'workflow_dispatch'
+      || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     timeout-minutes: 20
+    concurrency:
+      group: live-tests
+      cancel-in-progress: false
 
     strategy:
       matrix:
@@ -44,7 +62,7 @@ jobs:
 
       - name: Get pip cache dir
         id: pip-cache-dir
-        run: echo "PIP_CACHE_DIR=$(pip cache dir)" >> $GITHUB_ENV
+        run: echo "PIP_CACHE_DIR=$(pip cache dir)" >> "$GITHUB_ENV"
 
       - name: Use pip cache
         id: pip-cache
@@ -60,12 +78,16 @@ jobs:
           python -m pip install --upgrade pip setuptools
           python -m pip install -e ".[dev]"
 
-      # Runs without the repository's secrets (Dependabot's, forks') can't
-      # reach the live cluster, so they stop after the install.
-      - name: Run Tests
+      # Runs without the repository's secrets (forks') can't reach the
+      # live cluster, so they stop after the install.
+      - name: Run live tests
         if: env.CLIENT_ID != ''
-        run: pytest tests/  -vv -s
+        run: pytest tests/ -m integration -vv -s
 
-      - name: Skip Tests
+      - name: Skip live tests
         if: env.CLIENT_ID == ''
-        run: echo "::notice::No secrets in this run, so the tests were skipped."
+        run: echo "::notice::No secrets in this run, so the live tests were skipped."
+
+      - name: Delete leftover test resources
+        if: always() && github.event_name == 'schedule' && env.CLIENT_ID != ''
+        run: python scripts/sweep_test_resources.py --apply
