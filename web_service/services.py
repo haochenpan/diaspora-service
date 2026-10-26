@@ -1533,7 +1533,8 @@ class WebService:
         """Delete a topic from a namespace.
 
         Deletes the topic from both KafkaService (Kafka cluster) and
-        NamespaceService (DynamoDB).
+        NamespaceService (DynamoDB). Kafka is called only after the
+        namespace is found for the subject.
 
         Args:
             subject: User subject ID
@@ -1543,6 +1544,24 @@ class WebService:
         Returns:
             Dictionary with status, message, and remaining topics list
         """
+        # Verify namespace exists for this user
+        user_namespaces = self.namespace_service.dynamodb.get_user_namespaces(
+            subject,
+        )
+        if namespace not in user_namespaces:
+            return {
+                'status': 'failure',
+                'message': f'Namespace {namespace} not found for {subject}',
+            }
+
+        # Topic names never contain a dot, so the Kafka name stays
+        # inside the namespace
+        if '.' in topic:
+            return {
+                'status': 'failure',
+                'message': f'Invalid topic name {topic}',
+            }
+
         # Delete topic from KafkaService (Kafka cluster) first
         kafka_result = self.kafka_service.delete_topic(namespace, topic)
         # Note: kafka_result can be None if Kafka is not configured,

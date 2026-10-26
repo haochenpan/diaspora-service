@@ -493,27 +493,33 @@ class DiasporaService:
         subject: str = Header(..., alias='subject'),
         token: str = Header(..., alias='authorization'),
     ) -> Response:
-        """Subscribe consumer to topics or a topic pattern."""
+        """Subscribe consumer to a list of topics."""
         if err := self.auth.validate_access_token(subject, token):
             return JSONResponse(content=err, status_code=401)
         if err := self._validate_namespace(subject, namespace):
             return JSONResponse(content=err, status_code=404)
-        if body.topics and body.topic_pattern:
+        if body.topic_pattern is not None:
             return JSONResponse(
                 content={
-                    'error_code': 40903,
+                    'error_code': 42204,
                     'message': (
-                        'Subscription to topics, partitions '
-                        'and pattern are mutually exclusive.'
+                        'topic_pattern is not supported; '
+                        'subscribe with a list of topics'
                     ),
                 },
-                status_code=409,
+                status_code=422,
             )
-        if body.topics and (
-            err := self._validate_topics_in_namespace(
-                namespace,
-                body.topics,
+        if not body.topics:
+            return JSONResponse(
+                content={
+                    'error_code': 42204,
+                    'message': 'Must provide a non-empty list of topics',
+                },
+                status_code=422,
             )
+        if err := self._validate_topics_in_namespace(
+            namespace,
+            body.topics,
         ):
             return JSONResponse(content=err, status_code=404)
         resp_body, status = self.consumer_service.subscribe(
@@ -522,7 +528,6 @@ class DiasporaService:
             group_name=group_name,
             instance_id=instance_id,
             topics=body.topics,
-            topic_pattern=body.topic_pattern,
         )
         return self._consumer_response(resp_body, status)
 

@@ -153,6 +153,21 @@ class ConsumerService:
         """Generate full Kafka topic name."""
         return f'{namespace}.{topic}'
 
+    def _in_namespace(
+        self,
+        namespace: str,
+        kafka_topic: str,
+    ) -> bool:
+        """Check that a Kafka topic name belongs to the namespace."""
+        if kafka_topic.startswith(f'{namespace}.'):
+            return True
+        logger.warning(
+            'Dropping topic %s outside namespace %s',
+            kafka_topic,
+            namespace,
+        )
+        return False
+
     def _strip_namespace(
         self,
         namespace: str,
@@ -331,9 +346,10 @@ class ConsumerService:
         instance_id: str,
         *,
         topics: list[str] | None = None,
-        topic_pattern: str | None = None,
     ) -> tuple[dict[str, Any] | None, int]:
-        """Subscribe consumer to topics or pattern.
+        """Subscribe consumer to a list of topics.
+
+        Topic patterns are not supported.
 
         Returns:
             Tuple of (response_body_or_None, http_status_code)
@@ -352,29 +368,22 @@ class ConsumerService:
                 },
                 404,
             )
+        if not topics:
+            return (
+                {
+                    'error_code': 42204,
+                    'message': 'Must provide a non-empty list of topics',
+                },
+                422,
+            )
 
         with managed.lock:
             managed.touch()
             try:
-                if topics is not None:
-                    kafka_topics = [
-                        self._kafka_topic_name(namespace, t) for t in topics
-                    ]
-                    managed.consumer.subscribe(topics=kafka_topics)
-                elif topic_pattern is not None:
-                    # Scope pattern to namespace
-                    scoped = f'{namespace}\\.{topic_pattern}'
-                    managed.consumer.subscribe(pattern=scoped)
-                else:
-                    return (
-                        {
-                            'error_code': 42204,
-                            'message': (
-                                'Must provide topics or topic_pattern'
-                            ),
-                        },
-                        422,
-                    )
+                kafka_topics = [
+                    self._kafka_topic_name(namespace, t) for t in topics
+                ]
+                managed.consumer.subscribe(topics=kafka_topics)
             except Exception as e:
                 return (
                     {
@@ -415,7 +424,9 @@ class ConsumerService:
             managed.touch()
             sub = managed.consumer.subscription() or set()
             user_topics = sorted(
-                self._strip_namespace(namespace, t) for t in sub
+                self._strip_namespace(namespace, t)
+                for t in sub
+                if self._in_namespace(namespace, t)
             )
         return ({'topics': user_topics}, 200)
 
@@ -507,6 +518,8 @@ class ConsumerService:
                 )
             records: list[dict[str, Any]] = []
             for tp, msgs in raw.items():
+                if not self._in_namespace(namespace, tp.topic):
+                    continue
                 user_topic = self._strip_namespace(
                     namespace,
                     tp.topic,
@@ -741,6 +754,7 @@ class ConsumerService:
                         'partition': tp.partition,
                     }
                     for tp in assigned
+                    if self._in_namespace(namespace, tp.topic)
                 ),
                 key=lambda x: (x['topic'], x['partition']),
             )

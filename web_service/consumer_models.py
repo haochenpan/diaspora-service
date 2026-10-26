@@ -58,12 +58,13 @@ class SubscriptionRequest(BaseModel):
 
     topics: list[str] | None = Field(
         None,
-        description='List of topic names to subscribe to.',
+        description='Non-empty list of topic names to subscribe to.',
     )
     topic_pattern: str | None = Field(
         None,
         description=(
-            'A regex pattern. topics and topic_pattern are mutually exclusive.'
+            'Not supported. A request that sets it is refused; '
+            'use topics instead.'
         ),
     )
 
