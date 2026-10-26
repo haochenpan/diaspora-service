@@ -84,8 +84,10 @@ The deploy uses two sets of repository secrets. `AWS_ACCESS_KEY_ID` and
 `AWS_SECRET_ACCESS_KEY` are the workflow's own AWS key. It needs access to
 the Lightsail container service only, and the container never sees it. The
 `DOCKER_*` secrets become the container's environment, without the
-prefix. The `live` and `sweep` jobs of `tests.yml` read the same `DOCKER_*`
-secrets, so a change to one of them also reaches the live tests.
+prefix. The `live` job of `tests.yml`, whose last step is the nightly
+sweep, reads the same `DOCKER_*` secrets (the AWS key only while the live
+tests' own key is not set), so a change to one of them also reaches the
+live tests.
 
 | Secret | Container variable | Notes |
 | --- | --- | --- |
@@ -127,6 +129,7 @@ marks the deployment failed.
 | `NAMESPACE_TABLE_NAME` | no | `diaspora-namespace-table` | The DynamoDB table of namespaces. |
 | `MAX_TOPICS_PER_NAMESPACE` | no | `50` | The most topics a namespace may hold. A value that is not a whole number of at least 1 is logged and replaced by 50. |
 | `CONSUMER_INSTANCE_TIMEOUT_MS` | no | `300000` (5 minutes) | How long a consumer instance may sit idle before the service closes it. The service looks for idle instances every 30 seconds. A value that is not an integer stops the worker at start with a `ValueError`. |
+| `IAM_USER_PERMISSIONS_BOUNDARY_ARN` | no | none | The ARN of a managed policy that the service sets as the permissions boundary of every IAM user it creates; unset or empty, it sets none. Production leaves it unset. The live tests set it ([The live tests' AWS identity](2-testing.md#the-live-tests-aws-identity)). |
 
 The workflow passes none of the optional variables, so production runs
 with their defaults. To set one, add it to the `environment` block in

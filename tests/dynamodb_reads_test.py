@@ -6,8 +6,8 @@ before it, such as a key stored a moment earlier.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
-from typing import Callable
 
 import pytest
 from botocore.stub import Stubber

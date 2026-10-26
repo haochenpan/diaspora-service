@@ -168,7 +168,7 @@ secrets:
 | Credential | Secrets | Also used by |
 | --- | --- | --- |
 | The deploy's AWS key, used by the workflow | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | |
-| The container's AWS key, used by the service | `DOCKER_AWS_ACCESS_KEY_ID`, `DOCKER_AWS_SECRET_ACCESS_KEY` | The `live` and `sweep` jobs of `tests.yml` |
+| The container's AWS key, used by the service | `DOCKER_AWS_ACCESS_KEY_ID`, `DOCKER_AWS_SECRET_ACCESS_KEY` | The `live` job of `tests.yml` and its nightly sweep, while the live tests' own key is not set |
 | The Globus confidential client's secret, used by the service | `DOCKER_SERVER_SECRET` | The `live` job of `tests.yml` |
 
 The running container keeps the values it started with. A new value
