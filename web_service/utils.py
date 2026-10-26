@@ -33,6 +33,10 @@ class AuthManager:
         client_id: str,
     ) -> None:
         """Initialize the AuthManager with client credentials."""
+        if server_client_id is None or server_secret is None:
+            raise ValueError(
+                'SERVER_CLIENT_ID and SERVER_SECRET must be set.',
+            )
         self.client = ConfidentialAppAuthClient(
             server_client_id,
             server_secret,

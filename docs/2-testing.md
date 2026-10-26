@@ -54,13 +54,6 @@ coverage run -m pytest tests/
 coverage report
 ```
 
-### Run `tox`
-
-```bash
-source secrets2.sh  # pragma: allowlist secret
-tox
-```
-
 ## What runs in CI
 
 | Workflow | Job | Tests | When | Secrets |

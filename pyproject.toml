@@ -56,8 +56,6 @@ dev = [
     "pytest-cov",
     "pytest-mock",
     "ruff>=0.2.0",
-    "tox",
-    "virtualenv",
 ]
 docs = [
     "black",
@@ -128,15 +126,14 @@ warn_redundant_casts = true
 warn_unused_configs = true
 warn_unused_ignores = true
 
+# No type stubs are published for these.
 [[tool.mypy.overrides]]
-module = "testing.*"
-disallow_untyped_defs = false
+module = ["aws_msk_iam_sasl_signer", "kafka", "kafka.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = "tests.*"
 disallow_untyped_defs = false
-ignore_missing_imports = true
 disable_error_code = ["index", "call-overload", "operator", "call-arg", "arg-type", "attr-defined"]
 
 [tool.ruff]
@@ -201,7 +198,7 @@ multiline-quotes = "double"
 
 [tool.ruff.lint.isort]
 force-single-line = true
-known-first-party = ["foobar", "test", "testing"]
+known-first-party = ["web_service"]
 order-by-type = false
 required-imports = ["from __future__ import annotations"]
 

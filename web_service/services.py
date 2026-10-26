@@ -9,6 +9,8 @@ import os
 import re
 import threading
 import time
+from collections.abc import Mapping
+from collections.abc import Sequence
 from typing import Any
 
 import boto3
@@ -301,7 +303,7 @@ class IAMService:
             Dictionary with status (success/failure) and message
         """
         try:
-            keys: list[dict[str, Any]] = []
+            keys: Sequence[Mapping[str, Any]] = []
             with contextlib.suppress(
                 self.iam.exceptions.NoSuchEntityException,
             ):

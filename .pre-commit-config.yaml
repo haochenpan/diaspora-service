@@ -19,26 +19,36 @@ repos:
     rev: v2.4.3
     hooks:
       - id: codespell
-  - repo: https://github.com/nbQA-dev/nbQA
-    rev: 1.9.1
-    hooks:
-      - id: nbqa-ruff
-  - repo: https://github.com/kynan/nbstripout
-    rev: 0.9.1
-    hooks:
-      - id: nbstripout
   - repo: 'https://github.com/charliermarsh/ruff-pre-commit'
-    rev: v0.16.9
+    rev: v0.16.10
     hooks:
       - id: ruff
         args:
           - '--fix'
       - id: ruff-format
   - repo: 'https://github.com/pre-commit/mirrors-mypy'
-    rev: v2.3.1
+    rev: v2.4.0
     hooks:
       - id: mypy
-        additional_dependencies: ['types-cachetools']
+        # Without the hook's default --ignore-missing-imports, so an import
+        # mypy can't resolve fails the hook; pyproject.toml lists the modules
+        # that publish no types.
+        args: ['--scripts-are-modules']
+        additional_dependencies:
+          - 'boto3-stubs[dynamodb,iam]'
+          - fastapi
+          - globus-sdk
+          - httpx
+          - pydantic
+          - pytest
+          - uvicorn
+  - repo: https://github.com/Mateusz-Grzelinski/actionlint-py
+    rev: v1.7.12.25
+    hooks:
+      - id: actionlint
+        # actionlint runs shellcheck on each run: step when it is on PATH;
+        # shellcheck-py puts it there, here and on pre-commit.ci.
+        additional_dependencies: ['shellcheck-py==0.11.0.1']
   - repo: https://github.com/Yelp/detect-secrets
     rev: v1.5.0
     hooks:
