@@ -25,6 +25,8 @@ from web_service.utils import EnvironmentChecker
 # is shorter so the controller answers before the client gives up.
 ADMIN_REQUEST_TIMEOUT_MS = 15_000
 ADMIN_OPERATION_TIMEOUT_MS = 10_000
+# Wait before retrying a create that found the topic still present
+TOPIC_EXISTS_RETRY_DELAY_S = 2
 
 
 class IAMService:
@@ -233,13 +235,18 @@ class IAMService:
             Dictionary with status (success/failure) and message
         """
         try:
+            keys: list[dict[str, Any]] = []
             with contextlib.suppress(
                 self.iam.exceptions.NoSuchEntityException,
             ):
                 keys = self.iam.list_access_keys(
                     UserName=subject,
                 )['AccessKeyMetadata']
-                for key in keys:
+            for key in keys:
+                # A key that is already gone doesn't stop the others
+                with contextlib.suppress(
+                    self.iam.exceptions.NoSuchEntityException,
+                ):
                     self.iam.delete_access_key(
                         UserName=subject,
                         AccessKeyId=key['AccessKeyId'],
@@ -755,8 +762,10 @@ class KafkaService:
             namespace: Namespace name
             topic: Topic name
             exists_ok: If True, a topic that already exists counts as
-                success. If False, the create is retried and fails if the
-                topic still exists after the last attempt.
+                success. If False, the create is retried after a short
+                wait and fails if the topic still exists after the last
+                attempt, unless an earlier attempt of this call failed
+                otherwise (it may have created the topic before failing).
 
         Returns:
             Dictionary with status (success/failure) and message,
@@ -771,8 +780,13 @@ class KafkaService:
         max_retries = 3
         last_exception: Exception | None = None
 
-        for _ in range(max_retries):
+        # Whether an earlier attempt failed other than with the topic
+        # existing, for example a timeout after the broker created it
+        failed_otherwise = False
+
+        for attempt in range(max_retries):
             admin: KafkaAdminClient | None = None
+            topic_exists = False
             try:
                 admin = self._admin_client()
                 topic_list = [
@@ -791,18 +805,23 @@ class KafkaService:
                     'message': 'Topic created',
                 }
             except TopicAlreadyExistsError as e:
-                if exists_ok:
+                if exists_ok or failed_otherwise:
                     return {
                         'status': 'success',
                         'message': 'Topic already exists',
                     }
                 last_exception = e
+                topic_exists = True
             except Exception as e:
                 last_exception = e
+                failed_otherwise = True
             finally:
                 if admin is not None:
                     with contextlib.suppress(Exception):
                         admin.close()
+
+            if topic_exists and attempt < max_retries - 1:
+                time.sleep(TOPIC_EXISTS_RETRY_DELAY_S)
 
         return {
             'status': 'failure',
@@ -879,8 +898,8 @@ class KafkaService:
 
         This method calls delete_topic (idempotent) and then
         create_topic. A topic that still exists when it is created again
-        (for example while its deletion is still in progress) is retried,
-        and is a failure if it persists.
+        (for example while its deletion is still in progress) is retried
+        after a short wait, and is a failure if it persists.
 
         Args:
             namespace: Namespace name
@@ -1051,6 +1070,9 @@ class NamespaceService:
 
         Safe to call multiple times with the same parameters.
 
+        This method is atomic - concurrent calls, and topic changes, are
+        serialized using a global lock.
+
         Args:
             subject: User subject ID
             namespace: Namespace name to delete
@@ -1059,31 +1081,37 @@ class NamespaceService:
             Dictionary with status, message, and remaining namespaces list.
             Returns success message even if namespace doesn't exist.
         """
-        existing_namespaces = self.dynamodb.get_user_namespaces(subject)
+        # Use global lock so no topic change runs during the delete
+        with self._global_lock:
+            existing_namespaces = self.dynamodb.get_user_namespaces(subject)
 
-        # If namespace doesn't exist, return success (idempotent)
-        if namespace not in existing_namespaces:
+            # If namespace doesn't exist, return success (idempotent)
+            if namespace not in existing_namespaces:
+                return {
+                    'status': 'success',
+                    'message': (
+                        f'Namespace {namespace} not found for {subject}'
+                    ),
+                    'namespaces': existing_namespaces,
+                }
+
+            # Drop the namespace's topics item first, so a later owner of
+            # the name does not inherit the old topic list, then remove the
+            # namespace from the user's and the global lists; a failure
+            # dropping the topics item leaves the namespace owned, so a
+            # retry deletes it again
+            self.dynamodb.delete_namespace_topics(namespace)
+            self.dynamodb.remove_user_namespace(subject, namespace)
+            self.dynamodb.remove_global_namespace(namespace)
+
+            # Read back the updated list to return
+            remaining_namespaces = self.dynamodb.get_user_namespaces(subject)
+
             return {
                 'status': 'success',
-                'message': f'Namespace {namespace} not found for {subject}',
-                'namespaces': existing_namespaces,
+                'message': f'Namespace deleted for {subject}',
+                'namespaces': remaining_namespaces,
             }
-
-        # Atomically remove namespace from user and global lists, and drop
-        # its topics item before the name is released, so a later owner of
-        # the name does not inherit the old topic list
-        self.dynamodb.remove_user_namespace(subject, namespace)
-        self.dynamodb.delete_namespace_topics(namespace)
-        self.dynamodb.remove_global_namespace(namespace)
-
-        # Read back the updated list to return
-        remaining_namespaces = self.dynamodb.get_user_namespaces(subject)
-
-        return {
-            'status': 'success',
-            'message': f'Namespace deleted for {subject}',
-            'namespaces': remaining_namespaces,
-        }
 
     def create_topic(
         self,
