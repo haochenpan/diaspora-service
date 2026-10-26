@@ -1,0 +1,1359 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Documentation for Diaspora Service">
+      
+      
+        <meta name="author" content="Haochen Pan">
+      
+      
+        <link rel="canonical" href="https://github.com/haochenpan/diaspora-service/main/5-runbook/">
+      
+      
+        <link rel="prev" href="../4-monitoring/">
+      
+      
+        <link rel="next" href="../acknowledgments/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../static/octopus.svg">
+      <meta name="generator" content="mkdocs-ProperDocs 1.6.7, mkdocs-material-9.8.0">
+    
+    
+      
+        <title>Runbook - Diaspora Service Documentation</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.57a0d79d.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.fb2fffe2.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CUbuntu+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Ubuntu Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="cyan">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#runbook" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="Diaspora Service Documentation" class="md-header__button md-logo" aria-label="Diaspora Service Documentation" data-md-component="logo">
+      
+  <img src="../static/octopus.svg" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Diaspora Service Documentation
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Runbook
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme)" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="cyan"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m14.3 16-.7-2h-3.2l-.7 2H7.8L11 7h2l3.2 9zM20 8.69V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12zm-9.15 3.96h2.3L12 9z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="cyan"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_2" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="blue" data-md-color-accent="cyan"  aria-label="Switch to system preference"  type="radio" name="__palette" id="__palette_2">
+    
+      <label class="md-header__button md-icon" title="Switch to system preference" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/haochenpan/diaspora-service" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    haochenpan/diaspora-service
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href=".." class="md-tabs__link">
+          
+  
+  
+  Development
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../web/api/" class="md-tabs__link">
+          
+  
+  
+  Web Service
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../kafka-console/intro/" class="md-tabs__link">
+          
+  
+  
+  Kafka Console
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="Diaspora Service Documentation" class="md-nav__button md-logo" aria-label="Diaspora Service Documentation" data-md-component="logo">
+      
+  <img src="../static/octopus.svg" alt="logo">
+
+    </a>
+    Diaspora Service Documentation
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/haochenpan/diaspora-service" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    haochenpan/diaspora-service
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_1" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_1" id="__nav_1_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_1_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_1">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Development
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Introduction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../1-running/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Running
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2-testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../3-deploying/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../4-monitoring/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Monitoring
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runbook
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runbook
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#roll-back-a-deploy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Roll back a deploy
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#read-the-logs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Read the logs
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#triage-a-failed-deploy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Triage a failed deploy
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#broker-cpu-credits" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Broker CPU credits
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#rotate-credentials" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rotate credentials
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Rotate credentials">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#rotate-an-aws-access-key" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rotate an AWS access key
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rotate-the-globus-client-secret" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rotate the Globus client secret
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../acknowledgments/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Acknowledgments
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Web Service
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Web Service
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../web/api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Documentation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../web/examples/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Examples
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Kafka Console
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Kafka Console
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../kafka-console/intro/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Introduction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#roll-back-a-deploy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Roll back a deploy
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#read-the-logs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Read the logs
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#triage-a-failed-deploy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Triage a failed deploy
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#broker-cpu-credits" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Broker CPU credits
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#rotate-credentials" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rotate credentials
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Rotate credentials">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#rotate-an-aws-access-key" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rotate an AWS access key
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rotate-the-globus-client-secret" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rotate the Globus client secret
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+                
+
+
+
+
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="runbook">Runbook<a class="headerlink" href="#runbook" title="Permanent link">&para;</a></h1>
+<p>Tasks for operating the deployed service: rolling back, reading the logs,
+triaging a failed deploy, watching the brokers' CPU credits and rotating
+credentials. <a href="../3-deploying/">Deployment</a> describes the workflow, the
+secrets and the container's environment that these tasks refer to. The
+Lightsail commands use the region <code>us-east-1</code>; angle brackets mark values
+to fill in.</p>
+<h2 id="roll-back-a-deploy">Roll back a deploy<a class="headerlink" href="#roll-back-a-deploy" title="Permanent link">&para;</a></h2>
+<p>Roll back when a deployment became active but the service misbehaves. A
+deployment that fails needs no rollback: Lightsail keeps the previous one
+active.</p>
+<p>The workflow's image cleanup keeps the images of the active deployment, of
+any deployment still activating, and of the most recent inactive
+deployment. After a deploy, Lightsail therefore holds the current image
+and the one before it. To see the deployments and the stored images:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>aws<span class="w"> </span>lightsail<span class="w"> </span>get-container-service-deployments<span class="w"> </span>--region<span class="w"> </span>us-east-1<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">    </span>--service-name<span class="w"> </span>diaspora-web-service<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">    </span>--query<span class="w"> </span><span class="s1">'deployments[].{version: version, state: state, image: containers.flask.image}'</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">    </span>--output<span class="w"> </span>table
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>aws<span class="w"> </span>lightsail<span class="w"> </span>get-container-images<span class="w"> </span>--region<span class="w"> </span>us-east-1<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">    </span>--service-name<span class="w"> </span>diaspora-web-service<span class="w"> </span>--query<span class="w"> </span><span class="s1">'containerImages[].image'</span>
+</span></code></pre></div>
+<p>Lightsail lists up to 50 deployment versions, but only the versions whose
+image is still stored can be deployed again.</p>
+<ol>
+<li>
+<p>Hold merges to <code>main</code> until step 4 lands. The next push to <code>main</code>
+   deploys <code>main</code>, which would bring the bad change back.</p>
+</li>
+<li>
+<p>Deploy the previous image with the current environment, from the
+   console or the CLI.</p>
+<ul>
+<li>Console: in the Lightsail console, open <strong>Containers</strong>, then
+  <code>diaspora-web-service</code>, then the <strong>Deployments</strong> tab. Choose
+  <strong>Modify your deployment</strong>, then <strong>Choose stored image</strong> for
+  <code>flask</code>, pick the previous image, and choose <strong>Save and deploy</strong>.</li>
+<li>CLI: set <code>image=':diaspora-web-service.docker.&lt;N&gt;'</code>, the previous
+  image, then run steps 3 and 4 of
+  <a href="../3-deploying/#from-your-machine">Deploy from your machine</a>. They
+  copy the current deployment's environment and change only the
+  image.</li>
+</ul>
+<p>Under <strong>Deployment versions</strong>, the actions menu (⋮) of an older
+version also has <strong>Create new deployment</strong>. It reuses that version's
+environment as well as its image, so a secret changed since then
+returns to its old value.</p>
+</li>
+<li>
+<p><a href="../3-deploying/#check-a-deploy">Check the deploy</a>.</p>
+</li>
+<li>Revert the change on <code>main</code>, for example with <code>git revert &lt;commit&gt;</code> in
+   a pull request. Merging the revert deploys <code>main</code> without the change.</li>
+</ol>
+<p>To go back further than the stored previous image, revert on <code>main</code> and
+let the workflow build and deploy it.</p>
+<h2 id="read-the-logs">Read the logs<a class="headerlink" href="#read-the-logs" title="Permanent link">&para;</a></h2>
+<p><code>aws lightsail get-container-log</code> returns one page of entries at a time,
+and the AWS CLI does not fetch the following pages for you. A call without
+<code>--start-time</code> can return an old page that misses the latest deployment.
+This loop prints every entry since <code>start</code>, page by page:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nv">start</span><span class="o">=</span><span class="s1">'2026-10-26T07:00:00Z'</span><span class="w">   </span><span class="c1"># the earliest time to read, in UTC</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="nv">token</span><span class="o">=()</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="k">while</span><span class="w"> </span>:<span class="p">;</span><span class="w"> </span><span class="k">do</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span><span class="nv">page</span><span class="o">=</span><span class="k">$(</span>aws<span class="w"> </span>lightsail<span class="w"> </span>get-container-log<span class="w"> </span>--region<span class="w"> </span>us-east-1<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">      </span>--service-name<span class="w"> </span>diaspora-web-service<span class="w"> </span>--container-name<span class="w"> </span>flask<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">      </span>--start-time<span class="w"> </span><span class="s2">"</span><span class="nv">$start</span><span class="s2">"</span><span class="w"> </span><span class="s2">"</span><span class="si">${</span><span class="nv">token</span><span class="p">[@]</span><span class="si">}</span><span class="s2">"</span><span class="w"> </span>--output<span class="w"> </span>json<span class="k">)</span>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">  </span>jq<span class="w"> </span>-r<span class="w"> </span><span class="s1">'.logEvents[] | "\(.createdAt)\t\(.message)"'</span><span class="w"> </span><span class="o">&lt;&lt;&lt;</span><span class="w"> </span><span class="s2">"</span><span class="nv">$page</span><span class="s2">"</span>
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">  </span><span class="nv">next</span><span class="o">=</span><span class="k">$(</span>jq<span class="w"> </span>-r<span class="w"> </span><span class="s1">'.nextPageToken // empty'</span><span class="w"> </span><span class="o">&lt;&lt;&lt;</span><span class="w"> </span><span class="s2">"</span><span class="nv">$page</span><span class="s2">"</span><span class="k">)</span>
+</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="o">[</span><span class="w"> </span>-z<span class="w"> </span><span class="s2">"</span><span class="nv">$next</span><span class="s2">"</span><span class="w"> </span><span class="o">]</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="o">[</span><span class="w"> </span><span class="s2">"</span><span class="k">$(</span>jq<span class="w"> </span><span class="s1">'.logEvents | length'</span><span class="w"> </span><span class="o">&lt;&lt;&lt;</span><span class="w"> </span><span class="s2">"</span><span class="nv">$page</span><span class="s2">"</span><span class="k">)</span><span class="s2">"</span><span class="w"> </span>-eq<span class="w"> </span><span class="m">0</span><span class="w"> </span><span class="o">]</span><span class="p">;</span><span class="w"> </span><span class="k">then</span>
+</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">    </span><span class="k">break</span>
+</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="w">  </span><span class="k">fi</span>
+</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="w">  </span><span class="nv">token</span><span class="o">=(</span>--page-token<span class="w"> </span><span class="s2">"</span><span class="nv">$next</span><span class="s2">"</span><span class="o">)</span>
+</span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="k">done</span>
+</span></code></pre></div>
+<p>Each page carries a <code>nextPageToken</code>; the loop passes it back with
+<code>--page-token</code> and stops at a page with no entries. Lightsail can return a
+token with the last page, so an empty page is the end. To keep only
+matching lines, add <code>--filter-pattern</code>, for example
+<code>--filter-pattern AssertionError</code>, and to end the period, <code>--end-time</code>.</p>
+<p>The container is named <code>flask</code> in every deployment; <code>docker</code> is the image
+label, not the container name. The log holds what gunicorn and the service
+write to stdout and stderr. Lightsail keeps the last three days of log
+entries.</p>
+<p>In the console, the <strong>Deployments</strong> tab has an <strong>Open log</strong> link for the
+current deployment's container. For an earlier or failed version, open
+the version's actions menu (⋮) under <strong>Deployment versions</strong>, choose
+<strong>Show details</strong>, then <strong>Open log</strong>.</p>
+<h2 id="triage-a-failed-deploy">Triage a failed deploy<a class="headerlink" href="#triage-a-failed-deploy" title="Permanent link">&para;</a></h2>
+<p>Find the failed step in the run on GitHub Actions.</p>
+<table>
+<thead>
+<tr>
+<th>Failed step</th>
+<th>Usual cause</th>
+<th>Fix</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>unit</code></td>
+<td>A unit test fails on <code>main</code>. Nothing was deployed.</td>
+<td>Fix the test or the code on <code>main</code>.</td>
+</tr>
+<tr>
+<td><code>Configure AWS credentials</code> or <code>Verify AWS credential</code></td>
+<td>The deploy's key in the <code>AWS_ACCESS_KEY_ID</code> and <code>AWS_SECRET_ACCESS_KEY</code> secrets is wrong, deactivated or deleted.</td>
+<td>Update the secrets (<a href="#rotate-an-aws-access-key">Rotate an AWS access key</a>).</td>
+</tr>
+<tr>
+<td><code>Install AWS Lightsail plugin</code></td>
+<td>The plugin's download failed, or its checksum did not match.</td>
+<td>Rerun the job; if the checksum still fails, check the pinned release in <code>deployment.yml</code>.</td>
+</tr>
+<tr>
+<td><code>Checkout code</code></td>
+<td>GitHub could not check out the commit.</td>
+<td>Rerun the job.</td>
+</tr>
+<tr>
+<td><code>Build Docker container for AWS Lightsail</code></td>
+<td><code>docker build</code> failed; the step log shows the failing Dockerfile instruction.</td>
+<td>Reproduce it with <code>docker build -f web_service/Dockerfile .</code> and fix it on <code>main</code>.</td>
+</tr>
+<tr>
+<td><code>Idempotently create Lightsail container service</code></td>
+<td>This step's error is expected on every run: the service exists. The step does not fail the run.</td>
+<td>Nothing.</td>
+</tr>
+<tr>
+<td><code>Push Docker image to Lightsail and deploy</code></td>
+<td>An AWS CLI call failed; the step log shows its error.</td>
+<td>Fix the cause the error names, then deploy again.</td>
+</tr>
+<tr>
+<td><code>Wait for the deployment to become active</code></td>
+<td>The deployment failed or did not finish in time (<a href="../3-deploying/#the-wait-step">The wait step</a>).</td>
+<td>Read the container log, as below.</td>
+</tr>
+</tbody>
+</table>
+<p>When a deployment fails, <a href="#read-the-logs">read the log</a> around the time
+of the deploy. A worker that cannot start ends with gunicorn's
+<code>Reason: Worker failed to boot.</code>, and the traceback above it names the
+cause:</p>
+<ul>
+<li><code>AssertionError: &lt;NAME&gt; environment variable is not set.</code> means the
+  <code>DOCKER_&lt;NAME&gt;</code> secret is missing or empty. Set it with
+  <code>gh secret set DOCKER_&lt;NAME&gt;</code>, then deploy again with
+  <code>gh workflow run deployment.yml --ref main</code>.</li>
+<li><code>ValueError: invalid literal for int()</code> at start means
+  <code>CONSUMER_INSTANCE_TIMEOUT_MS</code> is set to a value that is not an integer.</li>
+</ul>
+<p>To reproduce a start-up failure locally, build and run the image as in
+<a href="../1-running/">Running</a>.</p>
+<h2 id="broker-cpu-credits">Broker CPU credits<a class="headerlink" href="#broker-cpu-credits" title="Permanent link">&para;</a></h2>
+<p>The MSK cluster's brokers are burstable instances, <code>kafka.t3.small</code> as of
+October 2026 (see the
+<a href="../kafka-console/intro/#broker-cpu-credits">Kafka console page</a>). A
+burstable broker earns CPU credits at a fixed rate and spends them while
+it runs above its baseline. When the balance runs out, AWS's
+<a href="https://docs.aws.amazon.com/msk/latest/developerguide/metrics-details.html">MSK metrics reference</a>
+says only that this "can have a negative impact on your cluster's
+performance". In October 2026 the Kafka console's load spent one
+broker's credits, and topic creation and deletion stalled until the
+console's instance was stopped.</p>
+<p>Each broker's balance is the <code>CPUCreditBalance</code> metric in CloudWatch, in
+the cluster's region (the <code>AWS_ACCOUNT_REGION</code> value). In the CloudWatch
+console, open <strong>Metrics</strong>, then <strong>All metrics</strong>, then <strong>AWS/Kafka</strong>, then
+<strong>Broker ID, Cluster Name</strong>, and select <code>CPUCreditBalance</code> for each broker.
+From the CLI, for one broker:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>aws<span class="w"> </span>cloudwatch<span class="w"> </span>get-metric-statistics<span class="w"> </span>--region<span class="w"> </span>&lt;region&gt;<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">    </span>--namespace<span class="w"> </span>AWS/Kafka<span class="w"> </span>--metric-name<span class="w"> </span>CPUCreditBalance<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span>--dimensions<span class="w"> </span><span class="nv">Name</span><span class="o">=</span><span class="s2">"Cluster Name"</span>,Value<span class="o">=</span>&lt;cluster-name&gt;<span class="w"> </span><span class="nv">Name</span><span class="o">=</span><span class="s2">"Broker ID"</span>,Value<span class="o">=</span>&lt;broker-id&gt;<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">    </span>--start-time<span class="w"> </span>&lt;start-time&gt;<span class="w"> </span>--end-time<span class="w"> </span>&lt;end-time&gt;<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">    </span>--period<span class="w"> </span><span class="m">3600</span><span class="w"> </span>--statistics<span class="w"> </span>Minimum
+</span></code></pre></div>
+<p><code>&lt;cluster-name&gt;</code> is the <code>MSK_CLUSTER_NAME</code> value, the broker IDs start at
+1, and the times are in ISO 8601, such as <code>2026-10-25T00:00:00Z</code>.</p>
+<p>If a balance keeps falling, find the load that spends it. The Kafka
+console's statistics refresh is one known source; its page says to stop
+the console's instance in that case.</p>
+<h2 id="rotate-credentials">Rotate credentials<a class="headerlink" href="#rotate-credentials" title="Permanent link">&para;</a></h2>
+<p>The deploy and the service use three credentials, each stored in GitHub
+secrets:</p>
+<table>
+<thead>
+<tr>
+<th>Credential</th>
+<th>Secrets</th>
+<th>Also used by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>The deploy's AWS key, used by the workflow</td>
+<td><code>AWS_ACCESS_KEY_ID</code>, <code>AWS_SECRET_ACCESS_KEY</code></td>
+<td></td>
+</tr>
+<tr>
+<td>The container's AWS key, used by the service</td>
+<td><code>DOCKER_AWS_ACCESS_KEY_ID</code>, <code>DOCKER_AWS_SECRET_ACCESS_KEY</code></td>
+<td>The <code>live</code> and <code>sweep</code> jobs of <code>tests.yml</code></td>
+</tr>
+<tr>
+<td>The Globus confidential client's secret, used by the service</td>
+<td><code>DOCKER_SERVER_SECRET</code></td>
+<td>The <code>live</code> job of <code>tests.yml</code></td>
+</tr>
+</tbody>
+</table>
+<p>The running container keeps the values it started with. A new value
+reaches it only through a new deployment, and the workflow builds each
+deployment's environment from the secrets as they are at that run. Every
+such deploy restarts the service and drops its consumer instances, whose
+clients then get <code>40403</code> (<a href="../3-deploying/#one-worker">One worker</a>).</p>
+<h3 id="rotate-an-aws-access-key">Rotate an AWS access key<a class="headerlink" href="#rotate-an-aws-access-key" title="Permanent link">&para;</a></h3>
+<p>An IAM user can hold two access keys at once, so the old key keeps working
+until you deactivate it. The deploy's key and the container's key may
+belong to the same IAM user; check before you delete either.</p>
+<ol>
+<li>Find the IAM user the key belongs to, and list its keys:
+   <code>aws iam list-access-keys --user-name &lt;user&gt;</code>. If it already has two,
+   run <code>aws iam get-access-key-last-used --access-key-id &lt;key-id&gt;</code> on
+   each. Its <code>ServiceName</code> says which credential the key is: the deploy's
+   key was last used by Lightsail or STS, the container's by IAM, DynamoDB
+   or Kafka. Delete only a key with no recent use.</li>
+<li>Create a key: <code>aws iam create-access-key --user-name &lt;user&gt;</code>. The output
+   is the only time AWS shows the secret.</li>
+<li>Update the matching secrets from the table, for example
+   <code>gh secret set DOCKER_AWS_ACCESS_KEY_ID</code> and
+   <code>gh secret set DOCKER_AWS_SECRET_ACCESS_KEY</code>; each prompts for its
+   value.</li>
+<li>Deploy: <code>gh workflow run deployment.yml --ref main</code>. A new deploy key
+   is checked by the run's <code>Verify AWS credential</code> step. For a new
+   container key, <a href="../3-deploying/#check-a-deploy">check the deploy</a> and
+   read the log for AWS errors.</li>
+<li>Check when the old key was last used:
+   <code>aws iam get-access-key-last-used --access-key-id &lt;old-key-id&gt;</code>. A use
+   after the new deployment became active means something still holds the
+   old key. Anything else that holds it, such as a local file you source
+   for the live tests, needs the new key too.</li>
+<li>Deactivate the old key:
+   <code>aws iam update-access-key --user-name &lt;user&gt; --access-key-id &lt;old-key-id&gt; --status Inactive</code>.
+   When nothing has failed with the old key inactive, delete it with
+   <code>aws iam delete-access-key --user-name &lt;user&gt; --access-key-id &lt;old-key-id&gt;</code>.</li>
+</ol>
+<h3 id="rotate-the-globus-client-secret">Rotate the Globus client secret<a class="headerlink" href="#rotate-the-globus-client-secret" title="Permanent link">&para;</a></h3>
+<ol>
+<li>In <a href="https://app.globus.org/settings/developers">Globus developer settings</a>,
+   open the confidential client whose client ID is the <code>SERVER_CLIENT_ID</code>
+   value, and add a client secret. Globus shows it only once.</li>
+<li>Update the secret: <code>gh secret set DOCKER_SERVER_SECRET</code>. <!-- pragma: allowlist secret --></li>
+<li>Deploy: <code>gh workflow run deployment.yml --ref main</code>, then
+   <a href="../3-deploying/#check-a-deploy">check the deploy</a> and make one
+   authenticated call, such as <code>GET /api/v3/namespace</code>
+   (<a href="../web/api/">API Reference</a> shows how to get a token).</li>
+<li>Delete the old secret in the Globus developer settings.</li>
+</ol>
+<p>Keep the client itself. Its ID is part of the scope every token must carry
+(<code>https://auth.globus.org/scopes/&lt;SERVER_CLIENT_ID&gt;/action_all</code>), so a new
+client would make the service reject every token issued for the old
+one.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Copyright &copy; 2023—Present Diaspora Team
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["content.code.annotate", "content.code.copy", "navigation.path", "navigation.sections", "navigation.tabs", "navigation.top", "navigation.tracking", "search.highlight", "search.share", "search.suggest", "toc.follow"], "search": "../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.c21346df.min.js"></script>
+      
+    
+  </body>
+</html>

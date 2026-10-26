@@ -18,7 +18,7 @@
         <link rel="prev" href="../3-deploying/">
       
       
-        <link rel="next" href="../acknowledgments/">
+        <link rel="next" href="../5-runbook/">
       
       
         
@@ -82,7 +82,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#service-monitoring" class="md-skip">
+        <a href="#monitoring" class="md-skip">
           Skip to content
         </a>
       
@@ -485,6 +485,24 @@
         
       
       
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Monitoring
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
       <a href="./" class="md-nav__link md-nav__link--active">
         
   
@@ -502,6 +520,86 @@
 
       </a>
       
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#the-lightsail-service" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Lightsail service
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-msk-brokers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The MSK brokers
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-kafka-console" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Kafka console
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../5-runbook/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runbook
+  
+
+    
+  </span>
+  
+  
+
+      </a>
     </li>
   
 
@@ -764,6 +862,47 @@
     
   
   
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#the-lightsail-service" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Lightsail service
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-msk-brokers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The MSK brokers
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-kafka-console" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Kafka console
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
 </nav>
                   </div>
                 </div>
@@ -788,15 +927,46 @@
   
 
 
-<h1 id="service-monitoring">Service Monitoring<a class="headerlink" href="#service-monitoring" title="Permanent link">&para;</a></h1>
-<ol>
-<li>
-<p>Check the service live status at <a href="https://haochenpan.github.io/diaspora-uptime-monitor/">Service Status</a> dashboard.</p>
-</li>
-<li>
-<p>Use <a href="../kafka-console/intro/">Diaspora Admin Console</a></p>
-</li>
-</ol>
+<h1 id="monitoring">Monitoring<a class="headerlink" href="#monitoring" title="Permanent link">&para;</a></h1>
+<p>An operator can watch the Lightsail container service and the MSK
+brokers. Every command on this page only reads; the
+<a href="../5-runbook/">runbook</a> says what to do when something looks wrong.</p>
+<h2 id="the-lightsail-service">The Lightsail service<a class="headerlink" href="#the-lightsail-service" title="Permanent link">&para;</a></h2>
+<p>The service runs on Lightsail's <code>micro</code> power (0.25 vCPU and 1 GB of
+memory), and Lightsail records its CPU and memory use as percentages of
+that. Each open consumer instance holds a Kafka consumer in the service's
+memory. The Lightsail console shows these metrics on the service's page.
+From the CLI, memory use in 5-minute periods:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>aws<span class="w"> </span>lightsail<span class="w"> </span>get-container-service-metric-data<span class="w"> </span>--region<span class="w"> </span>us-east-1<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">    </span>--service-name<span class="w"> </span>diaspora-web-service<span class="w"> </span>--metric-name<span class="w"> </span>MemoryUtilization<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">    </span>--start-time<span class="w"> </span>&lt;start-time&gt;<span class="w"> </span>--end-time<span class="w"> </span>&lt;end-time&gt;<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">    </span>--period<span class="w"> </span><span class="m">300</span><span class="w"> </span>--statistics<span class="w"> </span>Average<span class="w"> </span>Maximum
+</span></code></pre></div>
+<p>The times are in ISO 8601, such as <code>2026-10-26T06:00:00Z</code>.
+<code>--metric-name CPUUtilization</code> gives the CPU use. The history starts at
+the current deployment:
+<a href="https://docs.aws.amazon.com/lightsail/latest/userguide/amazon-lightsail-container-services-deployments.html">AWS says</a>
+that a new deployment makes the existing utilization metrics disappear,
+so every deploy, rollback or credential rotation clears them.</p>
+<p>The container's log holds gunicorn's and the service's output for the last
+three days (<a href="../5-runbook/#read-the-logs">Read the logs</a>).
+<code>aws lightsail get-container-services</code> shows whether the service is
+running and which deployment is active
+(<a href="../3-deploying/#check-a-deploy">Check a deploy</a>).</p>
+<p>On GitHub Actions, the <code>deployment</code> workflow's runs show each deploy, and
+the <code>tests</code> workflow's runs show the live tests, which run nightly and on
+every push to <code>main</code>. The live tests run against the AWS account and the
+MSK cluster, not against the deployed service.</p>
+<h2 id="the-msk-brokers">The MSK brokers<a class="headerlink" href="#the-msk-brokers" title="Permanent link">&para;</a></h2>
+<p>Each broker's <code>CPUCreditBalance</code> metric in CloudWatch (namespace
+<code>AWS/Kafka</code>, dimensions <code>Cluster Name</code> and <code>Broker ID</code>) is the number of
+CPU credits it has left. AWS says that running out "can have a negative
+impact on your cluster's performance"
+(<a href="../5-runbook/#broker-cpu-credits">Broker CPU credits</a>).</p>
+<h2 id="the-kafka-console">The Kafka console<a class="headerlink" href="#the-kafka-console" title="Permanent link">&para;</a></h2>
+<p>The <a href="../kafka-console/intro/">Diaspora Admin Console</a> is a Kafbat UI
+instance that shows the cluster's topics, consumer groups and consumer
+lag. Its statistics can be up to 5 minutes old.</p>
 
 
 
