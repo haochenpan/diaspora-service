@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import os
 import re
 import threading
@@ -27,6 +28,38 @@ ADMIN_REQUEST_TIMEOUT_MS = 15_000
 ADMIN_OPERATION_TIMEOUT_MS = 10_000
 # Wait before retrying a create that found the topic still present
 TOPIC_EXISTS_RETRY_DELAY_S = 2
+# The most topics a namespace may hold when MAX_TOPICS_PER_NAMESPACE is
+# unset or invalid
+DEFAULT_MAX_TOPICS_PER_NAMESPACE = 50
+
+logger = logging.getLogger(__name__)
+
+
+def parse_max_topics_per_namespace(value: str | None) -> int:
+    """Parse the MAX_TOPICS_PER_NAMESPACE setting.
+
+    Args:
+        value: The variable's value, or None if it is unset
+
+    Returns:
+        The value as an integer if it is a whole number of at least 1,
+        otherwise DEFAULT_MAX_TOPICS_PER_NAMESPACE (logged unless unset)
+    """
+    if value is None:
+        return DEFAULT_MAX_TOPICS_PER_NAMESPACE
+    try:
+        parsed = int(value)
+    except ValueError:
+        parsed = 0
+    if parsed < 1:
+        logger.warning(
+            'MAX_TOPICS_PER_NAMESPACE=%r is not a whole number of at '
+            'least 1; using %d',
+            value,
+            DEFAULT_MAX_TOPICS_PER_NAMESPACE,
+        )
+        return DEFAULT_MAX_TOPICS_PER_NAMESPACE
+    return parsed
 
 
 class IAMService:
@@ -939,13 +972,23 @@ MAX_NAMESPACE_LENGTH = 32
 class NamespaceService:
     """Service for managing namespace validation and business logic."""
 
-    def __init__(self, dynamodb_service: DynamoDBService) -> None:
+    def __init__(
+        self,
+        dynamodb_service: DynamoDBService,
+        max_topics_per_namespace: int = DEFAULT_MAX_TOPICS_PER_NAMESPACE,
+    ) -> None:
         """Initialize namespace service.
 
         Args:
             dynamodb_service: DynamoDB service instance
+            max_topics_per_namespace: The most topics a namespace may hold;
+                a create that would go past it is refused
         """
         self.dynamodb = dynamodb_service
+        self.max_topics_per_namespace = max_topics_per_namespace
+        # A create that leaves the namespace with at least this many topics
+        # (90% of the cap, rounded up) warns that the cap is near
+        self.topic_warning_threshold = (9 * max_topics_per_namespace + 9) // 10
         # Global lock for all namespace and topic operations
         self._global_lock = threading.Lock()
 
@@ -1126,14 +1169,20 @@ class NamespaceService:
         This method is atomic - concurrent calls are serialized using a
         global lock.
 
+        A namespace holds at most max_topics_per_namespace topics: a new
+        topic in a namespace that already lists that many is refused. A
+        create that leaves the namespace with at least 90% of the cap
+        appends a warning to the message and returns it in a 'warning'
+        field. Repeating the create of a listed topic is not counted.
+
         Args:
             subject: User subject ID
             namespace: Namespace name
             topic: Topic name to create
 
         Returns:
-            Dictionary with status, message, and topics list (on success)
-            or status 'failure' with message
+            Dictionary with status, message, topics list and, near the
+            cap, warning (on success), or status 'failure' with message
         """
         result, _ = self.add_topic(subject, namespace, topic)
         return result
@@ -1185,6 +1234,19 @@ class NamespaceService:
                     'topics': existing_topics,
                 }, False
 
+            # Refuse a new topic once the namespace holds the most allowed;
+            # a namespace already past the cap keeps its topics
+            cap = self.max_topics_per_namespace
+            if len(existing_topics) >= cap:
+                return {
+                    'status': 'failure',
+                    'message': (
+                        f'Namespace {namespace} already holds '
+                        f'{len(existing_topics)} topics, the most allowed '
+                        f'is {cap}; delete a topic to create another.'
+                    ),
+                }, False
+
             # Atomically add topic to the list (prevents race conditions)
             self.dynamodb.add_namespace_topic(namespace, topic)
 
@@ -1192,11 +1254,20 @@ class NamespaceService:
             # (already deduplicated by get_namespace_topics)
             all_topics = self.dynamodb.get_namespace_topics(namespace)
 
-            return {
+            result: dict[str, Any] = {
                 'status': 'success',
                 'message': f'Topic {topic} created in {namespace}',
                 'topics': all_topics,
-            }, True
+            }
+            if len(all_topics) >= self.topic_warning_threshold:
+                warning = (
+                    f'Namespace {namespace} now holds {len(all_topics)} of '
+                    f'{cap} topics; delete old topics before you reach '
+                    f'{cap}.'
+                )
+                result['message'] += f' {warning}'
+                result['warning'] = warning
+            return result, True
 
     def delete_topic(
         self,

@@ -33,6 +33,7 @@ from .services import DynamoDBService
 from .services import IAMService
 from .services import KafkaService
 from .services import NamespaceService
+from .services import parse_max_topics_per_namespace
 from .services import WebService
 
 
@@ -91,7 +92,12 @@ class DiasporaService:
             ),
         )
 
-        namespace_service = NamespaceService(dynamodb_service=db_service)
+        namespace_service = NamespaceService(
+            dynamodb_service=db_service,
+            max_topics_per_namespace=parse_max_topics_per_namespace(
+                os.getenv('MAX_TOPICS_PER_NAMESPACE'),
+            ),
+        )
 
         self.web_service = WebService(
             iam_service=iam_service,
@@ -192,6 +198,15 @@ class DiasporaService:
         token: str = Header(..., alias='authorization'),
     ) -> dict[str, Any]:
         """Create a topic under a namespace.
+
+        A namespace holds at most `MAX_TOPICS_PER_NAMESPACE` topics (50
+        unless the service sets it). Creating a new topic in a namespace
+        that already holds that many fails with a message that says to
+        delete a topic first; existing topics are kept. A create that
+        leaves the namespace with at least 90% of the cap (45 of 50)
+        succeeds and appends a warning to `message`, also returned in a
+        `warning` field, which is absent otherwise. Repeating the create
+        of an existing topic always succeeds and is not counted.
 
         The Kafka admin call blocks, so it runs in the threadpool: on the
         event loop it would stall every other request and the worker's

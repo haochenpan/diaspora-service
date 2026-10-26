@@ -89,6 +89,8 @@ curl -X PUT "https://diaspora-web-service.qpp943wkvr7b2.us-east-1.cs.amazonlight
   -H "authorization: $AUTHORIZATION"
 ```
 
+A namespace holds at most 50 topics, a limit the service sets with the `MAX_TOPICS_PER_NAMESPACE` environment variable. Creating a new topic in a namespace that already holds that many returns `"status": "failure"` with a message that says to delete a topic first. Once a create leaves the namespace with at least 90% of the limit (45 of 50), the reply appends a warning to `message` and returns the same sentence in a `warning` field, which is absent otherwise. Repeating the create of a topic that already exists, recreating a topic and deleting one are not limited.
+
 ### Consumer
 
 ```bash
