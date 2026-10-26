@@ -747,6 +747,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#update-the-users-iam" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Update the users' IAM
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1102,6 +1113,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#update-the-users-iam" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Update the users' IAM
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1130,8 +1152,8 @@
 
 <h1 id="runbook">Runbook<a class="headerlink" href="#runbook" title="Permanent link">&para;</a></h1>
 <p>Tasks for operating the deployed service: rolling back, reading the logs,
-triaging a failed deploy, watching the brokers' CPU credits and rotating
-credentials. <a href="../3-deploying/">Deployment</a> describes the workflow, the
+triaging a failed deploy, watching the brokers' CPU credits, rotating
+credentials and updating the users' IAM. <a href="../3-deploying/">Deployment</a> describes the workflow, the
 secrets and the container's environment that these tasks refer to. The
 Lightsail commands use the region <code>us-east-1</code>; angle brackets mark values
 to fill in.</p>
@@ -1328,7 +1350,7 @@ secrets:</p>
 <td></td>
 </tr>
 <tr>
-<td>The container's AWS key, used by the service</td>
+<td>The container's AWS key, used by the service: the key of the IAM user the service runs as (<a href="../3-deploying/#the-services-aws-identity">The service's AWS identity</a>)</td>
 <td><code>DOCKER_AWS_ACCESS_KEY_ID</code>, <code>DOCKER_AWS_SECRET_ACCESS_KEY</code></td>
 <td>The <code>live</code> job of <code>tests.yml</code> and its nightly sweep, while the live tests' own key is not set</td>
 </tr>
@@ -1391,6 +1413,82 @@ belong to the same IAM user; check before you delete either.</p>
 (<code>https://auth.globus.org/scopes/&lt;SERVER_CLIENT_ID&gt;/action_all</code>), so a new
 client would make the service reject every token issued for the old
 one.</p>
+<h2 id="update-the-users-iam">Update the users' IAM<a class="headerlink" href="#update-the-users-iam" title="Permanent link">&para;</a></h2>
+<p>The service writes a user's IAM policy (<code>IAMService.generate_user_policy</code>
+in <code>web_service/services.py</code>), and sets the user's permissions boundary,
+only when it creates the user. <code>scripts/update_user_policies.py</code> brings
+the users created before up to date, in two steps that run, and undo,
+apart:</p>
+<ul>
+<li><code>policies</code> makes the current policy the default version of each user
+  policy that differs. This is what applies a change to the policy to
+  existing users. For example, it limits their consumer groups and
+  transactional IDs to names that start with their namespace and a dot,
+  so a user's Kafka client whose group IDs lack that prefix stops working.
+  IAM keeps at most five versions of a policy, so when a policy already
+  has five, the step first deletes the oldest version that is not the
+  default.</li>
+<li><code>boundaries</code> gives each user without a permissions boundary the
+  service's boundary,
+  <code>arn:aws:iam::&lt;account-id&gt;:policy/diaspora-service/msk-user-boundary</code>.
+  It refuses any other ARN, or a boundary policy that does not exist. The
+  service's own identity can manage only users with that boundary
+  (<a href="../3-deploying/#users-created-before-the-boundary">Users created before the boundary</a>).
+  The boundary allows everything a user's policy grants, so it takes no
+  right away from a user.</li>
+</ul>
+<p>Both find the users by the names and paths the service gives them: IAM
+users under <code>/msk-users/</code> and managed policies under <code>/msk-policy/</code> whose
+names are subjects (UUIDs), and the subjects in <code>diaspora-users-table</code>.
+They skip every other name, such as the live tests' <code>test-subject-*</code>
+users, and print the names they skip.</p>
+<p>Run a step after the change it applies is deployed, from a checkout of
+that commit with the dev install, with an administrator's credentials.
+Set <code>AWS_ACCOUNT_ID</code>, <code>AWS_ACCOUNT_REGION</code> and <code>MSK_CLUSTER_NAME</code> to the
+service's values; <code>policies</code> refuses a cluster name the account has no
+cluster of. Do not run two at once.</p>
+<ol>
+<li>
+<p>List what the step would change:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>python<span class="w"> </span>scripts/update_user_policies.py<span class="w"> </span>policies
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>python<span class="w"> </span>scripts/update_user_policies.py<span class="w"> </span>boundaries<span class="w"> </span>--boundary<span class="w"> </span><span class="s2">"</span><span class="nv">$BOUNDARY</span><span class="s2">"</span>
+</span></code></pre></div>
+<p><code>policies</code> prints each policy it would update, then each distinct way
+the policies differ from the current policy, as a diff of the policy
+document. <code>boundaries</code> prints each user it would give the boundary,
+and counts the users under <code>/msk-users/</code> without one. Neither changes
+anything.</p>
+</li>
+<li>
+<p>Make the changes, naming a new record file outside the repository:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>python<span class="w"> </span>scripts/update_user_policies.py<span class="w"> </span>policies<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span>--apply<span class="w"> </span>--record<span class="w"> </span>~/policies-<span class="k">$(</span>date<span class="w"> </span>-u<span class="w"> </span>+%Y%m%dT%H%M%SZ<span class="k">)</span>.json
+</span></code></pre></div>
+<p>The record lists each change as soon as it is made: for a policy, its
+ARN, its default version before and the new one; for a user, its name,
+its boundary before (none) and the new one. Keep it until the change
+has proved itself. The step refuses a record file that exists or lies
+inside the repository, since it names the account's ARNs.</p>
+</li>
+<li>
+<p>Run step 1 again. It reports 0 policies to update, or 0 users to give
+   the boundary; a second <code>--apply</code> changes nothing.</p>
+</li>
+</ol>
+<p>To undo a run, give the same step its record:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>python<span class="w"> </span>scripts/update_user_policies.py<span class="w"> </span>policies<span class="w"> </span>--undo<span class="w"> </span>~/policies-&lt;UTC<span class="w"> </span>time&gt;.json
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>python<span class="w"> </span>scripts/update_user_policies.py<span class="w"> </span>boundaries<span class="w"> </span>--undo<span class="w"> </span>~/boundaries-&lt;UTC<span class="w"> </span>time&gt;.json
+</span></code></pre></div>
+<p><code>policies --undo</code> makes each policy's previous version its default
+again; the new versions stay as versions that are not the default.
+<code>boundaries --undo</code> removes the boundary from each user the run gave it
+to. Undo <code>boundaries</code> only after rolling the container back to the
+previous key
+(<a href="../3-deploying/#roll-back-the-switch">Roll back the switch</a>): the
+service's own identity may attach a user's policy only to a user with the
+boundary, and <code>POST /api/v3/key</code> attaches it, so without the boundary
+those users can't get a key. Either leaves a policy or user changed again since the run as it is,
+and reports it.</p>
 
 
 

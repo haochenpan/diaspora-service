@@ -670,6 +670,78 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#the-services-aws-identity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The service's AWS identity
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The service&#39;s AWS identity">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-boundary-in-the-container" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The boundary in the container
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#users-created-before-the-boundary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Users created before the boundary
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#switch-the-service-to-its-identity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Switch the service to its identity
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#roll-back-the-switch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Roll back the switch
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#retire-the-previous-key" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Retire the previous key
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#one-worker" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1137,6 +1209,78 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#the-services-aws-identity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The service's AWS identity
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The service&#39;s AWS identity">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-boundary-in-the-container" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The boundary in the container
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#users-created-before-the-boundary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Users created before the boundary
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#switch-the-service-to-its-identity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Switch the service to its identity
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#roll-back-the-switch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Roll back the switch
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#retire-the-previous-key" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Retire the previous key
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#one-worker" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1527,13 +1671,316 @@ marks the deployment failed.</p>
 <td><code>IAM_USER_PERMISSIONS_BOUNDARY_ARN</code></td>
 <td>no</td>
 <td>none</td>
-<td>The ARN of a managed policy that the service sets as the permissions boundary of every IAM user it creates; unset or empty, it sets none. Production leaves it unset. The live tests set it (<a href="../2-testing/#the-live-tests-aws-identity">The live tests' AWS identity</a>).</td>
+<td>The ARN of a managed policy that the service sets as the permissions boundary of every IAM user it creates; unset or empty, it sets none. When the service runs as its own identity (<a href="#the-services-aws-identity">The service's AWS identity</a>), it must be that identity's boundary, or IAM denies every user the service creates; the workflow sets it from a repository variable (<a href="#the-boundary-in-the-container">The boundary in the container</a>). The live tests set it to theirs (<a href="../2-testing/#the-live-tests-aws-identity">The live tests' AWS identity</a>).</td>
 </tr>
 </tbody>
 </table>
-<p>The workflow passes none of the optional variables, so production runs
-with their defaults. To set one, add it to the <code>environment</code> block in
-<code>deployment.yml</code>.</p>
+<p>The workflow passes none of the other optional variables, so production
+runs with their defaults. To set one, add it to the <code>environment</code> block in
+<code>deployment.yml</code>. It sets <code>IAM_USER_PERMISSIONS_BOUNDARY_ARN</code> only when
+the repository variable <code>DOCKER_IAM_USER_PERMISSIONS_BOUNDARY_NAME</code> is set
+(<a href="#the-boundary-in-the-container">The boundary in the container</a>).</p>
+<h2 id="the-services-aws-identity">The service's AWS identity<a class="headerlink" href="#the-services-aws-identity" title="Permanent link">&para;</a></h2>
+<p>The container's AWS key must belong to an IAM user whose policy lets the
+service reach only what it creates and uses: the IAM users and policies
+it names, its three DynamoDB tables (<code>diaspora-keys-table</code>,
+<code>diaspora-users-table</code> and <code>diaspora-namespace-table</code>) and the MSK
+cluster. Two templates in
+<a href="https://github.com/haochenpan/diaspora-service/tree/main/deploy/iam"><code>deploy/iam/</code></a>
+hold that user's policies, with <code>&lt;account-id&gt;</code>, <code>&lt;region&gt;</code>,
+<code>&lt;cluster-name&gt;</code> and <code>&lt;cluster-uuid&gt;</code> in place of the account's values:</p>
+<ul>
+<li><code>service-policy.json</code>, the policy of the IAM user
+  <code>/diaspora-service/diaspora-web-service-container</code>, created as the
+  managed policy <code>/diaspora-service/diaspora-web-service-container</code>.</li>
+<li><code>user-boundary-policy.json</code>, created as
+  <code>/diaspora-service/msk-user-boundary</code>: the permissions boundary of
+  every IAM user the service creates. It allows the <code>kafka-cluster</code>
+  actions that the user policy (<code>IAMService.generate_user_policy</code>)
+  grants, on the cluster, and nothing else. A user with this boundary
+  can do no more than the boundary allows, whatever policy is attached to
+  the user.</li>
+</ul>
+<p>In the table, <code>&lt;subject&gt;</code> is a name shaped like a Globus subject, a UUID
+(<code>????????-????-????-????-????????????</code> in the policy). The service names
+each user and its policy after the user's subject, so the policy reaches
+no other name, and no user or policy under a deeper path such as
+<code>/msk-users/x/&lt;subject&gt;</code>. The live tests' <code>test-subject-*</code> users are out
+of its reach too. The service's policy grants these actions, each used by
+the code named (in <code>web_service/services.py</code> unless another file is
+named):</p>
+<table>
+<thead>
+<tr>
+<th>Actions</th>
+<th>On</th>
+<th>Used by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>iam:CreateUser</code>, only with the boundary as the new user's permissions boundary</td>
+<td>IAM users <code>/msk-users/&lt;subject&gt;</code></td>
+<td><code>IAMService.create_user_and_policy</code></td>
+</tr>
+<tr>
+<td><code>iam:CreatePolicy</code></td>
+<td>managed policies <code>/msk-policy/&lt;subject&gt;</code></td>
+<td><code>IAMService.create_user_and_policy</code></td>
+</tr>
+<tr>
+<td><code>iam:AttachUserPolicy</code>, only of a policy <code>/msk-policy/&lt;subject&gt;</code> and only to a user whose boundary is the boundary</td>
+<td>IAM users <code>/msk-users/&lt;subject&gt;</code></td>
+<td><code>IAMService.create_user_and_policy</code></td>
+</tr>
+<tr>
+<td><code>iam:CreateAccessKey</code></td>
+<td>IAM users <code>/msk-users/&lt;subject&gt;</code></td>
+<td><code>IAMService.create_access_key</code></td>
+</tr>
+<tr>
+<td><code>iam:ListAccessKeys</code>, <code>iam:DeleteAccessKey</code></td>
+<td>IAM users <code>/msk-users/&lt;subject&gt;</code></td>
+<td><code>IAMService.delete_access_keys</code></td>
+</tr>
+<tr>
+<td><code>iam:DetachUserPolicy</code>, only of a policy <code>/msk-policy/&lt;subject&gt;</code>; <code>iam:DeleteUser</code></td>
+<td>IAM users <code>/msk-users/&lt;subject&gt;</code></td>
+<td><code>IAMService.delete_user_and_policy</code></td>
+</tr>
+<tr>
+<td><code>iam:ListPolicyVersions</code>, <code>iam:DeletePolicyVersion</code>, <code>iam:DeletePolicy</code></td>
+<td>managed policies <code>/msk-policy/&lt;subject&gt;</code></td>
+<td><code>IAMService.delete_user_and_policy</code></td>
+</tr>
+<tr>
+<td><code>dynamodb:GetItem</code></td>
+<td>the three tables</td>
+<td><code>DynamoDBService._get_item</code>, which every read goes through</td>
+</tr>
+<tr>
+<td><code>dynamodb:PutItem</code></td>
+<td>the three tables</td>
+<td><code>DynamoDBService.store_key</code></td>
+</tr>
+<tr>
+<td><code>dynamodb:UpdateItem</code></td>
+<td>the three tables</td>
+<td><code>DynamoDBService.add_user_namespace</code>, <code>remove_user_namespace</code>, <code>add_global_namespace</code>, <code>remove_global_namespace</code>, <code>add_namespace_topic</code>, <code>remove_namespace_topic</code></td>
+</tr>
+<tr>
+<td><code>dynamodb:DeleteItem</code></td>
+<td>the three tables</td>
+<td><code>DynamoDBService.delete_key</code>, <code>delete_namespace_topics</code></td>
+</tr>
+<tr>
+<td><code>dynamodb:CreateTable</code>, <code>dynamodb:DescribeTable</code></td>
+<td>the three tables</td>
+<td><code>DynamoDBService._create_keys_table</code>, <code>_create_users_table</code>, <code>_create_namespace_table</code>, when a table is missing; <code>DescribeTable</code> is boto3's <code>table_exists</code> waiter</td>
+</tr>
+<tr>
+<td><code>kafka-cluster:Connect</code></td>
+<td>the cluster</td>
+<td>every Kafka client: <code>KafkaService._admin_client</code>, each consumer instance (<code>consumer_service.py</code>) and the producer (<code>producer_service.py</code>)</td>
+</tr>
+<tr>
+<td><code>kafka-cluster:CreateTopic</code>, <code>kafka-cluster:DeleteTopic</code></td>
+<td>every topic</td>
+<td><code>KafkaService.create_topic</code>, <code>delete_topic</code>, <code>recreate_topic</code></td>
+</tr>
+<tr>
+<td><code>kafka-cluster:DescribeTopic</code></td>
+<td>every topic</td>
+<td>the topic deletes, the producer's sends and metadata, and the consumer instances' subscribes, fetches, committed offsets and seeks to the beginning or end</td>
+</tr>
+<tr>
+<td><code>kafka-cluster:WriteData</code></td>
+<td>every topic</td>
+<td>the produce routes (<code>ProducerService</code>)</td>
+</tr>
+<tr>
+<td><code>kafka-cluster:ReadData</code></td>
+<td>every topic</td>
+<td>the consumer instances' fetches and commits (<code>consumer_service.py</code>)</td>
+</tr>
+<tr>
+<td><code>kafka-cluster:DescribeGroup</code>, <code>kafka-cluster:AlterGroup</code></td>
+<td>every consumer group</td>
+<td>the consumer instances, which join groups, commit offsets, read committed offsets and leave their group when closed (<code>consumer_service.py</code>)</td>
+</tr>
+</tbody>
+</table>
+<p>A namespace may have any valid name, so the service's topics and groups
+(<code>&lt;namespace&gt;.&lt;name&gt;</code>) can have any name, and the Kafka actions cover every
+topic and group on the cluster. The service makes no other AWS call: the
+MSK token is signed locally from the key, with no STS call, and the
+brokers come from <code>DEFAULT_SERVERS</code>. The template names the production
+tables; a deployment with other <code>*_TABLE_NAME</code> values needs those names in
+its copy of the template.</p>
+<p><code>deploy/iam/service-actions.json</code> lists each of these actions with an
+example resource and the calls in <code>web_service/</code> that need it.
+<code>tests/service_identity_test.py</code> checks that the policy allows each
+listed use and grants nothing more, that the IAM and DynamoDB uses are
+the calls in <code>web_service/services.py</code>, and that each Kafka call in the
+code has its actions listed.</p>
+<p>The policy grants no right to change a user's permissions boundary, add
+an inline policy, add or select a version of a policy, or touch anything
+under <code>/diaspora-service/</code>, its own policy and the boundary included. So
+with the container's key alone, no one can give a user more than the
+boundary allows, or give the service more than this policy.</p>
+<h3 id="the-boundary-in-the-container">The boundary in the container<a class="headerlink" href="#the-boundary-in-the-container" title="Permanent link">&para;</a></h3>
+<p>The workflow sets <code>IAM_USER_PERMISSIONS_BOUNDARY_ARN</code> only when the
+repository variable <code>DOCKER_IAM_USER_PERMISSIONS_BOUNDARY_NAME</code> is set.
+Its value is a policy name under <code>/diaspora-service/</code>, <code>msk-user-boundary</code>,
+and the workflow builds the ARN
+<code>arn:aws:iam::&lt;account-id&gt;:policy/diaspora-service/msk-user-boundary</code> from
+it and the account ID in the <code>DOCKER_AWS_ACCOUNT_ID</code> secret.
+While the variable is not set, the container gets no such variable and
+creates users without a boundary. A value that is not a valid policy name
+fails the deploy before anything is pushed.</p>
+<h3 id="users-created-before-the-boundary">Users created before the boundary<a class="headerlink" href="#users-created-before-the-boundary" title="Permanent link">&para;</a></h3>
+<p>IAM users the service created while it set no boundary have none. The
+service's identity can still delete them, since detaching a policy and
+deleting a user do not require the boundary. It can't attach a policy to
+them, and <code>POST /api/v3/key</code> attaches the user's policy again whenever it
+creates a key. So before the container switches to this identity, every
+user under <code>/msk-users/</code> needs the boundary. The <code>boundaries</code> step of
+<code>scripts/update_user_policies.py</code>
+(<a href="../5-runbook/#update-the-users-iam">Update the users' IAM</a>) gives it to
+the service's users. Delete the live tests' leftover users, which it
+skips, with the sweep (<code>scripts/sweep_test_resources.py --apply</code>). A
+user under <code>/msk-users/</code> named neither as a subject nor as a test user is
+skipped by both: delete it, or give it the boundary by hand with
+<code>aws iam put-user-permissions-boundary</code>.</p>
+<p>The <code>boundaries</code> step checks only that the boundary exists. Check first
+that its default version matches <code>deploy/iam/user-boundary-policy.json</code>.</p>
+<h3 id="switch-the-service-to-its-identity">Switch the service to its identity<a class="headerlink" href="#switch-the-service-to-its-identity" title="Permanent link">&para;</a></h3>
+<p>Run these with an administrator's credentials. Fill in the values as in
+<a href="../2-testing/#create-the-identity">Create the identity</a>, which also shows
+the <code>render</code> function used below.</p>
+<ol>
+<li>
+<p>Create the boundary, the service's policy, the user and its access key:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>aws<span class="w"> </span>iam<span class="w"> </span>create-policy<span class="w"> </span>--path<span class="w"> </span>/diaspora-service/<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span>--policy-name<span class="w"> </span>msk-user-boundary<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span>--policy-document<span class="w"> </span><span class="s2">"</span><span class="k">$(</span>render<span class="w"> </span>deploy/iam/user-boundary-policy.json<span class="k">)</span><span class="s2">"</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>aws<span class="w"> </span>iam<span class="w"> </span>create-policy<span class="w"> </span>--path<span class="w"> </span>/diaspora-service/<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">  </span>--policy-name<span class="w"> </span>diaspora-web-service-container<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">  </span>--policy-document<span class="w"> </span><span class="s2">"</span><span class="k">$(</span>render<span class="w"> </span>deploy/iam/service-policy.json<span class="k">)</span><span class="s2">"</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>aws<span class="w"> </span>iam<span class="w"> </span>create-user<span class="w"> </span>--path<span class="w"> </span>/diaspora-service/<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">  </span>--user-name<span class="w"> </span>diaspora-web-service-container
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>aws<span class="w"> </span>iam<span class="w"> </span>attach-user-policy<span class="w"> </span>--user-name<span class="w"> </span>diaspora-web-service-container<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="w">  </span>--policy-arn<span class="w"> </span><span class="s2">"arn:aws:iam::</span><span class="nv">$ACCOUNT_ID</span><span class="s2">:policy/diaspora-service/diaspora-web-service-container"</span>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="o">(</span><span class="nb">umask</span><span class="w"> </span><span class="m">077</span><span class="p">;</span><span class="w"> </span>aws<span class="w"> </span>iam<span class="w"> </span>create-access-key<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="w">  </span>--user-name<span class="w"> </span>diaspora-web-service-container<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="w">  </span>--query<span class="w"> </span><span class="s1">'AccessKey.[AccessKeyId,SecretAccessKey]'</span><span class="w"> </span>--output<span class="w"> </span>text<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="w">  </span>&gt;<span class="w"> </span>~/web-service-key.txt<span class="o">)</span>
+</span></code></pre></div>
+<p>The file holds the key ID and its secret, which AWS returns only
+here; nothing is printed. Step 6 stores them, and you delete the file
+after it.</p>
+</li>
+<li>
+<p>Set the boundary variable and deploy. From then on every new user gets
+   the boundary.</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>gh<span class="w"> </span>variable<span class="w"> </span><span class="nb">set</span><span class="w"> </span>DOCKER_IAM_USER_PERMISSIONS_BOUNDARY_NAME<span class="w"> </span>--body<span class="w"> </span>msk-user-boundary
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>gh<span class="w"> </span>workflow<span class="w"> </span>run<span class="w"> </span>deployment.yml<span class="w"> </span>--ref<span class="w"> </span>main
+</span></code></pre></div>
+</li>
+<li>
+<p>Give the users created before it the boundary. The first command only
+   lists what would change. The second makes the changes and records each
+   one in a new file outside the repository. The third must report 0
+   users without a boundary.</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nv">BOUNDARY</span><span class="o">=</span><span class="s2">"arn:aws:iam::</span><span class="nv">$ACCOUNT_ID</span><span class="s2">:policy/diaspora-service/msk-user-boundary"</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>python<span class="w"> </span>scripts/update_user_policies.py<span class="w"> </span>boundaries<span class="w"> </span>--boundary<span class="w"> </span><span class="s2">"</span><span class="nv">$BOUNDARY</span><span class="s2">"</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>python<span class="w"> </span>scripts/update_user_policies.py<span class="w"> </span>boundaries<span class="w"> </span>--boundary<span class="w"> </span><span class="s2">"</span><span class="nv">$BOUNDARY</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span>--apply<span class="w"> </span>--record<span class="w"> </span>~/boundaries-<span class="k">$(</span>date<span class="w"> </span>-u<span class="w"> </span>+%Y%m%dT%H%M%SZ<span class="k">)</span>.json
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>python<span class="w"> </span>scripts/update_user_policies.py<span class="w"> </span>boundaries<span class="w"> </span>--boundary<span class="w"> </span><span class="s2">"</span><span class="nv">$BOUNDARY</span><span class="s2">"</span>
+</span></code></pre></div>
+</li>
+<li>
+<p>If the live tests' own key is not set yet, set it first
+   (<a href="../2-testing/#the-live-tests-aws-identity">The live tests' AWS identity</a>).
+   Without it, the <code>live</code> job of <code>tests.yml</code> uses the container's key,
+   and the live tests fail, since this identity cannot reach the test
+   tables.</p>
+</li>
+<li>
+<p>Note the container's current key ID, for the rollback and for
+   retiring that key later. The query prints the key ID only:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>aws<span class="w"> </span>lightsail<span class="w"> </span>get-container-services<span class="w"> </span>--region<span class="w"> </span>us-east-1<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">    </span>--service-name<span class="w"> </span>diaspora-web-service<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">    </span>--query<span class="w"> </span><span class="s1">'containerServices[0].currentDeployment.{version: version, key: containers.flask.environment.AWS_ACCESS_KEY_ID}'</span>
+</span></code></pre></div>
+</li>
+<li>
+<p>Store the new key as <code>DOCKER_AWS_ACCESS_KEY_ID</code> and
+   <code>DOCKER_AWS_SECRET_ACCESS_KEY</code>, delete the file, deploy, and
+   <a href="#check-a-deploy">check the deploy</a>:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>cut<span class="w"> </span>-f1<span class="w"> </span>~/web-service-key.txt<span class="w"> </span><span class="p">|</span><span class="w"> </span>tr<span class="w"> </span>-d<span class="w"> </span><span class="s1">'\n'</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>gh<span class="w"> </span>secret<span class="w"> </span><span class="nb">set</span><span class="w"> </span>DOCKER_AWS_ACCESS_KEY_ID
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>cut<span class="w"> </span>-f2<span class="w"> </span>~/web-service-key.txt<span class="w"> </span><span class="p">|</span><span class="w"> </span>tr<span class="w"> </span>-d<span class="w"> </span><span class="s1">'\n'</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>gh<span class="w"> </span>secret<span class="w"> </span><span class="nb">set</span><span class="w"> </span>DOCKER_AWS_SECRET_ACCESS_KEY
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>rm<span class="w"> </span>~/web-service-key.txt
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>gh<span class="w"> </span>workflow<span class="w"> </span>run<span class="w"> </span>deployment.yml<span class="w"> </span>--ref<span class="w"> </span>main
+</span></code></pre></div>
+<p>Then make one call that creates a key, such as <code>POST /api/v3/key</code> for
+a user without one, and read the log for <code>AccessDenied</code>.</p>
+</li>
+</ol>
+<p>To change what the identity may do, edit the template and apply it as a new
+default version of its policy, as the live tests' guide shows for theirs.
+To rotate its key, follow
+<a href="../5-runbook/#rotate-an-aws-access-key">Rotate an AWS access key</a> with the
+user <code>diaspora-web-service-container</code>.</p>
+<h3 id="roll-back-the-switch">Roll back the switch<a class="headerlink" href="#roll-back-the-switch" title="Permanent link">&para;</a></h3>
+<p>Put the previous key back in the two secrets and deploy. The boundary
+variable may stay: the boundary allows everything a user's policy grants,
+so the previous key works with it. GitHub does not show a secret's value,
+but the deployment noted in step 5 still holds the previous key, so these
+commands copy it from there without printing it (replace <code>&lt;version&gt;</code>):</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>previous<span class="o">()</span><span class="w"> </span><span class="o">{</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span>aws<span class="w"> </span>lightsail<span class="w"> </span>get-container-service-deployments<span class="w"> </span>--region<span class="w"> </span>us-east-1<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">      </span>--service-name<span class="w"> </span>diaspora-web-service<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">      </span>--query<span class="w"> </span><span class="s2">"deployments[?version==\`&lt;version&gt;\`].containers.flask.environment.</span><span class="nv">$1</span><span class="s2"> | [0]"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">      </span>--output<span class="w"> </span>text
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="o">}</span>
+</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="nv">key_id</span><span class="o">=</span><span class="k">$(</span>previous<span class="w"> </span>AWS_ACCESS_KEY_ID<span class="k">)</span>
+</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="nv">secret</span><span class="o">=</span><span class="k">$(</span>previous<span class="w"> </span>AWS_SECRET_ACCESS_KEY<span class="k">)</span>
+</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="k">if</span><span class="w"> </span><span class="o">[</span><span class="w"> </span>-z<span class="w"> </span><span class="s2">"</span><span class="nv">$key_id</span><span class="s2">"</span><span class="w"> </span><span class="o">]</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="o">[</span><span class="w"> </span><span class="s2">"</span><span class="nv">$key_id</span><span class="s2">"</span><span class="w"> </span><span class="o">=</span><span class="w"> </span>None<span class="w"> </span><span class="o">]</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="o">[</span><span class="w"> </span>-z<span class="w"> </span><span class="s2">"</span><span class="nv">$secret</span><span class="s2">"</span><span class="w"> </span><span class="o">]</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="o">[</span><span class="w"> </span><span class="s2">"</span><span class="nv">$secret</span><span class="s2">"</span><span class="w"> </span><span class="o">=</span><span class="w"> </span>None<span class="w"> </span><span class="o">]</span><span class="p">;</span><span class="w"> </span><span class="k">then</span>
+</span><span id="__span-5-10"><a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="w">  </span><span class="nb">echo</span><span class="w"> </span><span class="s2">"Deployment &lt;version&gt; holds no key; nothing was changed"</span><span class="w"> </span>&gt;<span class="p">&amp;</span><span class="m">2</span>
+</span><span id="__span-5-11"><a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a><span class="k">else</span>
+</span><span id="__span-5-12"><a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a><span class="w">  </span><span class="nb">printf</span><span class="w"> </span><span class="s1">'%s'</span><span class="w"> </span><span class="s2">"</span><span class="nv">$key_id</span><span class="s2">"</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>gh<span class="w"> </span>secret<span class="w"> </span><span class="nb">set</span><span class="w"> </span>DOCKER_AWS_ACCESS_KEY_ID
+</span><span id="__span-5-13"><a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a><span class="w">  </span><span class="nb">printf</span><span class="w"> </span><span class="s1">'%s'</span><span class="w"> </span><span class="s2">"</span><span class="nv">$secret</span><span class="s2">"</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>gh<span class="w"> </span>secret<span class="w"> </span><span class="nb">set</span><span class="w"> </span>DOCKER_AWS_SECRET_ACCESS_KEY
+</span><span id="__span-5-14"><a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a><span class="w">  </span>gh<span class="w"> </span>workflow<span class="w"> </span>run<span class="w"> </span>deployment.yml<span class="w"> </span>--ref<span class="w"> </span>main
+</span><span id="__span-5-15"><a id="__codelineno-5-15" name="__codelineno-5-15" href="#__codelineno-5-15"></a><span class="k">fi</span>
+</span></code></pre></div>
+<p>The AWS CLI prints <code>None</code> when the deployment is not found, for example
+when <code>&lt;version&gt;</code> is mistyped or has left Lightsail's history, so the
+commands check both values before they change either secret.</p>
+<p>If the previous key has been deactivated since, make it active first
+(<code>aws iam update-access-key --status Active</code>, with its user and key ID).</p>
+<h3 id="retire-the-previous-key">Retire the previous key<a class="headerlink" href="#retire-the-previous-key" title="Permanent link">&para;</a></h3>
+<p>Once the service has run as its identity without an <code>AccessDenied</code> in the
+log, for at least a day that included user and key creations, deactivate
+the container's previous key, and delete it later. The deploy workflow's
+own key (<code>AWS_ACCESS_KEY_ID</code>) may be the same key; check before you
+deactivate it:</p>
+<ol>
+<li>Show the previous key's user and last use, with the key ID from step 5:
+   <code>aws iam get-access-key-last-used --access-key-id &lt;previous-key-id&gt;</code>.
+   No secret is printed.</li>
+<li>Run a deploy (<code>gh workflow run deployment.yml --ref main</code>) and wait for
+   it to finish. Then run step 1 again. If the key's <code>LastUsedDate</code> moved
+   to the deploy's time, with <code>ServiceName</code> <code>lightsail</code> or <code>sts</code>, the
+   deploy uses it too. Then give the deploy its own key first
+   (<a href="../5-runbook/#rotate-an-aws-access-key">Rotate an AWS access key</a>),
+   and repeat this check.</li>
+<li>Deactivate the key:
+   <code>aws iam update-access-key --user-name &lt;user&gt; --access-key-id &lt;previous-key-id&gt; --status Inactive</code>.
+   Run a deploy and <a href="#check-a-deploy">check it</a>.</li>
+<li>After a week without a failure, delete it:
+   <code>aws iam delete-access-key --user-name &lt;user&gt; --access-key-id &lt;previous-key-id&gt;</code>.</li>
+</ol>
 <h2 id="one-worker">One worker<a class="headerlink" href="#one-worker" title="Permanent link">&para;</a></h2>
 <p>The Dockerfile starts gunicorn without <code>--workers</code>, so it runs one
 Uvicorn worker, and the service runs at scale 1. Consumer instances live
@@ -1557,9 +2004,9 @@ in the remaining 10 s or so. A shutdown that takes longer is cut off when
 gunicorn kills the worker.</p>
 <h2 id="deploy-by-hand">Deploy by hand<a class="headerlink" href="#deploy-by-hand" title="Permanent link">&para;</a></h2>
 <h3 id="from-github">From GitHub<a class="headerlink" href="#from-github" title="Permanent link">&para;</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>gh<span class="w"> </span>workflow<span class="w"> </span>run<span class="w"> </span>deployment.yml<span class="w"> </span>--ref<span class="w"> </span>main
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>gh<span class="w"> </span>run<span class="w"> </span>list<span class="w"> </span>--workflow<span class="w"> </span>deployment.yml<span class="w"> </span>--event<span class="w"> </span>workflow_dispatch<span class="w"> </span>--limit<span class="w"> </span><span class="m">1</span><span class="w">   </span><span class="c1"># the run's ID</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>gh<span class="w"> </span>run<span class="w"> </span>watch<span class="w"> </span>&lt;run-id&gt;
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>gh<span class="w"> </span>workflow<span class="w"> </span>run<span class="w"> </span>deployment.yml<span class="w"> </span>--ref<span class="w"> </span>main
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>gh<span class="w"> </span>run<span class="w"> </span>list<span class="w"> </span>--workflow<span class="w"> </span>deployment.yml<span class="w"> </span>--event<span class="w"> </span>workflow_dispatch<span class="w"> </span>--limit<span class="w"> </span><span class="m">1</span><span class="w">   </span><span class="c1"># the run's ID</span>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>gh<span class="w"> </span>run<span class="w"> </span>watch<span class="w"> </span>&lt;run-id&gt;
 </span></code></pre></div>
 <p>A manual run goes through the same unit tests, queue, wait step and
 cleanup as a push. It deploys the branch named by <code>--ref</code>; a run on
@@ -1573,8 +2020,8 @@ CLI with the
 <p>The steps copy the current deployment's container, environment included,
 and change only its image, so they need no secret values. If the container
 service does not exist, create it before step 1:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>aws<span class="w"> </span>lightsail<span class="w"> </span>create-container-service<span class="w"> </span>--region<span class="w"> </span>us-east-1<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">    </span>--service-name<span class="w"> </span>diaspora-web-service<span class="w"> </span>--power<span class="w"> </span>micro<span class="w"> </span>--scale<span class="w"> </span><span class="m">1</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>aws<span class="w"> </span>lightsail<span class="w"> </span>create-container-service<span class="w"> </span>--region<span class="w"> </span>us-east-1<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">    </span>--service-name<span class="w"> </span>diaspora-web-service<span class="w"> </span>--power<span class="w"> </span>micro<span class="w"> </span>--scale<span class="w"> </span><span class="m">1</span>
 </span></code></pre></div>
 <p>A new service has no deployment to copy, so step 3 must then set the
 environment by hand
@@ -1587,36 +2034,36 @@ and clients and these docs use the current domain.</p>
 <li>
 <p>Build the image from the repository root. The Dockerfile pins
    <code>linux/amd64</code>, the platform Lightsail runs.</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>docker<span class="w"> </span>build<span class="w"> </span>-t<span class="w"> </span>docker<span class="w"> </span>-f<span class="w"> </span>web_service/Dockerfile<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">    </span>--build-arg<span class="w"> </span><span class="nv">GIT_SHA</span><span class="o">=</span><span class="s2">"</span><span class="k">$(</span>git<span class="w"> </span>rev-parse<span class="w"> </span>HEAD<span class="k">)</span><span class="s2">"</span><span class="w"> </span>.
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>docker<span class="w"> </span>build<span class="w"> </span>-t<span class="w"> </span>docker<span class="w"> </span>-f<span class="w"> </span>web_service/Dockerfile<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">    </span>--build-arg<span class="w"> </span><span class="nv">GIT_SHA</span><span class="o">=</span><span class="s2">"</span><span class="k">$(</span>git<span class="w"> </span>rev-parse<span class="w"> </span>HEAD<span class="k">)</span><span class="s2">"</span><span class="w"> </span>.
 </span></code></pre></div>
 </li>
 <li>
 <p>Push it and keep the name Lightsail gives it:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nv">output</span><span class="o">=</span><span class="k">$(</span>aws<span class="w"> </span>lightsail<span class="w"> </span>push-container-image<span class="w"> </span>--region<span class="w"> </span>us-east-1<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">    </span>--service-name<span class="w"> </span>diaspora-web-service<span class="w"> </span>--label<span class="w"> </span>docker<span class="w"> </span>--image<span class="w"> </span>docker<span class="k">)</span>
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="nv">image</span><span class="o">=</span><span class="k">$(</span><span class="nb">echo</span><span class="w"> </span><span class="s2">"</span><span class="nv">$output</span><span class="s2">"</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>sed<span class="w"> </span>-n<span class="w"> </span><span class="s1">'s/.*Refer to this image as "\(.*\)" in deployments.*/\1/p'</span><span class="k">)</span>
-</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="nb">echo</span><span class="w"> </span><span class="s2">"</span><span class="nv">$image</span><span class="s2">"</span><span class="w">   </span><span class="c1"># for example :diaspora-web-service.docker.&lt;N&gt;</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="nv">output</span><span class="o">=</span><span class="k">$(</span>aws<span class="w"> </span>lightsail<span class="w"> </span>push-container-image<span class="w"> </span>--region<span class="w"> </span>us-east-1<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="w">    </span>--service-name<span class="w"> </span>diaspora-web-service<span class="w"> </span>--label<span class="w"> </span>docker<span class="w"> </span>--image<span class="w"> </span>docker<span class="k">)</span>
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="nv">image</span><span class="o">=</span><span class="k">$(</span><span class="nb">echo</span><span class="w"> </span><span class="s2">"</span><span class="nv">$output</span><span class="s2">"</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>sed<span class="w"> </span>-n<span class="w"> </span><span class="s1">'s/.*Refer to this image as "\(.*\)" in deployments.*/\1/p'</span><span class="k">)</span>
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="nb">echo</span><span class="w"> </span><span class="s2">"</span><span class="nv">$image</span><span class="s2">"</span><span class="w">   </span><span class="c1"># for example :diaspora-web-service.docker.&lt;N&gt;</span>
 </span></code></pre></div>
 </li>
 <li>
 <p>Copy the current deployment's container and set its image. <code>$containers</code>
    then holds the container's secrets, so do not print it.</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="nv">containers</span><span class="o">=</span><span class="k">$(</span>aws<span class="w"> </span>lightsail<span class="w"> </span>get-container-services<span class="w"> </span>--region<span class="w"> </span>us-east-1<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">    </span>--service-name<span class="w"> </span>diaspora-web-service<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">    </span>--query<span class="w"> </span><span class="s1">'containerServices[0].currentDeployment.containers'</span><span class="w"> </span>--output<span class="w"> </span>json<span class="w"> </span><span class="p">|</span>
-</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">  </span>jq<span class="w"> </span>--arg<span class="w"> </span>image<span class="w"> </span><span class="s2">"</span><span class="nv">$image</span><span class="s2">"</span><span class="w"> </span><span class="s1">'.flask.image = $image'</span><span class="k">)</span>
-</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>jq<span class="w"> </span>-e<span class="w"> </span><span class="s1">'.flask.environment'</span><span class="w"> </span>&gt;<span class="w"> </span>/dev/null<span class="w"> </span><span class="o">&lt;&lt;&lt;</span><span class="w"> </span><span class="s2">"</span><span class="nv">$containers</span><span class="s2">"</span><span class="w"> </span><span class="o">||</span>
-</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">  </span><span class="nb">echo</span><span class="w"> </span><span class="s2">"No current deployment: set the environment by hand (below)."</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="nv">containers</span><span class="o">=</span><span class="k">$(</span>aws<span class="w"> </span>lightsail<span class="w"> </span>get-container-services<span class="w"> </span>--region<span class="w"> </span>us-east-1<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="w">    </span>--service-name<span class="w"> </span>diaspora-web-service<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="w">    </span>--query<span class="w"> </span><span class="s1">'containerServices[0].currentDeployment.containers'</span><span class="w"> </span>--output<span class="w"> </span>json<span class="w"> </span><span class="p">|</span>
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="w">  </span>jq<span class="w"> </span>--arg<span class="w"> </span>image<span class="w"> </span><span class="s2">"</span><span class="nv">$image</span><span class="s2">"</span><span class="w"> </span><span class="s1">'.flask.image = $image'</span><span class="k">)</span>
+</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a>jq<span class="w"> </span>-e<span class="w"> </span><span class="s1">'.flask.environment'</span><span class="w"> </span>&gt;<span class="w"> </span>/dev/null<span class="w"> </span><span class="o">&lt;&lt;&lt;</span><span class="w"> </span><span class="s2">"</span><span class="nv">$containers</span><span class="s2">"</span><span class="w"> </span><span class="o">||</span>
+</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="w">  </span><span class="nb">echo</span><span class="w"> </span><span class="s2">"No current deployment: set the environment by hand (below)."</span>
 </span></code></pre></div>
 </li>
 <li>
 <p>Create the deployment. The command prints the deployment with its
    environment, so the example discards its output.</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>aws<span class="w"> </span>lightsail<span class="w"> </span>create-container-service-deployment<span class="w"> </span>--region<span class="w"> </span>us-east-1<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">    </span>--service-name<span class="w"> </span>diaspora-web-service<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">    </span>--containers<span class="w"> </span><span class="s2">"</span><span class="nv">$containers</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">    </span>--public-endpoint<span class="w"> </span><span class="s1">'{"containerName": "flask", "containerPort": 8000}'</span><span class="w"> </span>&gt;<span class="w"> </span>/dev/null
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>aws<span class="w"> </span>lightsail<span class="w"> </span>create-container-service-deployment<span class="w"> </span>--region<span class="w"> </span>us-east-1<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="w">    </span>--service-name<span class="w"> </span>diaspora-web-service<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="w">    </span>--containers<span class="w"> </span><span class="s2">"</span><span class="nv">$containers</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="w">    </span>--public-endpoint<span class="w"> </span><span class="s1">'{"containerName": "flask", "containerPort": 8000}'</span><span class="w"> </span>&gt;<span class="w"> </span>/dev/null
 </span></code></pre></div>
 <p>Keep the container name <code>flask</code>: the public endpoint and the logs refer
 to it.</p>
@@ -1631,14 +2078,15 @@ deployment, read the values into the shell first. <code>read -rs</code> keeps ea
 value off the screen and out of shell history. The <code>SVC_</code> prefix keeps the
 values apart from the AWS CLI's own credentials. A value set this way lasts
 only until the next workflow deploy, which rebuilds the environment from
-the <code>DOCKER_*</code> secrets and <code>deployment.yml</code>; update the matching secret, or
-for an optional variable <code>deployment.yml</code>, too.</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="k">for</span><span class="w"> </span>var<span class="w"> </span><span class="k">in</span><span class="w"> </span>AWS_ACCESS_KEY_ID<span class="w"> </span>AWS_SECRET_ACCESS_KEY<span class="w"> </span>SERVER_CLIENT_ID<span class="w"> </span>SERVER_SECRET<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">    </span>AWS_ACCOUNT_ID<span class="w"> </span>AWS_ACCOUNT_REGION<span class="w"> </span>MSK_CLUSTER_NAME<span class="w"> </span>DEFAULT_SERVERS<span class="p">;</span><span class="w"> </span><span class="k">do</span>
-</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span><span class="nb">printf</span><span class="w"> </span><span class="s1">'%s: '</span><span class="w"> </span><span class="s2">"</span><span class="nv">$var</span><span class="s2">"</span><span class="p">;</span><span class="w"> </span><span class="nv">IFS</span><span class="o">=</span><span class="w"> </span><span class="nb">read</span><span class="w"> </span>-rs<span class="w"> </span>value<span class="p">;</span><span class="w"> </span><span class="nb">echo</span>
-</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">  </span><span class="nb">export</span><span class="w"> </span><span class="s2">"SVC_</span><span class="nv">$var</span><span class="s2">=</span><span class="nv">$value</span><span class="s2">"</span>
-</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="k">done</span>
-</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="nb">unset</span><span class="w"> </span>value
+the <code>DOCKER_*</code> secrets, <code>deployment.yml</code> and the repository variable
+<code>DOCKER_IAM_USER_PERMISSIONS_BOUNDARY_NAME</code>; update the matching secret or
+variable, too.</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="k">for</span><span class="w"> </span>var<span class="w"> </span><span class="k">in</span><span class="w"> </span>AWS_ACCESS_KEY_ID<span class="w"> </span>AWS_SECRET_ACCESS_KEY<span class="w"> </span>SERVER_CLIENT_ID<span class="w"> </span>SERVER_SECRET<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="w">    </span>AWS_ACCOUNT_ID<span class="w"> </span>AWS_ACCOUNT_REGION<span class="w"> </span>MSK_CLUSTER_NAME<span class="w"> </span>DEFAULT_SERVERS<span class="p">;</span><span class="w"> </span><span class="k">do</span>
+</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="w">  </span><span class="nb">printf</span><span class="w"> </span><span class="s1">'%s: '</span><span class="w"> </span><span class="s2">"</span><span class="nv">$var</span><span class="s2">"</span><span class="p">;</span><span class="w"> </span><span class="nv">IFS</span><span class="o">=</span><span class="w"> </span><span class="nb">read</span><span class="w"> </span>-rs<span class="w"> </span>value<span class="p">;</span><span class="w"> </span><span class="nb">echo</span>
+</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="w">  </span><span class="nb">export</span><span class="w"> </span><span class="s2">"SVC_</span><span class="nv">$var</span><span class="s2">=</span><span class="nv">$value</span><span class="s2">"</span>
+</span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a><span class="k">done</span>
+</span><span id="__span-12-6"><a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a><span class="nb">unset</span><span class="w"> </span>value
 </span></code></pre></div>
 <p>To change one variable of the current deployment, run the loop with only
 that name (<code>for var in MAX_TOPICS_PER_NAMESPACE; do</code>) and extend the filter
@@ -1646,29 +2094,29 @@ of step 3, for example
 <code>jq --arg image "$image" '.flask.image = $image | .flask.environment.MAX_TOPICS_PER_NAMESPACE = env.SVC_MAX_TOPICS_PER_NAMESPACE'</code>.
 For a service with no current deployment, build the whole container
 instead of step 3:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="nv">containers</span><span class="o">=</span><span class="k">$(</span>jq<span class="w"> </span>-n<span class="w"> </span>--arg<span class="w"> </span>image<span class="w"> </span><span class="s2">"</span><span class="nv">$image</span><span class="s2">"</span><span class="w"> </span><span class="s1">'{</span>
-</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="s1">  flask: {</span>
-</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="s1">    image: $image,</span>
-</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="s1">    ports: {"8000": "HTTP"},</span>
-</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="s1">    environment: {</span>
-</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="s1">      AWS_ACCESS_KEY_ID: env.SVC_AWS_ACCESS_KEY_ID,</span>
-</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="s1">      AWS_SECRET_ACCESS_KEY: env.SVC_AWS_SECRET_ACCESS_KEY,</span>
-</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="s1">      SERVER_CLIENT_ID: env.SVC_SERVER_CLIENT_ID,</span>
-</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="s1">      SERVER_SECRET: env.SVC_SERVER_SECRET,</span>
-</span><span id="__span-7-10"><a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a><span class="s1">      AWS_ACCOUNT_ID: env.SVC_AWS_ACCOUNT_ID,</span>
-</span><span id="__span-7-11"><a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a><span class="s1">      AWS_ACCOUNT_REGION: env.SVC_AWS_ACCOUNT_REGION,</span>
-</span><span id="__span-7-12"><a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a><span class="s1">      MSK_CLUSTER_NAME: env.SVC_MSK_CLUSTER_NAME,</span>
-</span><span id="__span-7-13"><a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a><span class="s1">      DEFAULT_SERVERS: env.SVC_DEFAULT_SERVERS</span>
-</span><span id="__span-7-14"><a id="__codelineno-7-14" name="__codelineno-7-14" href="#__codelineno-7-14"></a><span class="s1">    }</span>
-</span><span id="__span-7-15"><a id="__codelineno-7-15" name="__codelineno-7-15" href="#__codelineno-7-15"></a><span class="s1">  }</span>
-</span><span id="__span-7-16"><a id="__codelineno-7-16" name="__codelineno-7-16" href="#__codelineno-7-16"></a><span class="s1">}'</span><span class="k">)</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="nv">containers</span><span class="o">=</span><span class="k">$(</span>jq<span class="w"> </span>-n<span class="w"> </span>--arg<span class="w"> </span>image<span class="w"> </span><span class="s2">"</span><span class="nv">$image</span><span class="s2">"</span><span class="w"> </span><span class="s1">'{</span>
+</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="s1">  flask: {</span>
+</span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="s1">    image: $image,</span>
+</span><span id="__span-13-4"><a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="s1">    ports: {"8000": "HTTP"},</span>
+</span><span id="__span-13-5"><a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a><span class="s1">    environment: {</span>
+</span><span id="__span-13-6"><a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a><span class="s1">      AWS_ACCESS_KEY_ID: env.SVC_AWS_ACCESS_KEY_ID,</span>
+</span><span id="__span-13-7"><a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a><span class="s1">      AWS_SECRET_ACCESS_KEY: env.SVC_AWS_SECRET_ACCESS_KEY,</span>
+</span><span id="__span-13-8"><a id="__codelineno-13-8" name="__codelineno-13-8" href="#__codelineno-13-8"></a><span class="s1">      SERVER_CLIENT_ID: env.SVC_SERVER_CLIENT_ID,</span>
+</span><span id="__span-13-9"><a id="__codelineno-13-9" name="__codelineno-13-9" href="#__codelineno-13-9"></a><span class="s1">      SERVER_SECRET: env.SVC_SERVER_SECRET,</span>
+</span><span id="__span-13-10"><a id="__codelineno-13-10" name="__codelineno-13-10" href="#__codelineno-13-10"></a><span class="s1">      AWS_ACCOUNT_ID: env.SVC_AWS_ACCOUNT_ID,</span>
+</span><span id="__span-13-11"><a id="__codelineno-13-11" name="__codelineno-13-11" href="#__codelineno-13-11"></a><span class="s1">      AWS_ACCOUNT_REGION: env.SVC_AWS_ACCOUNT_REGION,</span>
+</span><span id="__span-13-12"><a id="__codelineno-13-12" name="__codelineno-13-12" href="#__codelineno-13-12"></a><span class="s1">      MSK_CLUSTER_NAME: env.SVC_MSK_CLUSTER_NAME,</span>
+</span><span id="__span-13-13"><a id="__codelineno-13-13" name="__codelineno-13-13" href="#__codelineno-13-13"></a><span class="s1">      DEFAULT_SERVERS: env.SVC_DEFAULT_SERVERS</span>
+</span><span id="__span-13-14"><a id="__codelineno-13-14" name="__codelineno-13-14" href="#__codelineno-13-14"></a><span class="s1">    }</span>
+</span><span id="__span-13-15"><a id="__codelineno-13-15" name="__codelineno-13-15" href="#__codelineno-13-15"></a><span class="s1">  }</span>
+</span><span id="__span-13-16"><a id="__codelineno-13-16" name="__codelineno-13-16" href="#__codelineno-13-16"></a><span class="s1">}'</span><span class="k">)</span>
 </span></code></pre></div>
 <p>After the deployment is created, remove the values from the shell with
 <code>unset "${!SVC_@}"</code> in bash or <code>unset -m 'SVC_*'</code> in zsh.</p>
 <h2 id="check-a-deploy">Check a deploy<a class="headerlink" href="#check-a-deploy" title="Permanent link">&para;</a></h2>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>aws<span class="w"> </span>lightsail<span class="w"> </span>get-container-services<span class="w"> </span>--region<span class="w"> </span>us-east-1<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">    </span>--service-name<span class="w"> </span>diaspora-web-service<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">    </span>--query<span class="w"> </span><span class="s1">'containerServices[0].{state: state, current: currentDeployment.[version, state], image: currentDeployment.containers.flask.image, next: nextDeployment.[version, state]}'</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>aws<span class="w"> </span>lightsail<span class="w"> </span>get-container-services<span class="w"> </span>--region<span class="w"> </span>us-east-1<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="w">    </span>--service-name<span class="w"> </span>diaspora-web-service<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="w">    </span>--query<span class="w"> </span><span class="s1">'containerServices[0].{state: state, current: currentDeployment.[version, state], image: currentDeployment.containers.flask.image, next: nextDeployment.[version, state]}'</span>
 </span></code></pre></div>
 <p>A finished deploy shows the service <code>RUNNING</code>, the current deployment
 <code>ACTIVE</code> with the new image, and <code>next</code> as <code>null</code>. Keep the <code>--query</code>:
@@ -1676,7 +2124,7 @@ without it, the command prints the container's environment, secrets
 included.</p>
 <p>Then check that the service answers. It serves its API documentation at
 <code>/</code>, so this prints <code>200</code>:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>curl<span class="w"> </span>-sS<span class="w"> </span>-o<span class="w"> </span>/dev/null<span class="w"> </span>-w<span class="w"> </span><span class="s1">'%{http_code}\n'</span><span class="w"> </span>https://diaspora-web-service.qpp943wkvr7b2.us-east-1.cs.amazonlightsail.com/
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>curl<span class="w"> </span>-sS<span class="w"> </span>-o<span class="w"> </span>/dev/null<span class="w"> </span>-w<span class="w"> </span><span class="s1">'%{http_code}\n'</span><span class="w"> </span>https://diaspora-web-service.qpp943wkvr7b2.us-east-1.cs.amazonlightsail.com/
 </span></code></pre></div>
 
 

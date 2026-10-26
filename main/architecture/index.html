@@ -1193,14 +1193,23 @@ service creates the user.</p>
 </tr>
 </tbody>
 </table>
-<p>The policy lets the IAM user connect to the cluster in <code>MSK_CLUSTER_NAME</code>;
-read and write the topics whose names start with the user's default
-namespace and a dot; and use any consumer group and transactional ID on
-the cluster. With the user's access key, a Kafka client therefore has the
-permissions to produce to and consume from the user's topics directly,
-without the service. When <code>IAM_USER_PERMISSIONS_BOUNDARY_ARN</code> is
-set, the service also sets the policy it names as the user's permissions
-boundary.</p>
+<p>The policy lets the IAM user connect to the cluster in <code>MSK_CLUSTER_NAME</code>,
+and use only the topics, consumer groups and transactional IDs whose names
+start with the user's default namespace and a dot. With the user's access
+key, a Kafka client can therefore produce to and consume from the user's
+topics directly, without the service, but its consumer group IDs and
+transactional IDs must have the same prefix, such as
+<code>ns-0123456789ab.workers</code>. The cluster refuses any other group or
+transactional ID with an authorization error, so no user can join,
+describe or commit offsets for another user's group, or fence another
+user's transactional producer. The consumer routes name their
+groups <code>&lt;namespace&gt;.&lt;group_name&gt;</code> and connect as the service, so this does
+not limit them. When <code>IAM_USER_PERMISSIONS_BOUNDARY_ARN</code> is set, the
+service also sets the policy it names as the user's permissions boundary.</p>
+<p>The service writes the policy when it creates the user, so a change to it
+reaches only the users created after the change. <code>scripts/update_user_policies.py</code>
+brings the other users' policies up to date
+(<a href="../5-runbook/#update-the-users-iam">Update the users' IAM</a>).</p>
 <p><code>POST /api/v3/key</code> returns the key stored for the user when the keys table
 holds one, with <code>fresh</code> set to <code>false</code>. Otherwise it creates the user and
 the default namespace if they are missing, deletes every access key the IAM
