@@ -15,8 +15,10 @@ The tests come in two sets:
 
 ## Run the unit tests locally
 
-The service checks a few environment variables at import, so give it
-placeholders, and point the AWS SDK away from any credentials you have:
+Install the dev extras first (`pip install -e ".[dev]"`, as in
+[Running locally](1-running.md#set-up)). The service checks a few
+environment variables at import, so give it placeholders, and point the
+AWS SDK away from any credentials you have:
 
 ```bash
 AWS_CONFIG_FILE=/dev/null \
@@ -48,6 +50,13 @@ records shared by all runs. With the live tests' own keys (see below),
 also set `IAM_USER_PERMISSIONS_BOUNDARY_ARN` to the boundary policy's ARN,
 or every test that creates an IAM user is denied.
 
+Their DynamoDB items go to the `test-diaspora-*` tables. Most live tests
+name those tables in code, but the live tests in
+`consumer_service_test.py` take the tables from `KEYS_TABLE_NAME`,
+`USERS_TABLE_NAME` and `NAMESPACE_TABLE_NAME` when these are set. Leave
+them unset, or set them to the test tables as `tests.yml` does, so that no
+test writes to the production tables.
+
 With coverage, over both sets:
 
 ```bash
@@ -66,9 +75,9 @@ coverage report
 
 - The deploy job in `deployment.yml` waits for its `unit` job, so a failing
   unit test on `main` stops the deploy.
-- The `live` job never runs on pull requests or `test-me-*` pushes. A
-  manual dispatch runs the live tests of the branch it is dispatched on,
-  whichever branch that is.
+- The `live` job never runs on pull requests, tag pushes or `test-me-*`
+  pushes. A manual dispatch runs the live tests of the branch it is
+  dispatched on, whichever branch that is.
 - `live` runs in the `live-tests` concurrency group, so no two live runs
   happen at the same time. GitHub keeps only one pending run per group: a
   run that is waiting can be cancelled by a newer one.
