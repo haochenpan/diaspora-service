@@ -23,11 +23,13 @@ from kafka.structs import OffsetAndMetadata
 from kafka.structs import TopicPartition
 
 from web_service.consumer_records import EncodedField
+from web_service.consumer_records import FetchReply
 from web_service.consumer_records import NotText
 from web_service.consumer_service import CLOSE_COMMIT_TIMEOUT_MS
 from web_service.consumer_service import CLOSE_TIMEOUT_MS
 from web_service.consumer_service import CONSUMER_OPERATION_TIMEOUT_MS
 from web_service.consumer_service import ConsumerService
+from web_service.consumer_service import FetchAttempt
 from web_service.consumer_service import ManagedConsumer
 
 # Suppress verbose logging and warnings from external libraries
@@ -544,7 +546,7 @@ def test_delete_consumer_success(
     assert body is None
     mock_kafka_consumer.close.assert_called_once_with(
         autocommit=False,
-        timeout_ms=CLOSE_TIMEOUT_MS,
+        timeout_ms=CLOSE_TIMEOUT_MS // 2,
     )
     # Consumer should be removed from registry
     assert len(populated_service._consumers) == 0
@@ -1465,11 +1467,11 @@ def test_shutdown_all_closes_consumers(
     consumer_service.shutdown_all()
     mock1.close.assert_called_once_with(
         autocommit=False,
-        timeout_ms=CLOSE_TIMEOUT_MS,
+        timeout_ms=CLOSE_TIMEOUT_MS // 2,
     )
     mock2.close.assert_called_once_with(
         autocommit=False,
-        timeout_ms=CLOSE_TIMEOUT_MS,
+        timeout_ms=CLOSE_TIMEOUT_MS // 2,
     )
     assert len(consumer_service._consumers) == 0
 
@@ -1546,7 +1548,7 @@ def test_reaper_cleans_expired_consumers(
     assert len(consumer_service._consumers) == 0
     mock_consumer.close.assert_called_once_with(
         autocommit=False,
-        timeout_ms=CLOSE_TIMEOUT_MS,
+        timeout_ms=CLOSE_TIMEOUT_MS // 2,
     )
 
 
@@ -1914,7 +1916,7 @@ def test_shutdown_during_create_closes_the_new_consumer(
     ]
     built.close.assert_called_once_with(
         autocommit=False,
-        timeout_ms=CLOSE_TIMEOUT_MS,
+        timeout_ms=CLOSE_TIMEOUT_MS // 2,
     )
     assert consumer_service._consumers == {}
     assert consumer_service._pending == set()
@@ -1976,7 +1978,7 @@ def test_reaper_skips_busy_and_closes_idle(
 
     idle.consumer.close.assert_called_once_with(
         autocommit=False,
-        timeout_ms=CLOSE_TIMEOUT_MS,
+        timeout_ms=CLOSE_TIMEOUT_MS // 2,
     )
     assert seen == {'instance_lock_held': True, 'global_lock_free': True}
     assert idle.closed
@@ -2020,7 +2022,7 @@ def test_shutdown_all_skips_busy_instance(
         busy.lock.release()
     idle.consumer.close.assert_called_once_with(
         autocommit=False,
-        timeout_ms=CLOSE_TIMEOUT_MS,
+        timeout_ms=CLOSE_TIMEOUT_MS // 2,
     )
     busy.consumer.close.assert_not_called()
     assert consumer_service._consumers == {}
@@ -2060,7 +2062,7 @@ def test_delete_with_auto_commit_commits_before_close(
     assert (body, status) == (None, 204)
     assert managed.consumer.mock_calls == [
         call.commit(timeout_ms=CLOSE_COMMIT_TIMEOUT_MS),
-        call.close(autocommit=False, timeout_ms=CLOSE_TIMEOUT_MS),
+        call.close(autocommit=False, timeout_ms=CLOSE_TIMEOUT_MS // 2),
     ]
 
 
@@ -2072,7 +2074,7 @@ def test_delete_without_auto_commit_commits_nothing(
     consumer_service._consumers[('u', 'ns', 'g', 'inst')] = managed
     consumer_service.delete_consumer('u', 'ns', 'g', 'inst')
     assert managed.consumer.mock_calls == [
-        call.close(autocommit=False, timeout_ms=CLOSE_TIMEOUT_MS),
+        call.close(autocommit=False, timeout_ms=CLOSE_TIMEOUT_MS // 2),
     ]
 
 
@@ -2094,7 +2096,7 @@ def test_a_failed_commit_on_close_still_closes(
     assert (body, status) == (None, 204)
     managed.consumer.close.assert_called_once_with(
         autocommit=False,
-        timeout_ms=CLOSE_TIMEOUT_MS,
+        timeout_ms=CLOSE_TIMEOUT_MS // 2,
     )
     assert 'Failed to commit the positions of consumer inst' in caplog.text
 
@@ -2113,7 +2115,7 @@ def test_reaper_commits_an_auto_commit_instance(
     consumer_service._reap_once()
     assert committing.consumer.mock_calls == [
         call.commit(timeout_ms=CLOSE_COMMIT_TIMEOUT_MS),
-        call.close(autocommit=False, timeout_ms=CLOSE_TIMEOUT_MS),
+        call.close(autocommit=False, timeout_ms=CLOSE_TIMEOUT_MS // 2),
     ]
     plain.consumer.commit.assert_not_called()
     assert consumer_service._consumers == {}
@@ -2175,6 +2177,46 @@ def test_shutdown_waits_no_longer_than_its_deadline(
         release.set()
     assert took < 2
     assert '1 consumers not closed within' in caplog.text
+
+
+def test_close_leaves_a_consumer_a_thread_still_uses(
+    consumer_service: ConsumerService,
+) -> None:
+    """A close neither commits nor closes while another thread polls."""
+    managed = _auto_commit_managed('inst')
+    using = threading.Event()
+    done = threading.Event()
+
+    def _use() -> None:
+        with managed.calls:
+            using.set()
+            done.wait(5)
+
+    user = threading.Thread(target=_use, daemon=True)
+    user.start()
+    assert using.wait(5)
+    try:
+        consumer_service._close(
+            managed,
+            'Error closing consumer %s',
+            deadline=time.monotonic() + 0.2,
+        )
+    finally:
+        done.set()
+        user.join(5)
+    managed.consumer.commit.assert_not_called()
+    managed.consumer.close.assert_not_called()
+
+
+def test_fetch_attempt_hands_the_reply_to_one_side() -> None:
+    """The poll or the abandoning request seeks back, never both or none."""
+    reply = FetchReply([])
+    kept = FetchAttempt()
+    assert kept.keep(reply)
+    assert kept.abandon() is reply
+    abandoned = FetchAttempt()
+    assert abandoned.abandon() is None
+    assert not abandoned.keep(reply)
 
 
 def test_shutdown_deadline_is_for_all_instances_together(

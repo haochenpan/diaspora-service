@@ -53,6 +53,7 @@ from web_service.consumer_routes import negotiate_records
 from web_service.consumer_service import ConsumerService
 from web_service.consumer_service import DEFAULT_FETCH_WAIT_MS
 from web_service.consumer_service import error_reply
+from web_service.consumer_service import FetchAttempt
 from web_service.consumer_service import FORMAT_MISMATCH
 from web_service.consumer_service import MAX_FETCH_WAIT_MS
 from web_service.consumer_service import PARTITION_NOT_FOUND
@@ -1377,7 +1378,12 @@ class DiasporaService:
             )
             # The client may have left while the slice polled; nothing has
             # committed the records since, so they can be fetched again
-            if await request.is_disconnected():
+            try:
+                left = await request.is_disconnected()
+            except BaseException:
+                unfetch()
+                raise
+            if left:
                 unfetch()
                 return Response(status_code=400)
             release = stack.pop_all()
@@ -1452,15 +1458,25 @@ class DiasporaService:
             if await request.is_disconnected():
                 return Response(status_code=400)
             remaining_ms = max(0, int((deadline - time.monotonic()) * 1000))
-            reply, status = await anyio.to_thread.run_sync(
-                run_holding,
-                held,
-                functools.partial(
-                    fetch,
-                    timeout_ms=min(remaining_ms, FETCH_SLICE_MS),
-                ),
-                limiter=self.fetch_threads,
-            )
+            attempt = FetchAttempt()
+            try:
+                reply, status = await anyio.to_thread.run_sync(
+                    run_holding,
+                    held,
+                    functools.partial(
+                        fetch,
+                        timeout_ms=min(remaining_ms, FETCH_SLICE_MS),
+                        attempt=attempt,
+                    ),
+                    limiter=self.fetch_threads,
+                )
+            except BaseException:
+                # Cancelled while the thread may still poll: the thread
+                # seeks back if it finishes later, this request if it
+                # finished already
+                if (polled := attempt.abandon()) is not None:
+                    self.consumer_service.unfetch(held, polled)
+                raise
             if not isinstance(reply, FetchReply):
                 return self._consumer_response(reply, status)
             keep = bool(reply.records)

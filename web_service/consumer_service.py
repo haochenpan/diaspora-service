@@ -473,6 +473,11 @@ class ManagedConsumer:
         self.default_wait_ms = default_wait_ms
         self.auto_commit = auto_commit
         self.lock = InstanceLock()
+        # Held by the thread that uses the Kafka consumer, which is not
+        # thread-safe. The lock above is the request's; a request cancelled
+        # at shutdown lets it go while its thread still polls, so a close
+        # also waits for this one.
+        self.calls = threading.RLock()
         self.last_access = time.monotonic()
         # Fetches that found records so far, which rotate the partition a
         # reply starts from
@@ -489,6 +494,39 @@ class ManagedConsumer:
         """Check if consumer has exceeded idle timeout."""
         elapsed_ms = (time.monotonic() - self.last_access) * 1000
         return elapsed_ms > timeout_ms
+
+
+class FetchAttempt:
+    """One poll of a fetch, which the fetch's request may abandon.
+
+    A request cancelled while its poll runs in a thread (as uvicorn does to
+    requests still open late in shutdown) never gets the reply, and the
+    poll has moved the instance's positions past its records. Whichever of
+    the two finishes second, the poll's thread or the abandoning request,
+    seeks the instance back to the reply's first records, so a commit at
+    close cannot commit records the client never got.
+    """
+
+    def __init__(self) -> None:
+        """Make an attempt that is neither done nor abandoned."""
+        self._lock = threading.Lock()
+        self._abandoned = False
+        self._reply: FetchReply | None = None
+
+    def keep(self, reply: FetchReply) -> bool:
+        """Hand the poll's reply to the request; False if it was abandoned."""
+        with self._lock:
+            if self._abandoned:
+                return False
+            self._reply = reply
+            return True
+
+    def abandon(self) -> FetchReply | None:
+        """Abandon the attempt; the reply, if the poll handed it over."""
+        with self._lock:
+            self._abandoned = True
+            reply, self._reply = self._reply, None
+            return reply
 
 
 # The instance a request route holds while its call runs in a thread: the
@@ -705,8 +743,10 @@ class ConsumerService:
         first commits its positions, the next record of each partition its
         fetches returned. The commit waits at most CLOSE_COMMIT_TIMEOUT_MS,
         and a failed commit is logged and the close goes on. An instance
-        without auto-commit commits nothing. A deadline (time.monotonic())
-        shortens every wait to the time left before it.
+        without auto-commit commits nothing. Both wait first for a thread
+        still using the consumer, at most CLOSE_COMMIT_TIMEOUT_MS; if it
+        is still busy then, the consumer is left open. A deadline
+        (time.monotonic()) shortens every wait to the time left before it.
         """
         managed.closed = True
 
@@ -716,25 +756,39 @@ class ConsumerService:
             left_ms = int((deadline - time.monotonic()) * 1000)
             return max(0, min(timeout_ms, left_ms))
 
-        if managed.auto_commit:
-            try:
-                managed.consumer.commit(
-                    timeout_ms=within(CLOSE_COMMIT_TIMEOUT_MS),
-                )
-            except Exception as e:
-                logger.warning(
-                    'Failed to commit the positions of consumer %s before '
-                    'closing it: %r',
-                    managed.instance_id,
-                    e,
-                )
-        try:
-            managed.consumer.close(
-                autocommit=False,
-                timeout_ms=within(CLOSE_TIMEOUT_MS),
+        if not managed.calls.acquire(
+            timeout=within(CLOSE_COMMIT_TIMEOUT_MS) / 1000,
+        ):
+            logger.warning(
+                'Consumer %s still in use by a thread; not committed or '
+                'closed',
+                managed.instance_id,
             )
-        except Exception:
-            logger.exception(error_message, managed.instance_id)
+            return
+        try:
+            if managed.auto_commit:
+                try:
+                    managed.consumer.commit(
+                        timeout_ms=within(CLOSE_COMMIT_TIMEOUT_MS),
+                    )
+                except Exception as e:
+                    logger.warning(
+                        'Failed to commit the positions of consumer %s '
+                        'before closing it: %r',
+                        managed.instance_id,
+                        e,
+                    )
+            try:
+                # kafka-python waits up to timeout_ms for each of its two
+                # steps
+                managed.consumer.close(
+                    autocommit=False,
+                    timeout_ms=within(CLOSE_TIMEOUT_MS) // 2,
+                )
+            except Exception:
+                logger.exception(error_message, managed.instance_id)
+        finally:
+            managed.calls.release()
 
     def _kafka_partitions(
         self,
@@ -814,10 +868,11 @@ class ConsumerService:
             if error:
                 return error
             managed.touch()
-            try:
-                return serve(managed)
-            except Exception as e:
-                return kafka_failure(e, action)
+            with managed.calls:
+                try:
+                    return serve(managed)
+                except Exception as e:
+                    return kafka_failure(e, action)
 
     # --- Consumer lifecycle ---
 
@@ -1145,6 +1200,7 @@ class ConsumerService:
         *,
         timeout_ms: int,
         max_bytes: int | None = None,
+        attempt: FetchAttempt | None = None,
     ) -> tuple[FetchReply | dict[str, Any], int]:
         """Fetch records, as the reply that returns them.
 
@@ -1163,11 +1219,13 @@ class ConsumerService:
             timeout_ms: How long to wait for records
             max_bytes: Bytes of keys and values the records must stay
                 under, or None for no limit but REPLY_MAX_BYTES
+            attempt: The request's attempt; if the request abandoned it,
+                the records are sought back to
 
         Returns:
             The reply and 200, or an error reply and its status: 408 if a
             json instance's poll found records and the first it could
-            return is one whose key or value is not JSON
+            return is one whose key or value is neither JSON nor UTF-8
         """
 
         def serve(
@@ -1175,6 +1233,8 @@ class ConsumerService:
         ) -> tuple[FetchReply | dict[str, Any], int]:
             raw = managed.consumer.poll(timeout_ms=timeout_ms)
             reply = self._reply(namespace, managed, raw, max_bytes)
+            if attempt is not None and not attempt.keep(reply):
+                self.unfetch(managed, reply)
             if not reply.records and reply.undecodable:
                 return _not_decodable(*reply.undecodable)
             return (reply, 200)

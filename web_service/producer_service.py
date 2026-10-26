@@ -65,8 +65,10 @@ READ_TIMEOUT_S = 20
 # Longest send() blocks waiting for topic metadata; no send starts with
 # less than this left of the request's time
 PRODUCER_MAX_BLOCK_MS = 10_000
-# Longest shutdown waits for records still in flight
-PRODUCER_CLOSE_TIMEOUT_S = 10
+# Longest shutdown waits for records still in flight: the consumer
+# instances' shutdown takes as long, at the same time, within the time
+# gunicorn leaves after uvicorn has waited for open requests
+PRODUCER_CLOSE_TIMEOUT_S = 8
 # How long produce requests fail at once after the producer could not be
 # built, before the next request tries again
 PRODUCER_BUILD_RETRY_S = 5

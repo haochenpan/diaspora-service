@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import json
 import threading
 import time
@@ -1789,6 +1790,76 @@ async def test_records_polled_for_a_client_that_left_are_fetched_again(
         again = await client.get(_inst() + '/records', headers=HEADERS)
     assert [r['offset'] for r in again.json()] == [0, 1]
     assert log.pos[_kafka_tp()] == 2
+
+
+class _SlowLog:
+    """A consumer whose poll takes records at once and returns them late.
+
+    Like kafka-python's, its positions move when the poll takes the
+    records, before poll returns; commit records the positions.
+    """
+
+    def __init__(self, count: int) -> None:
+        self.pos = 0
+        self.count = count
+        self.committed: list[int] = []
+        self.taken = threading.Event()
+        self.release = threading.Event()
+
+    def poll(self, timeout_ms: int) -> dict[TopicPartition, list[Any]]:
+        start, self.pos = self.pos, self.count
+        self.taken.set()
+        self.release.wait(5)
+        return {
+            _kafka_tp(): [
+                SimpleNamespace(key=None, value=b'r', offset=i, headers=[])
+                for i in range(start, self.count)
+            ],
+        }
+
+    def seek(self, tp: TopicPartition, offset: int) -> None:
+        self.pos = offset
+
+    def commit(self, timeout_ms: int) -> None:
+        self.committed.append(self.pos)
+
+    def close(self, autocommit: bool, timeout_ms: int) -> None:
+        pass
+
+
+async def test_shutdown_commits_no_records_of_a_cancelled_fetch(
+    service: DiasporaService,
+) -> None:
+    """A fetch cancelled while it polls commits nothing it did not send.
+
+    uvicorn cancels requests still open late in shutdown, then runs the
+    service's shutdown at once, while the cancelled fetch's poll still
+    runs in its thread.
+    """
+    consumers = service.consumer_service
+    _, status = consumers.create_consumer(
+        SUBJECT,
+        NAMESPACE,
+        GROUP,
+        name='i1',
+        auto_commit_enable='true',
+    )
+    assert status == 200
+    managed = consumers._consumers[(SUBJECT, NAMESPACE, GROUP, 'i1')]
+    managed.consumer.close(autocommit=False, timeout_ms=0)
+    log = _SlowLog(3)
+    managed.consumer = log
+    fetching = asyncio.create_task(_fetch(service, _connected()))
+    assert await asyncio.to_thread(log.taken.wait, 5)
+    fetching.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await fetching
+    # The poll still runs; shutdown starts, and the poll ends after
+    closing = asyncio.create_task(asyncio.to_thread(consumers.shutdown_all))
+    await asyncio.sleep(0.2)
+    log.release.set()
+    await closing
+    assert log.committed == [0]
 
 
 async def test_a_streamed_reply_the_client_left_is_fetched_again(
