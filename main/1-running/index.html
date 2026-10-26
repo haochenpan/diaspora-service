@@ -12,10 +12,10 @@
         <meta name="author" content="Haochen Pan">
       
       
-        <link rel="canonical" href="https://github.com/haochenpan/diaspora-service/main/1-running/">
+        <link rel="canonical" href="https://haochenpan.github.io/diaspora-service/main/1-running/">
       
       
-        <link rel="prev" href="..">
+        <link rel="prev" href="../architecture/">
       
       
         <link rel="next" href="../2-testing/">
@@ -25,7 +25,7 @@
       
       
       <link rel="icon" href="../static/octopus.svg">
-      <meta name="generator" content="mkdocs-ProperDocs 1.6.7, mkdocs-material-9.8.0">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.0">
     
     
       
@@ -55,8 +55,6 @@
       
     
     
-      <link rel="stylesheet" href="../assets/_mkdocstrings.css">
-    
     <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
@@ -82,7 +80,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#running-in-virtual-environment" class="md-skip">
+        <a href="#running-locally" class="md-skip">
           Skip to content
         </a>
       
@@ -166,6 +164,53 @@
       <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
     
     
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="Share" aria-label="Share" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
     
     
       <div class="md-header__source">
@@ -389,6 +434,34 @@
                 
   
   
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
     
   
   
@@ -397,6 +470,8 @@
       
       <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
       
+      
+        
       
       
         <label class="md-nav__link md-nav__link--active" for="__toc">
@@ -440,6 +515,8 @@
   
   
   
+    
+  
   
     <label class="md-nav__title" for="__toc">
       <span class="md-nav__icon md-icon"></span>
@@ -448,58 +525,79 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#running-in-virtual-environment" class="md-nav__link">
+  <a href="#what-a-local-run-changes" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Running in Virtual Environment
+        What a local run changes
       
     </span>
   </a>
-  
-    <nav class="md-nav" aria-label="Running in Virtual Environment">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#web-service" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Web Service
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#running-in-docker-container" class="md-nav__link">
+  <a href="#keep-a-local-run-away-from-production-data" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Running in Docker Container
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Running in Docker Container">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#web-service_1" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Web Service
+        Keep a local run away from production data
       
     </span>
   </a>
   
 </li>
-        
-      </ul>
-    </nav>
+      
+        <li class="md-nav__item">
+  <a href="#set-up" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Set up
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#run-from-the-virtual-environment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Run from the virtual environment
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#run-in-docker" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Run in Docker
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#call-the-api" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Call the API
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#environment-variables" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Environment variables
+      
+    </span>
+  </a>
   
 </li>
       
@@ -527,6 +625,34 @@
     
   
     Testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../contributing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
   
 
     
@@ -878,6 +1004,8 @@
   
   
   
+    
+  
   
     <label class="md-nav__title" for="__toc">
       <span class="md-nav__icon md-icon"></span>
@@ -886,58 +1014,79 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#running-in-virtual-environment" class="md-nav__link">
+  <a href="#what-a-local-run-changes" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Running in Virtual Environment
+        What a local run changes
       
     </span>
   </a>
-  
-    <nav class="md-nav" aria-label="Running in Virtual Environment">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#web-service" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Web Service
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#running-in-docker-container" class="md-nav__link">
+  <a href="#keep-a-local-run-away-from-production-data" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Running in Docker Container
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Running in Docker Container">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#web-service_1" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Web Service
+        Keep a local run away from production data
       
     </span>
   </a>
   
 </li>
-        
-      </ul>
-    </nav>
+      
+        <li class="md-nav__item">
+  <a href="#set-up" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Set up
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#run-from-the-virtual-environment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Run from the virtual environment
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#run-in-docker" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Run in Docker
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#call-the-api" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Call the API
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#environment-variables" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Environment variables
+      
+    </span>
+  </a>
   
 </li>
       
@@ -967,57 +1116,238 @@
   
 
 
-  <h1>Running</h1>
-
-<h2 id="running-in-virtual-environment">Running in Virtual Environment<a class="headerlink" href="#running-in-virtual-environment" title="Permanent link">&para;</a></h2>
-<h3 id="web-service">Web Service<a class="headerlink" href="#web-service" title="Permanent link">&para;</a></h3>
-<p>To run the Web Service in a virtual environment, follow these steps:</p>
-<ol>
-<li>Source your secrets:</li>
-</ol>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nb">source</span><span class="w"> </span>secrets2.sh<span class="w">  </span><span class="c1"># pragma: allowlist secret</span>
-</span></code></pre></div>
-<ol>
-<li>Start the server in development mode using Uvicorn:</li>
-</ol>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>uvicorn<span class="w"> </span>web_service.main:app<span class="w"> </span>--host<span class="w"> </span><span class="m">0</span>.0.0.0<span class="w"> </span>--port<span class="w"> </span><span class="m">8000</span><span class="w"> </span>--reload
-</span></code></pre></div>
-<ol>
-<li>For production mode, use Gunicorn with Uvicorn workers to start the server:</li>
-</ol>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>gunicorn<span class="w"> </span>--bind<span class="w"> </span><span class="m">0</span>.0.0.0:8000<span class="w"> </span>-k<span class="w"> </span>uvicorn.workers.UvicornWorker<span class="w"> </span>web_service.main:app
-</span></code></pre></div>
-<h2 id="running-in-docker-container">Running in Docker Container<a class="headerlink" href="#running-in-docker-container" title="Permanent link">&para;</a></h2>
-<h3 id="web-service_1">Web Service<a class="headerlink" href="#web-service_1" title="Permanent link">&para;</a></h3>
-<p>To build and run the Web Service in a Docker container:</p>
-<ol>
+<h1 id="running-locally">Running locally<a class="headerlink" href="#running-locally" title="Permanent link">&para;</a></h1>
+<p>This page runs the service on your machine, from a virtual environment or
+in a Docker container. The service reads its configuration from the
+<a href="#environment-variables">environment variables</a> at the end of this page;
+<a href="../3-deploying/#container-environment">Deployment</a> describes how the
+production container sets them.</p>
+<h2 id="what-a-local-run-changes">What a local run changes<a class="headerlink" href="#what-a-local-run-changes" title="Permanent link">&para;</a></h2>
+<div class="admonition warning">
+<p class="admonition-title">With real AWS keys, a local run changes the production account</p>
+<p>The service has no local or mock mode. It acts on the AWS account that
+its keys belong to, and on the MSK cluster that <code>DEFAULT_SERVERS</code>
+names:</p>
+<ul>
+<li>IAM: <code>POST /api/v3/user</code> and <code>POST /api/v3/key</code> create IAM users,
+  policies and access keys, and the <code>DELETE</code> routes delete them. When
+  the service's keys table holds no key for the caller,
+  <code>POST /api/v3/key</code>
+  deletes every access key the caller's IAM user holds before it
+  creates a new one. No variable changes where the IAM users go.</li>
+<li>DynamoDB: without <code>KEYS_TABLE_NAME</code>, <code>USERS_TABLE_NAME</code> and
+  <code>NAMESPACE_TABLE_NAME</code>, the service reads and writes the production
+  tables.</li>
+<li>MSK: with <code>DEFAULT_SERVERS</code> set, the topic routes create and delete
+  topics on that cluster, and the consumer routes read from it.</li>
+</ul>
+<p>IAM users and namespaces are named after the caller's Globus identity.
+If you call a local service with the Globus identity you use with the
+production service, it acts on the same IAM user as production and,
+with <code>DEFAULT_SERVERS</code> set, on the same topics.</p>
+</div>
+<h2 id="keep-a-local-run-away-from-production-data">Keep a local run away from production data<a class="headerlink" href="#keep-a-local-run-away-from-production-data" title="Permanent link">&para;</a></h2>
+<p>The test tables keep the service's records out of the production tables,
+but they do not isolate IAM. IAM users, policies and access keys always go
+to the account that the AWS keys belong to, named after the caller's
+Globus identity.</p>
+<ul>
 <li>
-<p>Define environment variables:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nv">SERVICE_NAME</span><span class="o">=</span>diaspora-web-service
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="nv">CONTAINER_NAME</span><span class="o">=</span>docker
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="nv">DOCKERFILE_PATH</span><span class="o">=</span>web_service/Dockerfile<span class="w">  </span><span class="c1"># pragma: allowlist secret</span>
+<p>Point the three tables at the test tables, which the live tests also
+  use. <code>.env.example</code> does this:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nv">KEYS_TABLE_NAME</span><span class="o">=</span>test-diaspora-keys-table
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nv">USERS_TABLE_NAME</span><span class="o">=</span>test-diaspora-users-table
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="nv">NAMESPACE_TABLE_NAME</span><span class="o">=</span>test-diaspora-namespace-table
 </span></code></pre></div>
+<p>If a table name is misspelt, the service creates a new table with
+that name in the account at its first write.</p>
 </li>
 <li>
-<p>Build the Docker image:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>docker<span class="w"> </span>build<span class="w"> </span>-t<span class="w"> </span><span class="nv">$CONTAINER_NAME</span><span class="w"> </span>-f<span class="w"> </span><span class="nv">$DOCKERFILE_PATH</span><span class="w"> </span>.
-</span></code></pre></div>
+<p>Leave <code>DEFAULT_SERVERS</code> unset unless you need the cluster. The topic
+  routes then change only the service's records, and creating a consumer
+  or recreating a topic fails with <code>Kafka endpoint is not configured</code>.</p>
 </li>
-<li>
-<p>Run the container:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="nb">source</span><span class="w"> </span>secrets2.sh<span class="w">  </span><span class="c1"># pragma: allowlist secret</span>
-</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>docker<span class="w"> </span>run<span class="w"> </span>-p<span class="w"> </span><span class="m">8000</span>:8000<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>-e<span class="w"> </span>AWS_ACCESS_KEY_ID<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>-e<span class="w"> </span>AWS_SECRET_ACCESS_KEY<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>-e<span class="w"> </span>SERVER_CLIENT_ID<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>-e<span class="w"> </span>SERVER_SECRET<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>-e<span class="w"> </span>AWS_ACCOUNT_ID<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>-e<span class="w"> </span>AWS_ACCOUNT_REGION<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a>-e<span class="w"> </span>MSK_CLUSTER_NAME<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-5-10"><a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="nv">$CONTAINER_NAME</span>
+<li>Call the service with a Globus identity that has no resources in the
+  production service. By default the SDK requests tokens only for the
+  production service's Globus client (<a href="#call-the-api">Call the API</a>). A
+  local service that takes SDK tokens therefore runs with the production
+  client, and the SDK signs you in with your own Globus identity, the one
+  production also knows.</li>
+<li>When you are done, and only for an identity that has no resources in
+  production, call <code>DELETE /api/v3/user</code>. It deletes the IAM user, its
+  policy, its access keys, its default namespace and that namespace's
+  topics. For an identity you also use with production, it deletes the
+  production IAM user and policy.</li>
+</ul>
+<p>If you call a local service on the test tables with an identity that has a
+key in production, your first <code>POST /api/v3/key</code> finds no key in the test
+keys table. It deletes the access keys of your production IAM user and
+creates a new one. Clients that hold your old key, such as the SDK on your
+machine, can no longer connect to the cluster. The production keys table
+still holds the deleted key, and the production service's
+<code>POST /api/v3/key</code> keeps returning it with <code>fresh</code> set to <code>false</code>. To
+recover, call <code>DELETE /api/v3/key</code> on the production service, then
+<code>POST /api/v3/key</code> there: the first deletes the IAM user's keys and the
+stored key, and the second creates and stores a new one. After that, a
+local <code>DELETE /api/v3/key</code> or <code>DELETE /api/v3/user</code> with that identity
+still acts on the production IAM user, whatever the test tables hold. A
+local <code>POST /api/v3/key</code> keeps returning the deleted key from the test
+keys table. No route removes that item without also deleting the IAM
+user's keys, so delete it from the table directly.</p>
+<p>To check only that the service starts, run it with the placeholder values
+of the unit tests (<a href="../2-testing/#run-the-unit-tests-locally">Run the unit tests locally</a>).
+It makes no AWS call and serves its API documentation at <code>/</code>. API requests
+with a well-formed token reach Globus but not AWS, and fail: Globus
+rejects the placeholder client credentials, so they get <code>500</code>
+(<a href="../architecture/#authentication">Authentication</a> lists the other
+answers).</p>
+<h2 id="set-up">Set up<a class="headerlink" href="#set-up" title="Permanent link">&para;</a></h2>
+<p>The service needs Python 3.10 to 3.14. CI runs 3.14, and the container image
+runs 3.11. A full local run also needs AWS keys for the service's account
+and the ID and secret of the service's Globus confidential client. Without
+them, you can run the unit tests and start the service with placeholders.</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>python<span class="w"> </span>-m<span class="w"> </span>venv<span class="w"> </span>.venv
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>.<span class="w"> </span>.venv/bin/activate
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span><span class="s2">".[dev]"</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>cp<span class="w"> </span>.env.example<span class="w"> </span>.env
 </span></code></pre></div>
-</li>
-</ol>
+<p>The required values are keys for the production service's AWS account
+and the production service's Globus client, so read
+<a href="#what-a-local-run-changes">What a local run changes</a> before you fill them
+in. Fill in the required values in <code>.env</code>, which git ignores. Write each value
+without quotes and without a trailing comment: <code>docker run --env-file</code>
+takes every value literally.</p>
+<h2 id="run-from-the-virtual-environment">Run from the virtual environment<a class="headerlink" href="#run-from-the-virtual-environment" title="Permanent link">&para;</a></h2>
+<p>In development mode, with reloading on code changes:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="o">(</span><span class="nb">set</span><span class="w"> </span>-a<span class="p">;</span><span class="w"> </span>.<span class="w"> </span>./.env<span class="p">;</span><span class="w"> </span><span class="nb">set</span><span class="w"> </span>+a<span class="p">;</span><span class="w"> </span><span class="nb">exec</span><span class="w"> </span>uvicorn<span class="w"> </span>web_service.main:app<span class="w"> </span>--port<span class="w"> </span><span class="m">8000</span><span class="w"> </span>--reload<span class="o">)</span>
+</span></code></pre></div>
+<p>As the container runs it, with gunicorn and one Uvicorn worker:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="o">(</span><span class="nb">set</span><span class="w"> </span>-a<span class="p">;</span><span class="w"> </span>.<span class="w"> </span>./.env<span class="p">;</span><span class="w"> </span><span class="nb">set</span><span class="w"> </span>+a<span class="p">;</span><span class="w"> </span><span class="nb">exec</span><span class="w"> </span>gunicorn<span class="w"> </span>--bind<span class="w"> </span><span class="m">127</span>.0.0.1:8000<span class="w"> </span>-k<span class="w"> </span>uvicorn.workers.UvicornWorker<span class="w"> </span>web_service.main:app<span class="o">)</span>
+</span></code></pre></div>
+<p>The parentheses run each command in a subshell, so the values from <code>.env</code>
+stay out of your shell. Run one worker only: the service keeps consumer
+instances in the worker's memory
+(<a href="../3-deploying/#one-worker">One worker</a>). gunicorn reads its worker count
+from <code>WEB_CONCURRENCY</code> and extra options from <code>GUNICORN_CMD_ARGS</code>, so a
+value of either in your shell can change the number of workers.</p>
+<p>The API documentation is at <a href="http://127.0.0.1:8000/">http://127.0.0.1:8000/</a>.</p>
+<h2 id="run-in-docker">Run in Docker<a class="headerlink" href="#run-in-docker" title="Permanent link">&para;</a></h2>
+<p>Build the image from the repository root, then run it with <code>.env</code>:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>docker<span class="w"> </span>build<span class="w"> </span>-t<span class="w"> </span>diaspora-service<span class="w"> </span>-f<span class="w"> </span>web_service/Dockerfile<span class="w"> </span>.
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>-p<span class="w"> </span><span class="m">127</span>.0.0.1:8000:8000<span class="w"> </span>--env-file<span class="w"> </span>.env<span class="w"> </span>diaspora-service
+</span></code></pre></div>
+<p>The Dockerfile pins the platform <code>linux/amd64</code>, which Lightsail runs.</p>
+<h2 id="call-the-api">Call the API<a class="headerlink" href="#call-the-api" title="Permanent link">&para;</a></h2>
+<p>Every API route needs two headers: <code>subject</code>, the caller's Globus identity ID,
+and <code>authorization</code>, a Globus bearer token. The service accepts a token
+only when it names <code>SERVER_CLIENT_ID</code> in its audience and carries the
+scope <code>https://auth.globus.org/scopes/&lt;SERVER_CLIENT_ID&gt;/action_all</code>. The
+<a href="../web/api/">API reference</a> shows how to get both headers with the
+Diaspora Event SDK. By default the SDK requests tokens for the production
+service's Globus client, so its tokens work with a local service only when
+<code>SERVER_CLIENT_ID</code> is that client's ID.</p>
+<h2 id="environment-variables">Environment variables<a class="headerlink" href="#environment-variables" title="Permanent link">&para;</a></h2>
+<p>The service checks the required variables when <code>web_service.main</code> is
+imported. A missing or empty one stops it with
+<code>AssertionError: &lt;NAME&gt; environment variable is not set.</code></p>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Required</th>
+<th>Default</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>AWS_ACCESS_KEY_ID</code></td>
+<td>yes</td>
+<td></td>
+<td>The AWS access key the service uses for IAM, DynamoDB and MSK.</td>
+</tr>
+<tr>
+<td><code>AWS_SECRET_ACCESS_KEY</code></td>
+<td>yes</td>
+<td></td>
+<td>The secret of that key.</td>
+</tr>
+<tr>
+<td><code>SERVER_CLIENT_ID</code></td>
+<td>yes</td>
+<td></td>
+<td>The ID of the Globus confidential client that tokens must be issued for.</td>
+</tr>
+<tr>
+<td><code>SERVER_SECRET</code></td>
+<td>yes</td>
+<td></td>
+<td>The secret of that client, used to introspect tokens.</td>
+</tr>
+<tr>
+<td><code>AWS_ACCOUNT_ID</code></td>
+<td>yes</td>
+<td></td>
+<td>The account in the ARNs of the IAM policies the service writes.</td>
+</tr>
+<tr>
+<td><code>AWS_ACCOUNT_REGION</code></td>
+<td>yes</td>
+<td></td>
+<td>The region of the DynamoDB tables and the MSK cluster.</td>
+</tr>
+<tr>
+<td><code>MSK_CLUSTER_NAME</code></td>
+<td>yes</td>
+<td></td>
+<td>The cluster named in those IAM policies.</td>
+</tr>
+<tr>
+<td><code>DEFAULT_SERVERS</code></td>
+<td>no</td>
+<td>unset</td>
+<td>The MSK bootstrap brokers for IAM authentication, as comma-separated <code>host:port</code> pairs. The service returns it to users with their key. Unset, the service makes no Kafka calls.</td>
+</tr>
+<tr>
+<td><code>KEYS_TABLE_NAME</code></td>
+<td>no</td>
+<td><code>diaspora-keys-table</code></td>
+<td>The DynamoDB table of access keys.</td>
+</tr>
+<tr>
+<td><code>USERS_TABLE_NAME</code></td>
+<td>no</td>
+<td><code>diaspora-users-table</code></td>
+<td>The DynamoDB table of the namespaces each user owns.</td>
+</tr>
+<tr>
+<td><code>NAMESPACE_TABLE_NAME</code></td>
+<td>no</td>
+<td><code>diaspora-namespace-table</code></td>
+<td>The DynamoDB table of the topics in each namespace.</td>
+</tr>
+<tr>
+<td><code>MAX_TOPICS_PER_NAMESPACE</code></td>
+<td>no</td>
+<td><code>50</code></td>
+<td>The most topics a namespace may hold. A value that is not a whole number of at least 1 is logged and replaced by 50.</td>
+</tr>
+<tr>
+<td><code>CONSUMER_INSTANCE_TIMEOUT_MS</code></td>
+<td>no</td>
+<td><code>300000</code> (5 minutes)</td>
+<td>How long a consumer instance may sit idle before the service closes it. A value that is not an integer, including an empty one, stops the service at start with a <code>ValueError</code>.</td>
+</tr>
+<tr>
+<td><code>IAM_USER_PERMISSIONS_BOUNDARY_ARN</code></td>
+<td>no</td>
+<td>unset</td>
+<td>The ARN of a managed policy that the service sets as the permissions boundary of every IAM user it creates. Production leaves it unset; the live tests set it (<a href="../2-testing/#the-live-tests-aws-identity">Testing</a>).</td>
+</tr>
+</tbody>
+</table>
+<p>The AWS SDK reads the two key variables itself, and with them
+<code>AWS_SESSION_TOKEN</code> when you use temporary credentials.</p>
 
 
 
