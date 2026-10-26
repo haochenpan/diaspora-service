@@ -1,4 +1,4 @@
-FROM --platform=linux/amd64 python:3.11@sha256:8f6593e62e991b818dc28750c0c67c340046a70ab5cf79df52116005ec9cbf56
+FROM --platform=linux/amd64 python:3.15@sha256:67ee282bdbe5ece1e38ea94fa68f1420e969e6176e6c826b9acc931055011bfb
 
 EXPOSE 8000/tcp
 
