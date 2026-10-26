@@ -4,7 +4,7 @@
 
 Report a vulnerability privately through
 [GitHub's private vulnerability reporting](https://github.com/haochenpan/diaspora-service/security/advisories/new).
-Do not open a public issue, pull request or discussion about it.
+Do not open a public issue or pull request about it.
 
 Include what you found, how to reproduce it, and what an attacker could do
 with it.
@@ -15,3 +15,7 @@ with it.
   deployment.
 - The Kafka console (the Diaspora Admin Console) and its startup script
   in `docs/kafka-console/`.
+
+The console runs [kafbat-ui](https://github.com/kafbat/kafka-ui). Report a
+vulnerability in kafbat-ui itself to that project; report here a problem in
+how this deployment configures or exposes it.

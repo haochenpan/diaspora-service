@@ -134,7 +134,6 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = "tests.*"
 disallow_untyped_defs = false
-ignore_missing_imports = true
 disable_error_code = ["index", "call-overload", "operator", "call-arg", "arg-type", "attr-defined"]
 
 [tool.ruff]
