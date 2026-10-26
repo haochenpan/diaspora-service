@@ -13,13 +13,17 @@ To run only integration tests:
 
 from __future__ import annotations
 
+import threading
+from unittest.mock import call
 from unittest.mock import MagicMock
 from unittest.mock import patch
 
 import pytest
 from botocore.exceptions import ClientError
+from botocore.stub import Stubber
 from kafka.errors import KafkaError
 from kafka.errors import KafkaTimeoutError
+from kafka.errors import TopicAlreadyExistsError
 
 from web_service.services import ADMIN_OPERATION_TIMEOUT_MS
 from web_service.services import ADMIN_REQUEST_TIMEOUT_MS
@@ -163,38 +167,56 @@ def test_delete_user_and_policy_partial_failure() -> None:
         cluster_name='test-cluster',
     )
 
-    # Mock delete_access_keys to succeed, but delete_policy to fail
-    with patch.object(
-        iam_service,
-        'delete_access_keys',
-    ) as mock_delete_keys:
+    policy_arn = 'arn:aws:iam::123456789012:policy/msk-policy/test-user'
+
+    # Every IAM call is stubbed, so none reaches AWS; an unexpected call
+    # raises inside the method and turns the result into a failure
+    with (
+        patch.object(
+            iam_service,
+            'delete_access_keys',
+        ) as mock_delete_keys,
+        Stubber(iam_service.iam) as stubber,
+    ):
         mock_delete_keys.return_value = {'status': 'success'}
+        stubber.add_response(
+            'detach_user_policy',
+            {},
+            {'UserName': 'test-user', 'PolicyArn': policy_arn},
+        )
+        stubber.add_response(
+            'list_policy_versions',
+            {
+                'Versions': [
+                    {'VersionId': 'v1', 'IsDefaultVersion': True},
+                    {'VersionId': 'v2', 'IsDefaultVersion': False},
+                ],
+            },
+            {'PolicyArn': policy_arn},
+        )
+        stubber.add_response(
+            'delete_policy_version',
+            {},
+            {'PolicyArn': policy_arn, 'VersionId': 'v2'},
+        )
+        # delete_policy fails with NoSuchEntity
+        stubber.add_client_error(
+            'delete_policy',
+            service_error_code='NoSuchEntity',
+            service_message='Policy not found',
+            expected_params={'PolicyArn': policy_arn},
+        )
+        stubber.add_response(
+            'delete_user',
+            {},
+            {'UserName': 'test-user'},
+        )
 
-        with (
-            patch.object(
-                iam_service.iam,
-                'detach_user_policy',
-            ),
-            patch.object(
-                iam_service.iam,
-                'delete_policy',
-            ) as mock_delete_policy,
-        ):
-            error_response = {
-                'Error': {
-                    'Code': 'NoSuchEntity',
-                    'Message': 'Policy not found',
-                },
-            }
-            mock_delete_policy.side_effect = ClientError(
-                error_response,
-                'DeletePolicy',
-            )
+        result = iam_service.delete_user_and_policy('test-user')
 
-            # Should still succeed due to suppress
-            result = iam_service.delete_user_and_policy('test-user')
-            # The method suppresses NoSuchEntityException, so should succeed
-            assert result['status'] == 'success'
+        # The method suppresses NoSuchEntityException, so should succeed
+        assert result['status'] == 'success'
+        stubber.assert_no_pending_responses()
 
 
 # ============================================================================
@@ -734,11 +756,14 @@ def test_create_user_namespace_fails_cleanup() -> None:
 def test_create_topic_dynamodb_succeeds_kafka_fails() -> None:
     """Test create_topic handles Kafka failure and cleans up DynamoDB."""
     namespace_service = MagicMock(spec=NamespaceService)
-    namespace_service.create_topic.return_value = {
-        'status': 'success',
-        'message': 'Topic created',
-        'topics': ['test-topic'],
-    }
+    namespace_service.add_topic.return_value = (
+        {
+            'status': 'success',
+            'message': 'Topic created',
+            'topics': ['test-topic'],
+        },
+        True,
+    )
     namespace_service.delete_topic.return_value = {
         'status': 'success',
         'message': 'Topic deleted',
@@ -1170,10 +1195,12 @@ def test_delete_namespace_with_topics() -> None:
 
     result = namespace_service.delete_namespace('test-subject', 'ns-test')
 
-    # Should succeed even with topics (topics remain in DynamoDB)
     assert result['status'] == 'success'
     assert 'deleted' in result['message'].lower()
     assert 'namespaces' in result
+    # The namespace's topics item is deleted with it, so a later owner of
+    # the name does not inherit its topics
+    mock_db_service.delete_namespace_topics.assert_called_once_with('ns-test')
 
 
 def test_delete_topic_namespace_not_found() -> None:
@@ -1354,11 +1381,14 @@ def test_create_topic_kafka_succeeds_dynamodb_fails() -> None:
 
     mock_namespace = MagicMock(spec=NamespaceService)
     # First call succeeds (creates in DynamoDB), but then fails on cleanup
-    mock_namespace.create_topic.return_value = {
-        'status': 'success',
-        'message': 'Topic created',
-        'topics': ['test-topic'],
-    }
+    mock_namespace.add_topic.return_value = (
+        {
+            'status': 'success',
+            'message': 'Topic created',
+            'topics': ['test-topic'],
+        },
+        True,
+    )
     # Mock delete_topic to fail (cleanup fails)
     mock_namespace.delete_topic.side_effect = Exception('Cleanup failed')
 
@@ -1373,11 +1403,14 @@ def test_create_topic_kafka_succeeds_dynamodb_fails() -> None:
     # Let's test the reverse:
     # DynamoDB succeeds, Kafka fails (already tested)
     # For this test, let's verify the cleanup path when Kafka fails
-    mock_namespace.create_topic.return_value = {
-        'status': 'success',
-        'message': 'Topic created',
-        'topics': ['test-topic'],
-    }
+    mock_namespace.add_topic.return_value = (
+        {
+            'status': 'success',
+            'message': 'Topic created',
+            'topics': ['test-topic'],
+        },
+        True,
+    )
     mock_kafka.create_topic.return_value = {
         'status': 'failure',
         'message': 'Kafka connection failed',
@@ -1456,3 +1489,670 @@ def test_generate_user_policy_edge_cases() -> None:
     assert 'Version' in policy_no_dashes
     # Should use last 12 chars
     assert subject_no_dashes[-12:] in str(policy_no_dashes)
+
+
+# ============================================================================
+# Management API Failure Paths
+# ============================================================================
+
+
+def _namespace_service_with_mock_db(
+    namespaces: list[str],
+    topics: list[str],
+) -> tuple[NamespaceService, MagicMock]:
+    """Build a real NamespaceService over a mocked DynamoDBService."""
+    mock_db_service = MagicMock(spec=DynamoDBService)
+    mock_db_service.get_user_namespaces.return_value = namespaces
+    mock_db_service.get_namespace_topics.return_value = topics
+    return NamespaceService(dynamodb_service=mock_db_service), mock_db_service
+
+
+def _track_topics(mock_db: MagicMock, topics: set[str]) -> None:
+    """Back a mocked DynamoDBService's topic calls with a set."""
+    mock_db.get_namespace_topics.side_effect = lambda _ns: sorted(topics)
+    mock_db.add_namespace_topic.side_effect = lambda _ns, t: topics.add(t)
+    mock_db.remove_namespace_topic.side_effect = lambda _ns, t: topics.discard(
+        t,
+    )
+
+
+def test_create_topic_kafka_fails_keeps_existing_entry() -> None:
+    """Test a failed create of an already listed topic keeps its entry."""
+    namespace_service, mock_db = _namespace_service_with_mock_db(
+        ['test-namespace'],
+        [],
+    )
+    topics = {'test-topic'}
+    _track_topics(mock_db, topics)
+    kafka_service = MagicMock()
+    kafka_service.create_topic.return_value = {
+        'status': 'failure',
+        'message': 'Kafka connection failed',
+    }
+    web_service = WebService(
+        iam_service=MagicMock(),
+        kafka_service=kafka_service,
+        namespace_service=namespace_service,
+    )
+
+    result = web_service.create_topic(
+        'test-subject',
+        'test-namespace',
+        'test-topic',
+    )
+
+    assert result['status'] == 'failure'
+    assert 'Failed to create Kafka topic' in result['message']
+    # The entry was there before this call, so it stays
+    assert topics == {'test-topic'}
+
+
+def test_create_topic_kafka_fails_removes_added_entry() -> None:
+    """Test a failed create of a new topic removes the entry it added."""
+    namespace_service, mock_db = _namespace_service_with_mock_db(
+        ['test-namespace'],
+        [],
+    )
+    topics: set[str] = set()
+    _track_topics(mock_db, topics)
+    kafka_service = MagicMock()
+    kafka_service.create_topic.return_value = {
+        'status': 'failure',
+        'message': 'Kafka connection failed',
+    }
+    web_service = WebService(
+        iam_service=MagicMock(),
+        kafka_service=kafka_service,
+        namespace_service=namespace_service,
+    )
+
+    result = web_service.create_topic(
+        'test-subject',
+        'test-namespace',
+        'test-topic',
+    )
+
+    assert result['status'] == 'failure'
+    mock_db.add_namespace_topic.assert_called_once_with(
+        'test-namespace',
+        'test-topic',
+    )
+    # The entry this call added is gone again
+    assert topics == set()
+
+
+def test_delete_key_iam_fails() -> None:
+    """Test delete_key reports failure and keeps the cached key."""
+    mock_iam = MagicMock()
+    mock_iam.delete_access_keys.return_value = {
+        'status': 'failure',
+        'message': 'Failed to delete access keys: throttled',
+    }
+    mock_namespace = MagicMock(spec=NamespaceService)
+    mock_namespace.dynamodb = MagicMock()
+    web_service = WebService(
+        iam_service=mock_iam,
+        kafka_service=MagicMock(),
+        namespace_service=mock_namespace,
+    )
+
+    result = web_service.delete_key('test-subject')
+
+    assert result['status'] == 'failure'
+    assert 'Failed to delete IAM access keys' in result['message']
+    assert 'throttled' in result['message']
+    mock_namespace.dynamodb.delete_key.assert_not_called()
+
+
+def test_create_key_old_key_delete_fails() -> None:
+    """Test create_key fails when the old IAM keys can't be deleted."""
+    mock_iam = MagicMock()
+    mock_iam.delete_access_keys.return_value = {
+        'status': 'failure',
+        'message': 'Failed to delete access keys: throttled',
+    }
+    mock_namespace = MagicMock(spec=NamespaceService)
+    mock_namespace.dynamodb = MagicMock()
+    mock_namespace.dynamodb.get_key.return_value = None
+    web_service = WebService(
+        iam_service=mock_iam,
+        kafka_service=MagicMock(),
+        namespace_service=mock_namespace,
+    )
+
+    with patch.object(web_service, 'create_user') as mock_create_user:
+        mock_create_user.return_value = {
+            'status': 'success',
+            'message': 'User created',
+        }
+
+        result = web_service.create_key('test-subject')
+
+    assert result['status'] == 'failure'
+    assert 'Failed to delete existing IAM access keys' in result['message']
+    mock_iam.create_access_key.assert_not_called()
+    mock_namespace.dynamodb.store_key.assert_not_called()
+
+
+def test_delete_user_kafka_fails() -> None:
+    """Test delete_user stops and keeps its records when Kafka fails."""
+    mock_iam = MagicMock()
+    kafka_service = MagicMock()
+    kafka_service.delete_topic.return_value = {
+        'status': 'failure',
+        'message': 'Failed to delete Kafka topic ns-test123.topic-a',
+    }
+    mock_namespace = MagicMock(spec=NamespaceService)
+    mock_namespace.dynamodb = MagicMock()
+    mock_namespace.dynamodb.get_user_namespaces.return_value = ['ns-test123']
+    mock_namespace.generate_default.return_value = 'ns-test123'
+    mock_namespace.dynamodb.get_namespace_topics.return_value = [
+        'topic-a',
+        'topic-b',
+    ]
+    web_service = WebService(
+        iam_service=mock_iam,
+        kafka_service=kafka_service,
+        namespace_service=mock_namespace,
+    )
+
+    result = web_service.delete_user('test-subject')
+
+    assert result['status'] == 'failure'
+    assert 'Failed to delete Kafka topic' in result['message']
+    kafka_service.delete_topic.assert_called_once_with('ns-test123', 'topic-a')
+    mock_namespace.delete_topic.assert_not_called()
+    mock_namespace.delete_namespace.assert_not_called()
+    mock_namespace.dynamodb.delete_key.assert_not_called()
+    mock_iam.delete_user_and_policy.assert_not_called()
+
+
+def test_delete_user_default_namespace_not_owned() -> None:
+    """Test delete_user leaves a default namespace it doesn't own alone."""
+    mock_iam = MagicMock()
+    mock_iam.delete_user_and_policy.return_value = {
+        'status': 'success',
+        'message': 'IAM user deleted',
+    }
+    kafka_service = MagicMock()
+    namespace_service, mock_db = _namespace_service_with_mock_db(
+        [],
+        ['someone-elses-topic'],
+    )
+    web_service = WebService(
+        iam_service=mock_iam,
+        kafka_service=kafka_service,
+        namespace_service=namespace_service,
+    )
+
+    result = web_service.delete_user('test-subject')
+
+    assert result['status'] == 'success'
+    kafka_service.delete_topic.assert_not_called()
+    mock_db.remove_namespace_topic.assert_not_called()
+    mock_db.delete_namespace_topics.assert_not_called()
+    mock_db.remove_global_namespace.assert_not_called()
+
+
+def test_delete_namespace_topics_deletes_item() -> None:
+    """Test delete_namespace_topics deletes the namespace's item."""
+    db_service = DynamoDBService(
+        region='us-east-1',
+        keys_table_name='test-diaspora-keys-table',
+        users_table_name='test-diaspora-users-table',
+        namespace_table_name='test-diaspora-namespace-table',
+    )
+    with patch.object(db_service.dynamodb, 'delete_item') as mock_delete:
+        db_service.delete_namespace_topics('ns-test')
+
+    mock_delete.assert_called_once_with(
+        TableName='test-diaspora-namespace-table',
+        Key={'namespace': {'S': 'ns-test'}},
+    )
+
+
+def test_delete_namespace_topics_table_missing() -> None:
+    """Test delete_namespace_topics is a no-op when the table is missing."""
+    db_service = DynamoDBService(
+        region='us-east-1',
+        keys_table_name='test-diaspora-keys-table',
+        users_table_name='test-diaspora-users-table',
+        namespace_table_name='test-diaspora-namespace-table',
+    )
+    with Stubber(db_service.dynamodb) as stubber:
+        stubber.add_client_error(
+            'delete_item',
+            service_error_code='ResourceNotFoundException',
+        )
+
+        db_service.delete_namespace_topics('ns-test')
+
+        stubber.assert_no_pending_responses()
+
+
+def test_recreate_topic_topic_still_exists() -> None:
+    """Test recreate_topic fails if the topic still exists after retries."""
+    kafka_service = KafkaService(
+        bootstrap_servers='test-servers',
+        region='us-east-1',
+    )
+
+    with (
+        patch('web_service.services.KafkaAdminClient') as mock_admin_class,
+        patch('time.sleep'),
+    ):
+        mock_admin = MagicMock()
+        mock_admin_class.return_value = mock_admin
+        mock_admin.create_topics.side_effect = TopicAlreadyExistsError(
+            'Topic already exists',
+        )
+
+        result = kafka_service.recreate_topic('test-namespace', 'test-topic')
+
+    assert result is not None
+    assert result['status'] == 'failure'
+    assert 'Failed to create Kafka topic' in result['message']
+    assert 'after 3 attempts' in result['message']
+    assert mock_admin.create_topics.call_count == 3
+
+
+def test_recreate_topic_retries_while_topic_exists() -> None:
+    """Test recreate_topic retries a create that finds the topic present."""
+    kafka_service = KafkaService(
+        bootstrap_servers='test-servers',
+        region='us-east-1',
+    )
+
+    with (
+        patch('web_service.services.KafkaAdminClient') as mock_admin_class,
+        patch('time.sleep'),
+    ):
+        mock_admin = MagicMock()
+        mock_admin_class.return_value = mock_admin
+        mock_admin.create_topics.side_effect = [
+            TopicAlreadyExistsError('Topic already exists'),
+            None,
+        ]
+
+        result = kafka_service.recreate_topic('test-namespace', 'test-topic')
+
+    assert result == {'status': 'success', 'message': 'Topic recreated'}
+    assert mock_admin.create_topics.call_count == EXPECTED_RETRY_COUNT
+
+
+def test_create_topic_already_exists_is_success() -> None:
+    """Test create_topic still treats an existing topic as success."""
+    kafka_service = KafkaService(
+        bootstrap_servers='test-servers',
+        region='us-east-1',
+    )
+
+    with patch('web_service.services.KafkaAdminClient') as mock_admin_class:
+        mock_admin = MagicMock()
+        mock_admin_class.return_value = mock_admin
+        mock_admin.create_topics.side_effect = TopicAlreadyExistsError(
+            'Topic already exists',
+        )
+
+        result = kafka_service.create_topic('test-namespace', 'test-topic')
+
+    assert result == {'status': 'success', 'message': 'Topic already exists'}
+    mock_admin.create_topics.assert_called_once()
+
+
+def test_delete_topic_kafka_only_reports_deleted() -> None:
+    """Test deleting an owner's Kafka-only topic reports its deletion."""
+    kafka_service = MagicMock()
+    kafka_service.delete_topic.return_value = {
+        'status': 'success',
+        'message': 'Topic deleted',
+    }
+    namespace_service, mock_db = _namespace_service_with_mock_db(
+        ['test-namespace'],
+        ['other-topic'],
+    )
+    web_service = WebService(
+        iam_service=MagicMock(),
+        kafka_service=kafka_service,
+        namespace_service=namespace_service,
+    )
+
+    result = web_service.delete_topic(
+        'test-subject',
+        'test-namespace',
+        'test-topic',
+    )
+
+    assert result == {
+        'status': 'success',
+        'message': 'Topic test-topic deleted from test-namespace',
+        'topics': ['other-topic'],
+    }
+    mock_db.remove_namespace_topic.assert_not_called()
+
+
+def test_delete_topic_absent_everywhere_reports_not_found() -> None:
+    """Test deleting a topic absent from Kafka and DynamoDB says so."""
+    kafka_service = MagicMock()
+    kafka_service.delete_topic.return_value = {
+        'status': 'success',
+        'message': 'Topic does not exist',
+    }
+    namespace_service, _ = _namespace_service_with_mock_db(
+        ['test-namespace'],
+        [],
+    )
+    web_service = WebService(
+        iam_service=MagicMock(),
+        kafka_service=kafka_service,
+        namespace_service=namespace_service,
+    )
+
+    result = web_service.delete_topic(
+        'test-subject',
+        'test-namespace',
+        'test-topic',
+    )
+
+    assert result['status'] == 'success'
+    assert result['message'] == 'Topic test-topic not found in test-namespace'
+
+
+def test_delete_user_kafka_topic_already_gone() -> None:
+    """Test delete_user goes on when Kafka says a topic doesn't exist."""
+    mock_iam = MagicMock()
+    mock_iam.delete_user_and_policy.return_value = {
+        'status': 'success',
+        'message': 'IAM user deleted',
+    }
+    kafka_service = MagicMock()
+    kafka_service.delete_topic.return_value = {
+        'status': 'success',
+        'message': 'Topic does not exist',
+    }
+    mock_namespace = MagicMock(spec=NamespaceService)
+    mock_namespace.dynamodb = MagicMock()
+    mock_namespace.dynamodb.get_user_namespaces.return_value = ['ns-test123']
+    mock_namespace.generate_default.return_value = 'ns-test123'
+    mock_namespace.dynamodb.get_namespace_topics.return_value = ['topic-a']
+    web_service = WebService(
+        iam_service=mock_iam,
+        kafka_service=kafka_service,
+        namespace_service=mock_namespace,
+    )
+
+    result = web_service.delete_user('test-subject')
+
+    assert result == {
+        'status': 'success',
+        'message': 'User test-subject deleted',
+    }
+    mock_namespace.delete_topic.assert_called_once_with(
+        'test-subject',
+        'ns-test123',
+        'topic-a',
+    )
+    mock_namespace.delete_namespace.assert_called_once_with(
+        'test-subject',
+        'ns-test123',
+    )
+    mock_iam.delete_user_and_policy.assert_called_once_with('test-subject')
+
+
+def test_delete_user_second_kafka_topic_fails() -> None:
+    """Test delete_user keeps the rows from the first failed Kafka delete."""
+    mock_iam = MagicMock()
+    kafka_service = MagicMock()
+    kafka_service.delete_topic.side_effect = [
+        {'status': 'success', 'message': 'Topic deleted'},
+        {
+            'status': 'failure',
+            'message': 'Failed to delete Kafka topic ns-test123.topic-b',
+        },
+    ]
+    namespace_service, mock_db = _namespace_service_with_mock_db(
+        ['ns-test123'],
+        [],
+    )
+    topics = {'topic-a', 'topic-b'}
+    _track_topics(mock_db, topics)
+    web_service = WebService(
+        iam_service=mock_iam,
+        kafka_service=kafka_service,
+        namespace_service=namespace_service,
+    )
+
+    with patch.object(
+        namespace_service,
+        'generate_default',
+        return_value='ns-test123',
+    ):
+        result = web_service.delete_user('test-subject')
+
+    assert result['status'] == 'failure'
+    assert 'ns-test123.topic-b' in result['message']
+    # The first topic's row went with it; the second's row and the
+    # namespace stay, and IAM is untouched
+    assert topics == {'topic-b'}
+    mock_db.delete_namespace_topics.assert_not_called()
+    mock_db.remove_user_namespace.assert_not_called()
+    mock_iam.delete_user_and_policy.assert_not_called()
+
+
+def test_delete_namespace_deletes_topics_item_first() -> None:
+    """Test delete_namespace drops the topics item before the name."""
+    namespace_service, mock_db = _namespace_service_with_mock_db(
+        ['ns-test'],
+        [],
+    )
+
+    namespace_service.delete_namespace('test-subject', 'ns-test')
+
+    removals = [
+        c
+        for c in mock_db.mock_calls
+        if c[0]
+        in (
+            'delete_namespace_topics',
+            'remove_user_namespace',
+            'remove_global_namespace',
+        )
+    ]
+    assert removals == [
+        call.delete_namespace_topics('ns-test'),
+        call.remove_user_namespace('test-subject', 'ns-test'),
+        call.remove_global_namespace('ns-test'),
+    ]
+
+
+def test_delete_namespace_topics_item_fails_keeps_name() -> None:
+    """Test a failed topics item delete leaves the namespace owned."""
+    namespace_service, mock_db = _namespace_service_with_mock_db(
+        ['ns-test'],
+        [],
+    )
+    mock_db.delete_namespace_topics.side_effect = Exception('DynamoDB down')
+
+    with pytest.raises(Exception, match='DynamoDB down'):
+        namespace_service.delete_namespace('test-subject', 'ns-test')
+
+    mock_db.remove_user_namespace.assert_not_called()
+    mock_db.remove_global_namespace.assert_not_called()
+
+
+def test_delete_namespace_waits_for_topic_changes() -> None:
+    """Test delete_namespace runs under the lock topic changes take."""
+    namespace_service, mock_db = _namespace_service_with_mock_db(
+        ['ns-test'],
+        [],
+    )
+    results: list[dict[str, object]] = []
+
+    with namespace_service._global_lock:
+        worker = threading.Thread(
+            target=lambda: results.append(
+                namespace_service.delete_namespace('test-subject', 'ns-test'),
+            ),
+        )
+        worker.start()
+        worker.join(timeout=0.2)
+        # Held off while a topic change (here, the test) holds the lock
+        assert worker.is_alive()
+        mock_db.get_user_namespaces.assert_not_called()
+        mock_db.delete_namespace_topics.assert_not_called()
+
+    worker.join(timeout=5)
+    assert not worker.is_alive()
+    assert results[0]['status'] == 'success'
+    mock_db.delete_namespace_topics.assert_called_once_with('ns-test')
+
+
+def test_create_topic_exists_after_timeout_is_success() -> None:
+    """Test a topic found after this call's timed-out attempt is a success.
+
+    The timed-out attempt may have created the topic before failing.
+    """
+    kafka_service = KafkaService(
+        bootstrap_servers='test-servers',
+        region='us-east-1',
+    )
+
+    with (
+        patch('web_service.services.KafkaAdminClient') as mock_admin_class,
+        patch('time.sleep') as mock_sleep,
+    ):
+        mock_admin = MagicMock()
+        mock_admin_class.return_value = mock_admin
+        mock_admin.create_topics.side_effect = [
+            KafkaTimeoutError('Request timed out'),
+            TopicAlreadyExistsError('Topic already exists'),
+        ]
+
+        result = kafka_service.create_topic(
+            'test-namespace',
+            'test-topic',
+            exists_ok=False,
+        )
+
+    assert result is not None
+    assert result['status'] == 'success'
+    assert mock_admin.create_topics.call_count == EXPECTED_RETRY_COUNT
+    mock_sleep.assert_not_called()
+
+
+def test_create_topic_still_exists_waits_and_fails() -> None:
+    """Test a topic that stays present is retried after waits, then fails."""
+    kafka_service = KafkaService(
+        bootstrap_servers='test-servers',
+        region='us-east-1',
+    )
+
+    with (
+        patch('web_service.services.KafkaAdminClient') as mock_admin_class,
+        patch('time.sleep') as mock_sleep,
+    ):
+        mock_admin = MagicMock()
+        mock_admin_class.return_value = mock_admin
+        mock_admin.create_topics.side_effect = TopicAlreadyExistsError(
+            'Topic already exists',
+        )
+
+        result = kafka_service.create_topic(
+            'test-namespace',
+            'test-topic',
+            exists_ok=False,
+        )
+
+    assert result is not None
+    assert result['status'] == 'failure'
+    assert 'after 3 attempts' in result['message']
+    assert mock_admin.create_topics.call_count == 3
+    # A wait before each retry, none after the last attempt
+    assert mock_sleep.call_args_list == [call(2), call(2)]
+
+
+def _list_two_keys(stubber: Stubber) -> None:
+    """Stub list_access_keys to return two keys for test-user."""
+    stubber.add_response(
+        'list_access_keys',
+        {
+            'AccessKeyMetadata': [
+                {
+                    'UserName': 'test-user',
+                    'AccessKeyId': 'TESTKEYID00000000001',
+                    'Status': 'Active',
+                },
+                {
+                    'UserName': 'test-user',
+                    'AccessKeyId': 'TESTKEYID00000000002',
+                    'Status': 'Active',
+                },
+            ],
+        },
+        {'UserName': 'test-user'},
+    )
+
+
+def test_delete_access_keys_first_key_already_gone() -> None:
+    """Test delete_access_keys deletes the rest when one key is gone."""
+    iam_service = IAMService(
+        account_id='123456789012',
+        region='us-east-1',
+        cluster_name='test-cluster',
+    )
+
+    with Stubber(iam_service.iam) as stubber:
+        _list_two_keys(stubber)
+        stubber.add_client_error(
+            'delete_access_key',
+            service_error_code='NoSuchEntity',
+            expected_params={
+                'UserName': 'test-user',
+                'AccessKeyId': 'TESTKEYID00000000001',
+            },
+        )
+        stubber.add_response(
+            'delete_access_key',
+            {},
+            {'UserName': 'test-user', 'AccessKeyId': 'TESTKEYID00000000002'},
+        )
+
+        result = iam_service.delete_access_keys('test-user')
+
+        assert result['status'] == 'success'
+        stubber.assert_no_pending_responses()
+
+
+def test_delete_access_keys_second_key_fails() -> None:
+    """Test delete_access_keys fails when a key can't be deleted."""
+    iam_service = IAMService(
+        account_id='123456789012',
+        region='us-east-1',
+        cluster_name='test-cluster',
+    )
+
+    with Stubber(iam_service.iam) as stubber:
+        _list_two_keys(stubber)
+        stubber.add_client_error(
+            'delete_access_key',
+            service_error_code='NoSuchEntity',
+            expected_params={
+                'UserName': 'test-user',
+                'AccessKeyId': 'TESTKEYID00000000001',
+            },
+        )
+        stubber.add_client_error(
+            'delete_access_key',
+            service_error_code='ServiceFailure',
+            service_message='Internal failure',
+            expected_params={
+                'UserName': 'test-user',
+                'AccessKeyId': 'TESTKEYID00000000002',
+            },
+        )
+
+        result = iam_service.delete_access_keys('test-user')
+
+        assert result['status'] == 'failure'
+        assert 'Failed to delete access keys' in result['message']
+        stubber.assert_no_pending_responses()
