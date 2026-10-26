@@ -410,6 +410,7 @@ class DynamoDBService:
             response = self.dynamodb.get_item(
                 TableName=self.keys_table_name,
                 Key={'subject': {'S': subject}},
+                ConsistentRead=True,
             )
             if 'Item' in response:
                 return {
@@ -452,6 +453,7 @@ class DynamoDBService:
             response = self.dynamodb.get_item(
                 TableName=self.users_table_name,
                 Key={'subject': {'S': subject}},
+                ConsistentRead=True,
             )
             if 'Item' in response and 'namespaces' in response['Item']:
                 return sorted(response['Item']['namespaces']['SS'])
@@ -540,6 +542,7 @@ class DynamoDBService:
             response = self.dynamodb.get_item(
                 TableName=self.users_table_name,
                 Key={'subject': {'S': GLOBAL_NAMESPACES_KEY}},
+                ConsistentRead=True,
             )
             if 'Item' in response and 'namespaces' in response['Item']:
                 return set(response['Item']['namespaces']['SS'])
@@ -658,6 +661,7 @@ class DynamoDBService:
             response = self.dynamodb.get_item(
                 TableName=self.namespace_table_name,
                 Key={'namespace': {'S': namespace}},
+                ConsistentRead=True,
             )
             if 'Item' in response and 'topics' in response['Item']:
                 return sorted(response['Item']['topics']['SS'])
