@@ -305,6 +305,8 @@ Clients of the earlier routes see these changes:
 - `base_uri` is an absolute URL. A client that built an instance's URL as the host followed by `base_uri` must use `base_uri` alone.
 - A fetch from a json instance must send `Accept: application/vnd.kafka.json.v2+json`. Without it, or with `*/*`, it is refused with 406 and 40601, and with `application/json` with 406 and 406.
 - A json instance returns JSON keys and values as JSON values, not as strings, and records carry `headers`.
+- A json instance refuses a fetch whose first record has a key or value that is not UTF-8 with 408 and 40801, where the earlier routes returned it as base64. Read such records with a binary instance.
+- Replies have the content type `application/vnd.kafka.v2+json`, or a fetch's chosen v2 type, not `application/json`.
 - `max_bytes` counts bytes, a commit answers `[]`, and `GET …/offsets` leaves out partitions never committed.
 
 #### Instance lifecycle
