@@ -99,7 +99,7 @@ curl -X POST "https://diaspora-web-service.qpp943wkvr7b2.us-east-1.cs.amazonligh
   -H "Content-Type: application/json" \
   -d '{"format": "json", "auto.offset.reset": "earliest"}'
 
-# Subscribe to topics
+# Subscribe to a list of topics (topic patterns are not supported)
 curl -X POST "https://diaspora-web-service.qpp943wkvr7b2.us-east-1.cs.amazonlightsail.com/api/v3/$NAMESPACE/consumers/my-group/instances/$INSTANCE_ID/subscription" \
   -H "subject: $SUBJECT" \
   -H "authorization: $AUTHORIZATION" \

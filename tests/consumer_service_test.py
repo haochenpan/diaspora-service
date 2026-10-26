@@ -516,39 +516,23 @@ def test_subscribe_topics_success(
     )
 
 
-def test_subscribe_pattern_success(
+@pytest.mark.parametrize('topics', (None, []))
+def test_subscribe_no_topics(
     populated_service: ConsumerService,
     mock_kafka_consumer: MagicMock,
+    topics: list[str] | None,
 ) -> None:
-    """Test subscribe with topic_pattern."""
+    """Test subscribe with a missing or empty topics list returns 422."""
     body, status = populated_service.subscribe(
         SUBJECT,
         NAMESPACE,
         GROUP_NAME,
         INSTANCE_ID,
-        topic_pattern='test-.*',
-    )
-    assert status == 204
-    assert body is None
-    mock_kafka_consumer.subscribe.assert_called_once_with(
-        pattern=f'{NAMESPACE}\\.test-.*',
-    )
-
-
-def test_subscribe_no_topics_no_pattern(
-    populated_service: ConsumerService,
-) -> None:
-    """Test subscribe with neither topics nor pattern returns 422."""
-    body, status = populated_service.subscribe(
-        SUBJECT,
-        NAMESPACE,
-        GROUP_NAME,
-        INSTANCE_ID,
-        topics=None,
-        topic_pattern=None,
+        topics=topics,
     )
     assert status == 422
     assert body['error_code'] == 42204
+    mock_kafka_consumer.subscribe.assert_not_called()
 
 
 def test_subscribe_consumer_not_found(
@@ -605,6 +589,28 @@ def test_get_subscription_success(
     )
     assert status == 200
     assert body['topics'] == ['topicA', 'topicB']
+
+
+def test_get_subscription_drops_topics_outside_namespace(
+    populated_service: ConsumerService,
+    mock_kafka_consumer: MagicMock,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Test get_subscription drops and logs topics outside the namespace."""
+    mock_kafka_consumer.subscription.return_value = {
+        f'{NAMESPACE}.mine',
+        'ns-other.theirs',
+    }
+    with caplog.at_level(logging.WARNING):
+        body, status = populated_service.get_subscription(
+            SUBJECT,
+            NAMESPACE,
+            GROUP_NAME,
+            INSTANCE_ID,
+        )
+    assert status == 200
+    assert body['topics'] == ['mine']
+    assert 'ns-other.theirs' in caplog.text
 
 
 def test_get_subscription_empty(
@@ -814,6 +820,32 @@ def test_poll_records_null_key_and_value(
     assert status == 200
     assert body[0]['key'] is None
     assert body[0]['value'] is None
+
+
+def test_poll_records_drops_topics_outside_namespace(
+    populated_service: ConsumerService,
+    mock_kafka_consumer: MagicMock,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Test poll_records drops and logs records outside the namespace."""
+    mine = TopicPartition(f'{NAMESPACE}.mine', 0)
+    theirs = TopicPartition('ns-other.theirs', 0)
+    msg = MagicMock()
+    msg.key = None
+    msg.value = b'v'
+    msg.offset = 7
+    mock_kafka_consumer.poll.return_value = {mine: [msg], theirs: [msg]}
+
+    with caplog.at_level(logging.WARNING):
+        body, status = populated_service.poll_records(
+            SUBJECT,
+            NAMESPACE,
+            GROUP_NAME,
+            INSTANCE_ID,
+        )
+    assert status == 200
+    assert [r['topic'] for r in body] == ['mine']
+    assert 'ns-other.theirs' in caplog.text
 
 
 # ============================================================================
@@ -1032,6 +1064,28 @@ def test_get_assignments_success(
         {'topic': 't1', 'partition': 0},
         {'topic': 't1', 'partition': 1},
     ]
+
+
+def test_get_assignments_drops_topics_outside_namespace(
+    populated_service: ConsumerService,
+    mock_kafka_consumer: MagicMock,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Test get_assignments drops and logs topics outside the namespace."""
+    mock_kafka_consumer.assignment.return_value = {
+        TopicPartition(f'{NAMESPACE}.mine', 0),
+        TopicPartition('ns-other.theirs', 0),
+    }
+    with caplog.at_level(logging.WARNING):
+        body, status = populated_service.get_assignments(
+            SUBJECT,
+            NAMESPACE,
+            GROUP_NAME,
+            INSTANCE_ID,
+        )
+    assert status == 200
+    assert body['partitions'] == [{'topic': 'mine', 'partition': 0}]
+    assert 'ns-other.theirs' in caplog.text
 
 
 def test_get_assignments_empty(

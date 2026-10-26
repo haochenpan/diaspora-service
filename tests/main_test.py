@@ -1242,16 +1242,28 @@ async def test_seek_consumer_end_namespace_failure(
 
 
 @pytest.mark.asyncio
-async def test_subscribe_consumer_mutual_exclusivity(
+@pytest.mark.parametrize(
+    ('topics', 'topic_pattern'),
+    (
+        (None, 'test-.*'),
+        (None, 'x|.*'),
+        (None, ''),
+        (['t1'], '.*'),
+    ),
+)
+async def test_subscribe_consumer_topic_pattern_refused(
     mock_diaspora_service: DiasporaService,
-    mock_web_service: MagicMock,
-    mock_consumer_service: MagicMock,
     valid_subject: str,
     valid_token: str,
+    topics: list[str] | None,
+    topic_pattern: str,
 ) -> None:
-    """Test subscribe returns 409 when both topics and pattern given."""
+    """Test subscribe returns 422 for any request that sets topic_pattern."""
+    mock_web_service = mock_diaspora_service.web_service
     _setup_namespace_success(mock_web_service)
-    body = SubscriptionRequest(topics=['t1'], topic_pattern='.*')
+    ns_db = mock_web_service.namespace_service.dynamodb
+    ns_db.get_namespace_topics.return_value = ['t1']
+    body = SubscriptionRequest(topics=topics, topic_pattern=topic_pattern)
     response = await mock_diaspora_service.subscribe_consumer(
         namespace=CONSUMER_NS,
         group_name=CONSUMER_GROUP,
@@ -1260,10 +1272,41 @@ async def test_subscribe_consumer_mutual_exclusivity(
         subject=valid_subject,
         token=valid_token,
     )
-    assert response.status_code == 409
+    assert response.status_code == 422
     resp_body = _response_json(response)
-    assert resp_body['error_code'] == 40903
-    mock_consumer_service.subscribe.assert_not_called()
+    assert resp_body['error_code'] == 42204
+    assert 'topic_pattern is not supported' in resp_body['message']
+    mock_diaspora_service.consumer_service.subscribe.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'body',
+    (SubscriptionRequest(), SubscriptionRequest(topics=[])),
+    ids=('missing', 'empty'),
+)
+async def test_subscribe_consumer_no_topics_refused(
+    mock_diaspora_service: DiasporaService,
+    valid_subject: str,
+    valid_token: str,
+    body: SubscriptionRequest,
+) -> None:
+    """Test subscribe returns 422 for a missing or empty topics list."""
+    mock_web_service = mock_diaspora_service.web_service
+    _setup_namespace_success(mock_web_service)
+    response = await mock_diaspora_service.subscribe_consumer(
+        namespace=CONSUMER_NS,
+        group_name=CONSUMER_GROUP,
+        instance_id=CONSUMER_INST,
+        body=body,
+        subject=valid_subject,
+        token=valid_token,
+    )
+    assert response.status_code == 422
+    resp_body = _response_json(response)
+    assert resp_body['error_code'] == 42204
+    assert 'non-empty list of topics' in resp_body['message']
+    mock_diaspora_service.consumer_service.subscribe.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -1408,6 +1451,13 @@ async def test_subscribe_consumer_success(
         token=valid_token,
     )
     assert response.status_code == 204
+    mock_consumer_service.subscribe.assert_called_once_with(
+        subject=valid_subject,
+        namespace=CONSUMER_NS,
+        group_name=CONSUMER_GROUP,
+        instance_id=CONSUMER_INST,
+        topics=['t1'],
+    )
 
 
 @pytest.mark.asyncio
