@@ -2509,6 +2509,6 @@ def test_create_key_replaces_a_key_iam_no_longer_holds() -> None:
     web_service.namespace_service.dynamodb.store_key.assert_called_once_with(
         subject='test-subject',
         access_key='NEWKEY',
-        secret_key='new-secret',
+        secret_key='new-secret',  # pragma: allowlist secret
         create_date='2026-10-26T00:00:00+00:00',
     )
