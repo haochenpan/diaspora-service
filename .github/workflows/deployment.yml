@@ -4,22 +4,18 @@ on:
   push:
     branches:
       - main
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
+      - "mkdocs.yml"
   workflow_dispatch:
-    inputs:
-      service_names:
-        description: "Comma-separated names of Lightsail services"
-        required: true
-        default: "diaspora-web-service"
-      container_names:
-        description: "Comma-separated names of Docker containers"
-        required: true
-        default: "docker"
-      dockerfile_paths:
-        description: "Comma-separated paths to Dockerfiles"
-        required: true
-        default: "web_service/Dockerfile"
-  schedule:
-    - cron: "0 9 * * *" # 3 am CST
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production
+  cancel-in-progress: false
 
 jobs:
   deploy-lightsail-containers:
@@ -42,7 +38,7 @@ jobs:
 
       - name: Verify AWS credential
         run: |
-          aws sts get-caller-identity
+          aws sts get-caller-identity --output none
 
       - name: Install AWS Lightsail plugin
         run: |
@@ -70,25 +66,12 @@ jobs:
           docker build -t $CONTAINER_NAME -f $DOCKERFILE_PATH .
           docker images
 
-      - name: Delete old container images
-        env:
-          SERVICE_NAME: ${{ matrix.service_name }}
-        run: |
-            output=$(aws lightsail get-container-images --service-name $SERVICE_NAME --no-paginate --output text)
-            container_names=($(echo "$output" | awk '{print $NF}'))
-
-            for name in "${container_names[@]:1}"; do
-              echo "IMAGE TO DELETE"
-              echo "$name"
-              aws lightsail delete-container-image --region us-east-1 --service-name $SERVICE_NAME --image "$name" || true
-            done
-
       - name: Idempotently create Lightsail container service
         env:
           SERVICE_NAME: ${{ matrix.service_name }}
         continue-on-error: true
         run: |
-          aws lightsail create-container-service --region us-east-1 --service-name $SERVICE_NAME --power small --scale 1
+          aws lightsail create-container-service --region us-east-1 --service-name "$SERVICE_NAME" --power micro --scale 1
 
       - name: Push Docker image to Lightsail and deploy
         env:
@@ -145,7 +128,8 @@ jobs:
           aws lightsail create-container-service-deployment --region us-east-1 \
               --service-name $SERVICE_NAME \
               --containers "$containers" \
-              --public-endpoint "$public_endpoint"
+              --public-endpoint "$public_endpoint" \
+              --output none
 
       - name: Wait for the deployment to become active
         env:
@@ -187,3 +171,55 @@ jobs:
 
           echo "::error::Deployment $version is not active after 20 minutes"
           exit 1
+
+      - name: Delete container images no longer needed
+        env:
+          SERVICE_NAME: ${{ matrix.service_name }}
+        continue-on-error: true
+        run: |
+          # Keep the images of the active deployment, of any deployment still
+          # activating, and of the most recent inactive deployment (the
+          # rollback target); delete the rest.
+          if ! deployments=$(aws lightsail get-container-service-deployments --region us-east-1 \
+              --service-name "$SERVICE_NAME" \
+              --query 'deployments[].{version: version, state: state, images: containers.*.image}' \
+              --output json); then
+            echo "::warning::Could not list deployments of $SERVICE_NAME; no images deleted"
+            exit 0
+          fi
+
+          if [ "$(jq '[.[] | select(.state == "ACTIVE")] | length' <<< "$deployments")" -eq 0 ]; then
+            echo "::warning::No active deployment of $SERVICE_NAME found; no images deleted"
+            exit 0
+          fi
+
+          if jq -e '[.[] | select(.state == "ACTIVE" or .state == "ACTIVATING")
+                  | (.images // []) | length] | any(. == 0)' <<< "$deployments" > /dev/null; then
+            echo "::warning::A deployment of $SERVICE_NAME in use names no image; no images deleted"
+            exit 0
+          fi
+
+          keep=$(jq -c '
+              sort_by(.version) | reverse
+              | ([.[] | select(.state == "ACTIVE" or .state == "ACTIVATING") | .images[]]
+                 + ([.[] | select(.state == "INACTIVE" and ((.images // []) | length) > 0)]
+                    | .[:1] | map(.images[])))
+              | unique' <<< "$deployments")
+
+          if ! images=$(aws lightsail get-container-images --region us-east-1 \
+              --service-name "$SERVICE_NAME" \
+              --query 'containerImages[].image' --output json); then
+            echo "::warning::Could not list container images of $SERVICE_NAME; no images deleted"
+            exit 0
+          fi
+
+          echo "Keeping: $(jq -r 'join(", ")' <<< "$keep")"
+
+          jq -r --argjson keep "$keep" '.[] | select(IN($keep[]) | not)' <<< "$images" |
+          while read -r image; do
+            echo "Deleting $image"
+            if ! aws lightsail delete-container-image --region us-east-1 \
+                --service-name "$SERVICE_NAME" --image "$image"; then
+              echo "::warning::Could not delete container image $image"
+            fi
+          done
