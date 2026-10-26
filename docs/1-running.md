@@ -125,7 +125,7 @@ In development mode, with reloading on code changes:
 As the container runs it, with gunicorn and one Uvicorn worker:
 
 ```bash
-(set -a; . ./.env; set +a; exec gunicorn --bind 127.0.0.1:8000 -k uvicorn_worker.UvicornWorker web_service.main:app)
+(set -a; . ./.env; set +a; exec gunicorn --bind 127.0.0.1:8000 -k web_service.worker.Worker --graceful-timeout 30 web_service.main:app)
 ```
 
 The parentheses run each command in a subshell, so the values from `.env`

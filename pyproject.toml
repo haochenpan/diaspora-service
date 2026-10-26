@@ -108,7 +108,7 @@ warn_unused_ignores = true
 
 # No type stubs are published for these.
 [[tool.mypy.overrides]]
-module = ["aws_msk_iam_sasl_signer", "kafka", "kafka.*"]
+module = ["aws_msk_iam_sasl_signer", "kafka", "kafka.*", "uvicorn_worker"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

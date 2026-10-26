@@ -152,6 +152,14 @@ instance. Clients then get `40403` and must create a new instance. A new
 instance in the same consumer group starts from the offsets the group last
 committed to Kafka.
 
+When the container gets SIGTERM, gunicorn gives the worker 30 s
+(`--graceful-timeout`) to stop and then kills it. The worker,
+`web_service.worker.Worker`, stops accepting connections and waits up to
+20 s for open requests, then cancels any still running. It then runs the
+service's shutdown, which closes the consumer instances and the producer
+in the remaining 10 s or so. A shutdown that takes longer is cut off when
+gunicorn kills the worker.
+
 ## Deploy by hand
 
 ### From GitHub

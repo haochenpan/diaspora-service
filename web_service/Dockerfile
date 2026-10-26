@@ -21,6 +21,7 @@ ARG GIT_SHA=
 ENV GIT_SHA=$GIT_SHA
 
 # One worker, since consumer instances live in its memory. On SIGTERM,
-# gunicorn gives the worker 30 s to finish requests and shut down before
-# it kills it.
-CMD ["gunicorn", "--bind", "0.0.0.0:8000", "-k", "uvicorn_worker.UvicornWorker", "--graceful-timeout", "30", "web_service.main:app"]
+# gunicorn gives the worker 30 s to stop before it kills it; the worker
+# waits up to 20 s of them for open requests, then shuts the service down
+# (web_service/worker.py).
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "-k", "web_service.worker.Worker", "--graceful-timeout", "30", "web_service.main:app"]
