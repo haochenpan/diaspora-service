@@ -357,6 +357,14 @@ class DynamoDBService:
         self.users_table_name = users_table_name
         self.namespace_table_name = namespace_table_name
 
+    def _get_item(self, **kwargs: Any) -> Any:
+        """GetItem with a strongly consistent read.
+
+        A default GetItem is eventually consistent and can miss a write
+        made just before it. Every read of this service goes through here.
+        """
+        return self.dynamodb.get_item(ConsistentRead=True, **kwargs)
+
     # ========================================================================
     # Key Management
     # ========================================================================
@@ -407,7 +415,7 @@ class DynamoDBService:
         with contextlib.suppress(
             self.dynamodb.exceptions.ResourceNotFoundException,
         ):
-            response = self.dynamodb.get_item(
+            response = self._get_item(
                 TableName=self.keys_table_name,
                 Key={'subject': {'S': subject}},
             )
@@ -449,7 +457,7 @@ class DynamoDBService:
         with contextlib.suppress(
             self.dynamodb.exceptions.ResourceNotFoundException,
         ):
-            response = self.dynamodb.get_item(
+            response = self._get_item(
                 TableName=self.users_table_name,
                 Key={'subject': {'S': subject}},
             )
@@ -537,7 +545,7 @@ class DynamoDBService:
         with contextlib.suppress(
             self.dynamodb.exceptions.ResourceNotFoundException,
         ):
-            response = self.dynamodb.get_item(
+            response = self._get_item(
                 TableName=self.users_table_name,
                 Key={'subject': {'S': GLOBAL_NAMESPACES_KEY}},
             )
@@ -655,7 +663,7 @@ class DynamoDBService:
         with contextlib.suppress(
             self.dynamodb.exceptions.ResourceNotFoundException,
         ):
-            response = self.dynamodb.get_item(
+            response = self._get_item(
                 TableName=self.namespace_table_name,
                 Key={'namespace': {'S': namespace}},
             )
