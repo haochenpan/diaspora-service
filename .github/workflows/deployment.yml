@@ -73,15 +73,15 @@ jobs:
           DOCKERFILE_PATH: ${{ matrix.dockerfile_path }}
         run: |
           echo "SERVICE NAME"
-          echo $SERVICE_NAME
+          echo "$SERVICE_NAME"
 
           echo "CONTAINER NAME"
-          echo $CONTAINER_NAME
+          echo "$CONTAINER_NAME"
 
           echo "DOCKERFILE PATH"
-          echo $DOCKERFILE_PATH
+          echo "$DOCKERFILE_PATH"
 
-          docker build -t $CONTAINER_NAME -f $DOCKERFILE_PATH .
+          docker build -t "$CONTAINER_NAME" -f "$DOCKERFILE_PATH" .
           docker images
 
       - name: Idempotently create Lightsail container service
@@ -96,7 +96,7 @@ jobs:
           SERVICE_NAME: ${{ matrix.service_name }}
           CONTAINER_NAME: ${{ matrix.container_name }}
         run: |
-          output=$(aws lightsail push-container-image --region us-east-1 --service-name $SERVICE_NAME --label $CONTAINER_NAME --image $CONTAINER_NAME)
+          output=$(aws lightsail push-container-image --region us-east-1 --service-name "$SERVICE_NAME" --label "$CONTAINER_NAME" --image "$CONTAINER_NAME")
           image_name=$(echo "$output" | sed -n 's/.*Refer to this image as "\(.*\)" in deployments.*/\1/p')
 
           echo "IMAGE NAME"
@@ -144,7 +144,7 @@ jobs:
           }')
 
           aws lightsail create-container-service-deployment --region us-east-1 \
-              --service-name $SERVICE_NAME \
+              --service-name "$SERVICE_NAME" \
               --containers "$containers" \
               --public-endpoint "$public_endpoint" > /dev/null
 

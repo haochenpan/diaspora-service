@@ -39,6 +39,13 @@ repos:
     hooks:
       - id: mypy
         additional_dependencies: ['types-cachetools']
+  - repo: https://github.com/Mateusz-Grzelinski/actionlint-py
+    rev: v1.7.12.25
+    hooks:
+      - id: actionlint
+        # actionlint runs shellcheck on each run: step when it is on PATH;
+        # shellcheck-py puts it there, here and on pre-commit.ci.
+        additional_dependencies: ['shellcheck-py==0.11.0.1']
   - repo: https://github.com/Yelp/detect-secrets
     rev: v1.5.0
     hooks:
