@@ -160,11 +160,13 @@ def test_create_user_and_policy(
     assert 'message' in result
     assert isinstance(result['message'], str)
     assert random_subject in result['message']
-    assert len(result) == RESPONSE_FIELDS_STATUS_MESSAGE
+    assert result['created'] is True
+    assert set(result) == {'status', 'message', 'created'}
 
-    # Test idempotency - should succeed on second call
+    # Test idempotency - should succeed on second call, creating nothing
     result2 = iam_service.create_user_and_policy(random_subject)
     assert result2['status'] == 'success'
+    assert result2['created'] is False
 
 
 @pytest.mark.integration
