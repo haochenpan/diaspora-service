@@ -38,7 +38,7 @@ jobs:
 
       - name: Verify AWS credential
         run: |
-          aws sts get-caller-identity
+          aws sts get-caller-identity --output none
 
       - name: Install AWS Lightsail plugin
         run: |
@@ -84,7 +84,7 @@ jobs:
           SERVICE_NAME: ${{ matrix.service_name }}
         continue-on-error: true
         run: |
-          aws lightsail create-container-service --region us-east-1 --service-name $SERVICE_NAME --power small --scale 1
+          aws lightsail create-container-service --region us-east-1 --service-name $SERVICE_NAME --power micro --scale 1
 
       - name: Push Docker image to Lightsail and deploy
         env:
@@ -141,7 +141,8 @@ jobs:
           aws lightsail create-container-service-deployment --region us-east-1 \
               --service-name $SERVICE_NAME \
               --containers "$containers" \
-              --public-endpoint "$public_endpoint"
+              --public-endpoint "$public_endpoint" \
+              --output none
 
       - name: Wait for the deployment to become active
         env:
