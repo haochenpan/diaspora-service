@@ -162,13 +162,14 @@ These limits bound the memory of the consumer routes:
   to 8 MiB from each broker, decodes it and encodes the reply. A reply
   holds at most 2 MiB of JSON, except a first record larger than that,
   which is returned alone and written in chunks of about 256 KiB, so its
-  JSON (about 10.7 MiB for an 8 MiB record as base64) is never held
-  whole.
+  JSON (about 10.7 MiB for an 8 MiB record as base64, and up to 48 MiB
+  as the JSON string of 8 MiB of control characters) is never held whole.
+  Header values are written a piece at a time too.
 - A json instance checks that each key and value it returns is JSON, one
   check at a time in the whole service. Before it checks, it estimates the
   memory the check takes from the counts of the value's brackets, commas,
-  quotes and colons, and counts a value whose estimate is over 32 MiB as
-  not JSON. In a test on macOS, the check of an 8 MiB array of empty
+  quotes and colons, and returns a value whose estimate is over 32 MiB as
+  text, without the check. In a test on macOS, the check of an 8 MiB array of empty
   arrays took 180 MiB, which the bound refuses.
 
 The service's worst case on a cluster of two brokers adds up as follows.
