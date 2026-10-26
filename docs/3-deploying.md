@@ -135,12 +135,14 @@ with their defaults. To set one, add it to the `environment` block in
 ## One worker
 
 The Dockerfile starts gunicorn without `--workers`, so it runs one
-Uvicorn worker, and the service runs at scale 1. Consumer instances live in that one process's memory, so
-the service must stay at one worker on one node. With a second worker or
-node, a request can reach a process that does not hold its instance and
-gets `404` with error code `40403` (`Consumer instance not found`). Do not
-pass `--workers` to gunicorn, do not set `WEB_CONCURRENCY` (gunicorn reads
-its worker count from it), and keep the scale at 1.
+Uvicorn worker, and the service runs at scale 1. Consumer instances live
+in that one process's memory, so the service must stay at one worker on
+one node. With a second worker or node, a request can reach a process that
+does not hold its instance and gets `404` with error code `40403`
+(`Consumer instance not found`). Do not pass `--workers` to gunicorn, do
+not set `WEB_CONCURRENCY` (gunicorn reads its worker count from it) or
+`GUNICORN_CMD_ARGS` (gunicorn reads extra options from it), and keep the
+scale at 1.
 
 Every deploy or restart stops the process and drops every consumer
 instance. Clients then get `40403` and must create a new instance. A new
@@ -153,7 +155,7 @@ committed to Kafka.
 
 ```bash
 gh workflow run deployment.yml --ref main
-gh run list --workflow deployment.yml --limit 1   # shows the run's ID
+gh run list --workflow deployment.yml --event workflow_dispatch --limit 1   # the run's ID
 gh run watch <run-id>
 ```
 
@@ -168,6 +170,23 @@ unit tests, the wait step and the image cleanup. You need Docker, the AWS
 CLI with the
 [Lightsail container services plugin](https://docs.aws.amazon.com/en_us/lightsail/latest/userguide/amazon-lightsail-install-software.html),
 `jq`, and AWS credentials with the deploy's Lightsail access.
+
+The steps copy the current deployment's container, environment included,
+and change only its image, so they need no secret values. If the container
+service does not exist, create it before step 1:
+
+```bash
+aws lightsail create-container-service --region us-east-1 \
+    --service-name diaspora-web-service --power micro --scale 1
+```
+
+A new service has no deployment to copy, so step 3 must then set the
+environment by hand
+([Set the environment by hand](#set-the-environment-by-hand)).
+Its public URL is also likely to change: AWS builds a service's default
+domain from a
+[randomly generated identifier of the service](https://docs.aws.amazon.com/lightsail/latest/userguide/amazon-lightsail-container-services.html),
+and clients and these docs use the current domain.
 
 1. Build the image from the repository root. The Dockerfile pins
    `linux/amd64`, the platform Lightsail runs.
@@ -185,56 +204,74 @@ CLI with the
     echo "$image"   # for example :diaspora-web-service.docker.<N>
     ```
 
-3. Export the container's environment. The `SVC_` prefix keeps these
-   values apart from the AWS CLI's own credentials. They are secrets: keep
-   them out of shell history and out of files you commit.
+3. Copy the current deployment's container and set its image. `$containers`
+   then holds the container's secrets, so do not print it.
 
     ```bash
-    export SVC_AWS_ACCESS_KEY_ID='<container access key ID>'
-    export SVC_AWS_SECRET_ACCESS_KEY='<container secret access key>'
-    export SVC_SERVER_CLIENT_ID='<Globus client ID>'
-    export SVC_SERVER_SECRET='<Globus client secret>'
-    export SVC_AWS_ACCOUNT_ID='<account ID>'
-    export SVC_AWS_ACCOUNT_REGION='<region>'
-    export SVC_MSK_CLUSTER_NAME='<cluster name>'
-    export SVC_DEFAULT_SERVERS='<host:port,host:port>'
+    containers=$(aws lightsail get-container-services --region us-east-1 \
+        --service-name diaspora-web-service \
+        --query 'containerServices[0].currentDeployment.containers' --output json |
+      jq --arg image "$image" '.flask.image = $image')
     ```
 
 4. Create the deployment. The command prints the deployment with its
    environment, so the example discards its output.
 
     ```bash
-    containers=$(jq -n --arg image "$image" '{
-      flask: {
-        image: $image,
-        ports: {"8000": "HTTP"},
-        environment: {
-          AWS_ACCESS_KEY_ID: env.SVC_AWS_ACCESS_KEY_ID,
-          AWS_SECRET_ACCESS_KEY: env.SVC_AWS_SECRET_ACCESS_KEY,
-          SERVER_CLIENT_ID: env.SVC_SERVER_CLIENT_ID,
-          SERVER_SECRET: env.SVC_SERVER_SECRET,
-          AWS_ACCOUNT_ID: env.SVC_AWS_ACCOUNT_ID,
-          AWS_ACCOUNT_REGION: env.SVC_AWS_ACCOUNT_REGION,
-          MSK_CLUSTER_NAME: env.SVC_MSK_CLUSTER_NAME,
-          DEFAULT_SERVERS: env.SVC_DEFAULT_SERVERS
-        }
-      }
-    }')
-
     aws lightsail create-container-service-deployment --region us-east-1 \
         --service-name diaspora-web-service \
         --containers "$containers" \
         --public-endpoint '{"containerName": "flask", "containerPort": 8000}' > /dev/null
     ```
 
-    To set an optional variable, add it to the `environment` object. Keep
-    the container name `flask`: the public endpoint and the logs refer to
-    it.
+    Keep the container name `flask`: the public endpoint and the logs refer
+    to it.
 
 5. [Check the deploy](#check-a-deploy).
 
-If the container service does not exist, create it first with
-`aws lightsail create-container-service --region us-east-1 --service-name diaspora-web-service --power micro --scale 1`.
+#### Set the environment by hand
+
+To change a variable, or to deploy to a service with no current
+deployment, read the values into the shell first. `read -rs` keeps each
+value off the screen and out of shell history. The `SVC_` prefix keeps the
+values apart from the AWS CLI's own credentials.
+
+```bash
+for var in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY SERVER_CLIENT_ID SERVER_SECRET \
+    AWS_ACCOUNT_ID AWS_ACCOUNT_REGION MSK_CLUSTER_NAME DEFAULT_SERVERS; do
+  printf '%s: ' "$var"; read -rs value; echo
+  export "SVC_$var=$value"
+done
+unset value
+```
+
+To change one variable of the current deployment, read only that one and
+extend the filter of step 3, for example
+`jq --arg image "$image" '.flask.image = $image | .flask.environment.MAX_TOPICS_PER_NAMESPACE = env.SVC_MAX_TOPICS_PER_NAMESPACE'`.
+For a service with no current deployment, build the whole container
+instead of step 3:
+
+```bash
+containers=$(jq -n --arg image "$image" '{
+  flask: {
+    image: $image,
+    ports: {"8000": "HTTP"},
+    environment: {
+      AWS_ACCESS_KEY_ID: env.SVC_AWS_ACCESS_KEY_ID,
+      AWS_SECRET_ACCESS_KEY: env.SVC_AWS_SECRET_ACCESS_KEY,
+      SERVER_CLIENT_ID: env.SVC_SERVER_CLIENT_ID,
+      SERVER_SECRET: env.SVC_SERVER_SECRET,
+      AWS_ACCOUNT_ID: env.SVC_AWS_ACCOUNT_ID,
+      AWS_ACCOUNT_REGION: env.SVC_AWS_ACCOUNT_REGION,
+      MSK_CLUSTER_NAME: env.SVC_MSK_CLUSTER_NAME,
+      DEFAULT_SERVERS: env.SVC_DEFAULT_SERVERS
+    }
+  }
+}')
+```
+
+After the deployment is created, remove the values from the shell with
+`unset "${!SVC_@}"` in bash or `unset -m 'SVC_*'` in zsh.
 
 ## Check a deploy
 

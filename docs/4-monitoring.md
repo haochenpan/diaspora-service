@@ -20,7 +20,11 @@ aws lightsail get-container-service-metric-data --region us-east-1 \
 ```
 
 The times are in ISO 8601, such as `2026-10-26T06:00:00Z`.
-`--metric-name CPUUtilization` gives the CPU use.
+`--metric-name CPUUtilization` gives the CPU use. The history starts at
+the current deployment:
+[AWS says](https://docs.aws.amazon.com/lightsail/latest/userguide/amazon-lightsail-container-services-deployments.html)
+that a new deployment makes the existing utilization metrics disappear,
+so every deploy, rollback or credential rotation clears them.
 
 The container's log holds gunicorn's and the service's output for the last
 three days ([Read the logs](5-runbook.md#read-the-logs)).
@@ -29,15 +33,16 @@ running and which deployment is active
 ([Check a deploy](3-deploying.md#check-a-deploy)).
 
 On GitHub Actions, the `deployment` workflow's runs show each deploy, and
-the `tests` workflow's nightly runs show the live tests. The live tests
-run against the AWS account and the MSK cluster, not against the deployed
-service.
+the `tests` workflow's runs show the live tests, which run nightly and on
+every push to `main`. The live tests run against the AWS account and the
+MSK cluster, not against the deployed service.
 
 ## The MSK brokers
 
 Each broker's `CPUCreditBalance` metric in CloudWatch (namespace
 `AWS/Kafka`, dimensions `Cluster Name` and `Broker ID`) is the number of
-CPU credits it has left. A broker that runs out is throttled
+CPU credits it has left. AWS says that running out "can have a negative
+impact on your cluster's performance"
 ([Broker CPU credits](5-runbook.md#broker-cpu-credits)).
 
 ## The Kafka console
