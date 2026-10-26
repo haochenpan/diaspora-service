@@ -1148,12 +1148,12 @@ run them while another live run is in progress: some tests assert on
 records shared by all runs. With the live tests' own keys (see below),
 also set <code>IAM_USER_PERMISSIONS_BOUNDARY_ARN</code> to the boundary policy's ARN,
 or every test that creates an IAM user is denied.</p>
-<p>Their DynamoDB items go to the <code>test-diaspora-*</code> tables. Most live tests
-name those tables in code, but the live tests in
-<code>consumer_service_test.py</code> take the tables from <code>KEYS_TABLE_NAME</code>,
-<code>USERS_TABLE_NAME</code> and <code>NAMESPACE_TABLE_NAME</code> when these are set. Leave
-them unset, or set them to the test tables as <code>tests.yml</code> does, so that no
-test writes to the production tables.</p>
+<p>Their DynamoDB items go to the <code>test-diaspora-*</code> tables, which the live
+tests name in code. The live tests of the routes,
+<code>consumer_live_test.py</code> and <code>producer_live_test.py</code>, set
+<code>KEYS_TABLE_NAME</code>, <code>USERS_TABLE_NAME</code> and <code>NAMESPACE_TABLE_NAME</code> to the
+test tables before they start the app, so no test writes to the
+production tables.</p>
 <p>With coverage, over both sets:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>coverage<span class="w"> </span>erase
 </span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>coverage<span class="w"> </span>run<span class="w"> </span>-m<span class="w"> </span>pytest<span class="w"> </span>tests/
