@@ -295,6 +295,8 @@ An instance returns records as `binary` or `json`, named in `format` in any case
 
 Every topic has one partition, 0, and a request that names another partition is refused with 404. A seek or a commit with offsets takes only partitions assigned to the instance. A partition is assigned by `assignments`, or after a subscribe by the group once the instance has fetched. A seek or commit on any other partition is refused with 409. A seek to the beginning or end with an empty list seeks every assigned partition, and is refused with 409 if none is assigned. An instance either subscribes to topics or is assigned partitions: to switch, unsubscribe first, or the request is refused with 409.
 
+A subscribe or an assign takes only topics the namespace holds, and refuses any other with 404 and 40401. A topic the namespace holds but the cluster does not list, such as one deleted while an instance reads it, is not created by the subscription or the assignment: the instance's fetches return no records from it.
+
 #### The deprecated `/api/v3` consumer routes
 
 The consumer routes of earlier versions, under `/api/v3/{namespace}/consumers`, remain as deprecated aliases of the v2 routes, with the namespace in the path. They take the same bodies and give the same replies, and a create through them returns a `base_uri` under `/api/v3`. Their replies carry the header `Deprecation: @1792972800` (RFC 9745: deprecated since 26 October 2026), and the OpenAPI document marks them deprecated. An instance is the same instance through either prefix. A later version removes the aliases, so clients should move to `/api/v2/consumers`.

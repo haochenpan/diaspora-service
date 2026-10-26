@@ -1092,6 +1092,10 @@ class ConsumerService:
                 + REAPER_INTERVAL_SECONDS * 1000
                 + POLL_SLACK_MS
             ),
+            # A subscription to, or an assignment of, a topic that does not
+            # exist must not have the cluster create it outside the topic
+            # routes
+            'allow_auto_create_topics': False,
         }
         if fetch_min_bytes is not None:
             kwargs['fetch_min_bytes'] = fetch_min_bytes
