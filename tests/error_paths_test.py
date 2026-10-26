@@ -778,6 +778,10 @@ def test_delete_topic_kafka_fails_dynamodb_succeeds() -> None:
     mock_iam = MagicMock()
     kafka_service = MagicMock()
     namespace_service = MagicMock(spec=NamespaceService)
+    namespace_service.dynamodb = MagicMock()
+    namespace_service.dynamodb.get_user_namespaces.return_value = [
+        'test-namespace',
+    ]
 
     kafka_service.delete_topic.return_value = {
         'status': 'failure',
@@ -805,6 +809,147 @@ def test_delete_topic_kafka_fails_dynamodb_succeeds() -> None:
     # Should return failure because Kafka failed
     assert result['status'] == 'failure'
     assert 'Failed to delete Kafka topic' in result['message']
+    # DynamoDB entry is kept so the Kafka topic isn't orphaned
+    namespace_service.delete_topic.assert_not_called()
+
+
+def test_delete_topic_namespace_of_another_user() -> None:
+    """Test delete_topic never calls Kafka for a namespace not owned."""
+    kafka_service = MagicMock()
+    namespace_service = MagicMock(spec=NamespaceService)
+    namespace_service.dynamodb = MagicMock()
+    # The subject owns only its own namespace
+    namespace_service.dynamodb.get_user_namespaces.return_value = [
+        'ns-mine',
+    ]
+
+    web_service = WebService(
+        iam_service=MagicMock(),
+        kafka_service=kafka_service,
+        namespace_service=namespace_service,
+    )
+
+    result = web_service.delete_topic(
+        'test-subject',
+        'ns-someone-else',
+        'test-topic',
+    )
+
+    assert result['status'] == 'failure'
+    assert 'Namespace ns-someone-else not found' in result['message']
+    kafka_service.delete_topic.assert_not_called()
+    namespace_service.delete_topic.assert_not_called()
+
+
+def test_delete_topic_name_with_dot() -> None:
+    """Test delete_topic never calls Kafka for a topic name with a dot."""
+    kafka_service = MagicMock()
+    namespace_service = MagicMock(spec=NamespaceService)
+    namespace_service.dynamodb = MagicMock()
+    namespace_service.dynamodb.get_user_namespaces.return_value = [
+        'ns-mine',
+    ]
+
+    web_service = WebService(
+        iam_service=MagicMock(),
+        kafka_service=kafka_service,
+        namespace_service=namespace_service,
+    )
+
+    result = web_service.delete_topic('test-subject', 'ns-mine', 'b.topic')
+
+    assert result['status'] == 'failure'
+    assert 'Invalid topic name b.topic' in result['message']
+    kafka_service.delete_topic.assert_not_called()
+    namespace_service.delete_topic.assert_not_called()
+
+
+def test_delete_topic_owned_but_not_registered() -> None:
+    """Test delete_topic still deletes an owner's topic missing in DynamoDB.
+
+    A Kafka topic can outlive its DynamoDB entry (for example after a
+    failed create's cleanup), so the owner must still be able to delete it.
+    """
+    kafka_service = MagicMock()
+    kafka_service.delete_topic.return_value = {
+        'status': 'success',
+        'message': 'Topic deleted',
+    }
+    namespace_service = MagicMock(spec=NamespaceService)
+    namespace_service.dynamodb = MagicMock()
+    namespace_service.dynamodb.get_user_namespaces.return_value = [
+        'test-namespace',
+    ]
+    namespace_service.delete_topic.return_value = {
+        'status': 'success',
+        'message': 'Topic test-topic not found in test-namespace',
+        'topics': ['other-topic'],
+    }
+
+    web_service = WebService(
+        iam_service=MagicMock(),
+        kafka_service=kafka_service,
+        namespace_service=namespace_service,
+    )
+
+    result = web_service.delete_topic(
+        'test-subject',
+        'test-namespace',
+        'test-topic',
+    )
+
+    assert result['status'] == 'success'
+    kafka_service.delete_topic.assert_called_once_with(
+        'test-namespace',
+        'test-topic',
+    )
+    namespace_service.delete_topic.assert_called_once_with(
+        'test-subject',
+        'test-namespace',
+        'test-topic',
+    )
+
+
+def test_delete_topic_owned() -> None:
+    """Test delete_topic deletes from Kafka, then DynamoDB, when owned."""
+    kafka_service = MagicMock()
+    kafka_service.delete_topic.return_value = {
+        'status': 'success',
+        'message': 'Topic deleted',
+    }
+    namespace_service = MagicMock(spec=NamespaceService)
+    namespace_service.dynamodb = MagicMock()
+    namespace_service.dynamodb.get_user_namespaces.return_value = [
+        'test-namespace',
+    ]
+    namespace_service.delete_topic.return_value = {
+        'status': 'success',
+        'message': 'Topic test-topic deleted from test-namespace',
+        'topics': [],
+    }
+
+    web_service = WebService(
+        iam_service=MagicMock(),
+        kafka_service=kafka_service,
+        namespace_service=namespace_service,
+    )
+
+    result = web_service.delete_topic(
+        'test-subject',
+        'test-namespace',
+        'test-topic',
+    )
+
+    assert result['status'] == 'success'
+    kafka_service.delete_topic.assert_called_once_with(
+        'test-namespace',
+        'test-topic',
+    )
+    namespace_service.delete_topic.assert_called_once_with(
+        'test-subject',
+        'test-namespace',
+        'test-topic',
+    )
 
 
 def test_recreate_topic_topic_not_found() -> None:
