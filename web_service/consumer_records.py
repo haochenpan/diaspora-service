@@ -15,7 +15,10 @@ import codecs
 import json
 from collections.abc import Iterator
 from dataclasses import dataclass
+from dataclasses import field
 from typing import Any
+
+from kafka.structs import TopicPartition
 
 # Bytes of a key or value encoded at a time; a multiple of 3, so that the
 # base64 of each piece joins into the base64 of the whole
@@ -143,9 +146,14 @@ class EncodedRecord:
 
 @dataclass(frozen=True)
 class FetchReply:
-    """The records a fetch returns, and the size of their JSON array."""
+    """The records a fetch returns, and the size of their JSON array.
+
+    starts holds the offset of each partition's first record in the
+    reply, to seek back to if the reply does not reach the client.
+    """
 
     records: list[EncodedRecord]
+    starts: dict[TopicPartition, int] = field(default_factory=dict)
 
     @property
     def size(self) -> int:

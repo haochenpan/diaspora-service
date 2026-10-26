@@ -14,6 +14,7 @@ import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
@@ -46,6 +47,8 @@ from kafka.structs import TopicPartition
 from starlette.responses import JSONResponse
 
 from web_service import main
+from web_service.consumer_records import EncodedField
+from web_service.consumer_records import EncodedRecord
 from web_service.consumer_records import FetchReply
 from web_service.consumer_routes import MAX_BODY_BYTES
 from web_service.consumer_service import FETCH_MAX_BYTES
@@ -920,8 +923,32 @@ def _records(subject: str, name: str, query: str = '') -> str:
     return f'{BASE}/{GROUP}/instances/{name}/records{query}'
 
 
+def _one_record() -> FetchReply:
+    """A reply of one small record, which ends a fetch at its first poll."""
+    return FetchReply(
+        [
+            EncodedRecord(
+                topic='t1',
+                key=EncodedField.of(None, 'binary'),
+                value=EncodedField.of(b'x', 'binary'),
+                partition=0,
+                offset=0,
+            ),
+        ],
+    )
+
+
+@pytest.fixture
+def long_slices(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Let a fetch poll for its whole wait in one slice."""
+    monkeypatch.setattr(main, 'FETCH_SLICE_MS', 60_000)
+
+
 class _Blocked:
-    """A fetch_records that blocks until released, counting its callers."""
+    """A fetch_records that blocks until released, counting its callers.
+
+    Each call returns one record, so each fetch polls once.
+    """
 
     def __init__(self) -> None:
         self.lock = threading.Lock()
@@ -938,7 +965,7 @@ class _Blocked:
         self.release.wait(timeout=10)
         with self.lock:
             self.running -= 1
-        return FetchReply([]), 200
+        return _one_record(), 200
 
     async def until_running(self, count: int) -> None:
         deadline = time.monotonic() + 5
@@ -960,9 +987,16 @@ def _instances(service: DiasporaService, subjects: int) -> None:
             assert status == 200
 
 
-def _client(service: DiasporaService) -> httpx.AsyncClient:
+def _client(
+    service: DiasporaService,
+    *,
+    raise_app_exceptions: bool = True,
+) -> httpx.AsyncClient:
     return httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=service.app),
+        transport=httpx.ASGITransport(
+            app=service.app,
+            raise_app_exceptions=raise_app_exceptions,
+        ),
         base_url='http://test',
         timeout=30,
     )
@@ -1083,7 +1117,7 @@ async def test_a_slot_wait_is_bounded_by_the_timeout(
             late = _subject(slots // 2)
             started = time.monotonic()
             refused = await client.get(
-                _records(late, 'a'),
+                _records(late, 'b'),
                 params={'timeout': 300},
                 headers=_headers(late),
             )
@@ -1099,6 +1133,7 @@ async def test_a_slot_wait_is_bounded_by_the_timeout(
 
 async def test_the_slot_wait_comes_off_the_poll(
     service: DiasporaService,
+    long_slices: None,
 ) -> None:
     """A fetch that waited for a slot polls only for what is left."""
     slots = main.FETCH_MAX_CONCURRENT
@@ -1123,7 +1158,7 @@ async def test_the_slot_wait_comes_off_the_poll(
             late = _subject(slots // 2)
             waiting = asyncio.create_task(
                 client.get(
-                    _records(late, 'a'),
+                    _records(late, 'b'),
                     params={'timeout': 3000},
                     headers=_headers(late),
                 ),
@@ -1207,6 +1242,7 @@ async def test_a_fetch_whose_client_left_does_not_poll(
 def test_fetch_waits_and_record_counts(
     service: DiasporaService,
     client: TestClient,
+    long_slices: None,
     *,
     query: str,
     created: dict[str, Any],
@@ -1221,10 +1257,14 @@ def test_fetch_waits_and_record_counts(
         f'{_inst()}/assignments',
         {'partitions': [{'topic': 't1', 'partition': 0}]},
     )
-    with patch.object(_consumer(service), 'poll', return_value={}) as poll:
+    with patch.object(
+        _consumer(service),
+        'poll',
+        return_value=_fetched(b'x'),
+    ) as poll:
         response = client.get(f'{_inst()}/records{query}', headers=HEADERS)
     assert response.status_code == 200
-    assert response.json() == []
+    assert len(response.json()) == 1
     kwargs = poll.call_args.kwargs
     assert wait_ms - 500 < kwargs['timeout_ms'] <= wait_ms
     assert kwargs['max_records'] == max_records
@@ -1416,6 +1456,314 @@ def test_a_large_first_record_is_returned_alone(
     ]
     assert len(response.content) > REPLY_MAX_BYTES
     seek.assert_called_once_with(_kafka_tp(), 1)
+
+
+# ============================================================================
+# Fetches: slices, releases and records the client never got
+# ============================================================================
+
+
+class _Log:
+    """A consumer over in-memory partitions, with kafka-python's positions.
+
+    poll returns records from each partition's position, in the order of
+    logs, and moves the positions past them; seek sets a position. A poll
+    that finds nothing waits out its timeout, and returns records that
+    arrive meanwhile.
+    """
+
+    def __init__(self, logs: dict[TopicPartition, list[bytes]]) -> None:
+        self.logs = logs
+        self.pos = dict.fromkeys(logs, 0)
+        self.polls: list[int] = []
+
+    def poll(
+        self,
+        timeout_ms: int = 0,
+        max_records: int | None = None,
+    ) -> dict[TopicPartition, list[Any]]:
+        self.polls.append(timeout_ms)
+        deadline = time.monotonic() + timeout_ms / 1000
+        while True:
+            taken = self._take(max_records or 500)
+            if taken or time.monotonic() >= deadline:
+                return taken
+            time.sleep(0.01)
+
+    def _take(self, most: int) -> dict[TopicPartition, list[Any]]:
+        taken: dict[TopicPartition, list[Any]] = {}
+        for tp, log in self.logs.items():
+            start = self.pos[tp]
+            values = log[start : start + most]
+            if values:
+                taken[tp] = [
+                    SimpleNamespace(key=None, value=v, offset=start + i)
+                    for i, v in enumerate(values)
+                ]
+                self.pos[tp] += len(values)
+                most -= len(values)
+            if most <= 0:
+                break
+        return taken
+
+    def seek(self, tp: TopicPartition, offset: int) -> None:
+        self.pos[tp] = offset
+
+    def assignment(self) -> set[TopicPartition]:
+        return set(self.logs)
+
+    def close(self, **kwargs: Any) -> None:
+        pass
+
+
+def _log(
+    service: DiasporaService,
+    name: str,
+    *values: bytes,
+    subject: str = SUBJECT,
+) -> _Log:
+    """Make an instance's consumer a _Log of partition t1, holding values."""
+    key = (subject, NAMESPACE, GROUP, name)
+    consumers = service.consumer_service
+    if key not in consumers._consumers:
+        _, status = consumers.create_consumer(
+            subject,
+            NAMESPACE,
+            GROUP,
+            name=name,
+        )
+        assert status == 200
+    managed = consumers._consumers[key]
+    managed.consumer.close(autocommit=False)
+    log = _Log({_kafka_tp(): list(values)})
+    managed.consumer = log
+    return log
+
+
+def _assert_released(service: DiasporaService, name: str = 'i1') -> None:
+    """The instance, the subject's count and every slot are free."""
+    managed = service.consumer_service._consumers[
+        (SUBJECT, NAMESPACE, GROUP, name)
+    ]
+    assert not managed.lock.locked()
+    assert service.fetching == {}
+    assert service.fetch_slots.borrowed_tokens == 0
+
+
+def _connected() -> MagicMock:
+    request = MagicMock()
+    request.is_disconnected = AsyncMock(return_value=False)
+    return request
+
+
+async def _fetch(
+    service: DiasporaService,
+    request: MagicMock,
+    name: str = 'i1',
+) -> Any:
+    """Call the fetch route as FastAPI would, returning its response."""
+    return await service.fetch_consumer_records(
+        NAMESPACE,
+        GROUP,
+        name,
+        request=request,
+        subject=SUBJECT,
+        token=HEADERS['authorization'],
+        timeout=1000,
+        max_bytes=None,
+    )
+
+
+async def test_a_failed_encode_releases_the_fetch(
+    service: DiasporaService,
+) -> None:
+    """A reply that fails to encode frees the instance and the slot."""
+    log = _log(service, 'i1', b'r0', b'r1')
+    async with _client(service, raise_app_exceptions=False) as client:
+        with patch.object(
+            FetchReply,
+            'body',
+            side_effect=MemoryError('encoding the reply'),
+        ):
+            failed = await client.get(_inst() + '/records', headers=HEADERS)
+        assert failed.status_code == 500
+        assert failed.json() == {
+            'error_code': 500,
+            'message': 'Internal server error',
+        }
+        _assert_released(service)
+        # The records it polled were never sent, so they come again
+        assert log.pos[_kafka_tp()] == 0
+        again = await client.get(_inst() + '/records', headers=HEADERS)
+        assert [r['offset'] for r in again.json()] == [0, 1]
+        deleted = await client.delete(_inst(), headers=HEADERS)
+    assert deleted.status_code == 204
+
+
+async def test_quiet_long_polls_leave_slots_for_fetches_with_records(
+    service: DiasporaService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two users' quiet long polls on 2 instances each hold no slot idle."""
+    monkeypatch.setattr(main, 'FETCH_SLICE_MS', 200)
+    for i in range(2):
+        for name in ('a', 'b'):
+            _log(service, name, subject=_subject(i))
+    _log(service, 'a', b'r0', b'r1', b'r2', subject=_subject(2))
+    async with _client(service) as client:
+
+        async def get(i: int, name: str, timeout: int) -> tuple[Any, float]:
+            started = time.monotonic()
+            response = await client.get(
+                _records(_subject(i), name),
+                params={'timeout': timeout},
+                headers=_headers(_subject(i)),
+            )
+            return response, time.monotonic() - started
+
+        polls = [
+            asyncio.create_task(get(i, name, 2000))
+            for i in range(2)
+            for name in ('a', 'b')
+        ]
+        await asyncio.sleep(0.3)
+        ready, took = await get(2, 'a', 1000)
+        assert ready.status_code == 200
+        assert len(ready.json()) == 3
+        # About one slice: it waits at most for a long poll's slice to end
+        assert took < 0.6
+        quiet = await asyncio.gather(*polls)
+    for response, waited in quiet:
+        assert response.status_code == 200
+        assert response.json() == []
+        assert 1.8 < waited < 2.6
+
+
+async def test_a_long_poll_returns_records_that_arrive_mid_wait(
+    service: DiasporaService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(main, 'FETCH_SLICE_MS', 200)
+    log = _log(service, 'i1')
+    async with _client(service) as client:
+        started = time.monotonic()
+        polling = asyncio.create_task(
+            client.get(
+                _inst() + '/records',
+                params={'timeout': 3000},
+                headers=HEADERS,
+            ),
+        )
+        await asyncio.sleep(0.5)
+        log.logs[_kafka_tp()].extend([b'late-0', b'late-1'])
+        response = await polling
+        took = time.monotonic() - started
+    assert [r['offset'] for r in response.json()] == [0, 1]
+    assert took < 1.2
+    # Each slice polled for at most a slice
+    assert max(log.polls) <= 200
+
+
+async def test_records_polled_for_a_client_that_left_are_fetched_again(
+    service: DiasporaService,
+) -> None:
+    """A client that leaves while its fetch polls loses no records."""
+    log = _log(service, 'i1', b'r0', b'r1')
+    request = MagicMock()
+    # Connected before the poll, gone after it
+    request.is_disconnected = AsyncMock(side_effect=[False, True])
+    response = await _fetch(service, request)
+    assert response.status_code == 400
+    assert log.polls
+    assert log.pos[_kafka_tp()] == 0
+    _assert_released(service)
+    async with _client(service) as client:
+        again = await client.get(_inst() + '/records', headers=HEADERS)
+    assert [r['offset'] for r in again.json()] == [0, 1]
+    assert log.pos[_kafka_tp()] == 2
+
+
+async def test_a_streamed_reply_the_client_left_is_fetched_again(
+    service: DiasporaService,
+) -> None:
+    """The client leaves after the first chunk of a reply over the cap."""
+    # About 2.7 MiB as base64, so it is written a piece at a time
+    log = _log(service, 'i1', b'x' * (2 * 1024 * 1024), b'small')
+    response = await _fetch(service, _connected())
+    sent: list[dict[str, Any]] = []
+    first_chunk = asyncio.Event()
+
+    async def receive() -> dict[str, Any]:
+        await first_chunk.wait()
+        return {'type': 'http.disconnect'}
+
+    async def send(message: dict[str, Any]) -> None:
+        sent.append(message)
+        if message['type'] == 'http.response.body':
+            first_chunk.set()
+            await asyncio.sleep(0)
+
+    await response({'type': 'http'}, receive, send)
+    # The reply never ended
+    assert all(m.get('more_body', True) for m in sent[1:])
+    assert log.pos[_kafka_tp()] == 0
+    _assert_released(service)
+    # A reply handed whole to the server counts as received
+    async with _client(service) as client:
+        again = await client.get(_inst() + '/records', headers=HEADERS)
+    assert [r['offset'] for r in again.json()] == [0]
+    assert log.pos[_kafka_tp()] == 1
+
+
+async def test_a_reply_past_the_send_limit_is_fetched_again(
+    service: DiasporaService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(main, 'FETCH_SEND_TIMEOUT_S', 0.2)
+    log = _log(service, 'i1', b'r0')
+    response = await _fetch(service, _connected())
+    stalled = asyncio.Event()
+
+    async def receive() -> dict[str, Any]:
+        await stalled.wait()
+        return {'type': 'http.disconnect'}
+
+    async def send(message: dict[str, Any]) -> None:
+        # The client reads nothing, so the send never finishes
+        await stalled.wait()
+
+    started = time.monotonic()
+    await response({'type': 'http'}, receive, send)
+    assert time.monotonic() - started < 1
+    assert log.pos[_kafka_tp()] == 0
+    _assert_released(service)
+
+
+def test_partitions_take_turns_to_start_a_reply(
+    service: DiasporaService,
+) -> None:
+    """A partition whose records fill each reply cannot keep others out."""
+    consumers = service.consumer_service
+    log = _log(service, 'i1')
+    t1, t2 = _kafka_tp('t1'), _kafka_tp('t2')
+    # Each t1 record is about 1.3 MiB as base64, so a reply holds one
+    log.logs = {t1: [b'a' * (1024 * 1024)] * 20, t2: [b'b'] * 5}
+    log.pos = {t1: 0, t2: 0}
+    got: dict[str, list[int]] = {'t1': [], 't2': []}
+    for _ in range(2):
+        reply, status = consumers.fetch_records(
+            SUBJECT,
+            NAMESPACE,
+            GROUP,
+            'i1',
+            timeout_ms=0,
+        )
+        assert status == 200
+        assert isinstance(reply, FetchReply)
+        for record in reply.records:
+            got[record.topic].append(record.offset)
+    assert got == {'t1': [0, 1], 't2': [0, 1, 2, 3, 4]}
+    assert log.pos == {t1: 2, t2: 5}
 
 
 # ============================================================================

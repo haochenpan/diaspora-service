@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import functools
 import importlib.metadata as importlib_metadata
+import logging
 import os
 import time
 from collections.abc import AsyncIterator
@@ -14,7 +15,9 @@ from typing import Any
 from typing import TypeVar
 
 import anyio
+import anyio.lowlevel
 import uvicorn
+from anyio.abc import TaskGroup
 from fastapi import APIRouter
 from fastapi import Body
 from fastapi import FastAPI
@@ -24,7 +27,6 @@ from fastapi import Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 from fastapi.responses import Response
-from fastapi.responses import StreamingResponse
 from starlette.requests import ClientDisconnect
 from starlette.types import Receive
 from starlette.types import Scope
@@ -46,6 +48,7 @@ from web_service.consumer_service import DEFAULT_FETCH_WAIT_MS
 from web_service.consumer_service import MAX_FETCH_WAIT_MS
 from web_service.consumer_service import REPLY_MAX_BYTES
 from web_service.consumer_service import run_holding
+from web_service.consumer_service import SERVER_ERROR
 from web_service.consumer_service import TOO_MANY_REQUESTS
 from web_service.producer_models import BatchResult
 from web_service.producer_models import PRODUCE_BATCH_REQUEST_SCHEMA
@@ -83,12 +86,14 @@ from .services import WebService
 
 _Prepared = TypeVar('_Prepared')
 
-# Fetches that run at once, from the poll until the reply is sent, each
-# on a thread of its own limiter. A fetch of one 8 MiB record took up to
-# 36 MiB in a test, and a fetch can read a record of up to 8 MiB from each
-# broker, so 4 hold up to about 290 MiB on two brokers; see the consumer
+logger = logging.getLogger(__name__)
+
+# Fetches that hold a slot at once: from a poll that found records until
+# the reply is sent, or for one slice of a poll that finds none. A slot
+# whose poll returned an 8 MiB record from each of two partitions took
+# 71 MiB in a test, so 3 slots hold about 220 MiB; see the consumer
 # routes' memory in docs/architecture.md.
-FETCH_MAX_CONCURRENT = 4
+FETCH_MAX_CONCURRENT = 3
 # Fetches one subject may have in progress at once, and the longest a
 # fetch's reply may take to send before its connection is closed: both
 # keep one user's fetches from holding every slot
@@ -96,6 +101,9 @@ FETCH_MAX_PER_SUBJECT = 2
 FETCH_SEND_TIMEOUT_S = 30
 # Seconds a fetch refused for want of a slot is told to wait
 FETCH_RETRY_AFTER_S = 1
+# Longest a fetch polls under one slot before it gives the slot back and
+# takes its turn again, unless the poll found records
+FETCH_SLICE_MS = 500
 # Threads of the pool that every other blocking call shares: the token
 # check, DynamoDB, the Kafka admin calls and the consumer calls other than
 # fetches. Produce parsing and sends and fetches have limiters of their
@@ -122,16 +130,39 @@ def fetch_wait_ms(timeout: int | None, default_wait_ms: int | None) -> int:
     return DEFAULT_FETCH_WAIT_MS
 
 
-class _HeldReply:
-    """A fetch response that releases the fetch once it is sent.
+class FetchResponse(Response):
+    """A fetch's reply, which holds the fetch until the reply is sent.
 
-    The release (the instance's lock, the subject's count and the slot)
-    runs however the send ends. A send that takes longer than
-    FETCH_SEND_TIMEOUT_S is abandoned, and the server closes the
-    connection.
+    The reply is encoded and sent inside __call__, under the fetch's
+    release (the instance's lock, the subject's count and the slot), so
+    the release runs however the send ends, a failure to encode included.
+    A reply of up to REPLY_MAX_BYTES is written whole, with its
+    Content-Length; a larger one, a single record, is written a piece at
+    a time, so its JSON is never held whole.
+
+    If the client leaves before the whole reply is handed to the server,
+    the send fails, or it takes longer than FETCH_SEND_TIMEOUT_S, unfetch
+    runs before the release, so the next fetch returns the reply's
+    records again. A reply handed whole to the server counts as received,
+    since the server cannot tell whether the client read it.
     """
 
-    _release: AsyncExitStack
+    def __init__(
+        self,
+        reply: FetchReply,
+        *,
+        release: AsyncExitStack,
+        unfetch: Callable[[], None],
+        threads: anyio.CapacityLimiter,
+    ) -> None:
+        """Make the response; nothing is encoded until it is sent."""
+        super().__init__(status_code=200, media_type='application/json')
+        self._reply = reply
+        self._release = release
+        self._unfetch = unfetch
+        self._threads = threads
+        self._started = False
+        self._complete = False
 
     async def __call__(
         self,
@@ -139,40 +170,91 @@ class _HeldReply:
         receive: Receive,
         send: Send,
     ) -> None:
-        """Send the response, then release the fetch."""
+        """Send the reply, then release the fetch."""
         async with self._release:
-            with anyio.move_on_after(FETCH_SEND_TIMEOUT_S):
-                await super().__call__(scope, receive, send)  # type: ignore[misc]
+            delivered = failed = False
+            try:
+                with anyio.move_on_after(FETCH_SEND_TIMEOUT_S):
+                    async with anyio.create_task_group() as tasks:
+                        tasks.start_soon(self._watch, receive, tasks)
+                        try:
+                            await self._write(send)
+                        except OSError:
+                            # A server on ASGI 2.4 or later reports a closed
+                            # connection this way: the client left
+                            pass
+                        except Exception:
+                            logger.exception('Failed to send a fetch reply')
+                            failed = True
+                        else:
+                            self._complete = delivered = True
+                        tasks.cancel_scope.cancel()
+            finally:
+                if not delivered:
+                    self._unfetch()
+            if failed and not self._started:
+                refusal = error_response(
+                    500,
+                    SERVER_ERROR,
+                    'Internal server error',
+                )
+                await refusal(scope, receive, send)
 
-
-class HeldResponse(_HeldReply, Response):
-    """A fetch's reply, written whole."""
-
-    def __init__(
+    async def _watch(
         self,
-        *,
-        content: bytes,
-        media_type: str,
-        release: AsyncExitStack,
+        receive: Receive,
+        tasks: TaskGroup,
     ) -> None:
-        """Make the response; release runs once it is sent."""
-        super().__init__(content=content, media_type=media_type)
-        self._release = release
+        """Stop the send if the client leaves before it is complete."""
+        while (await receive())['type'] != 'http.disconnect':
+            pass
+        if not self._complete:
+            tasks.cancel_scope.cancel()
 
-
-class HeldStreamingResponse(_HeldReply, StreamingResponse):
-    """A fetch's reply, written a piece at a time."""
-
-    def __init__(
-        self,
-        content: AsyncIterator[bytes],
-        *,
-        media_type: str,
-        release: AsyncExitStack,
-    ) -> None:
-        """Make the response; release runs once it is sent."""
-        super().__init__(content, media_type=media_type)
-        self._release = release
+    async def _write(self, send: Send) -> None:
+        reply = self._reply
+        start: dict[str, Any] = {
+            'type': 'http.response.start',
+            'status': 200,
+            'headers': [(b'content-type', b'application/json')],
+        }
+        if reply.size <= REPLY_MAX_BYTES:
+            body = await anyio.to_thread.run_sync(
+                reply.body,
+                limiter=self._threads,
+            )
+            start['headers'].append(
+                (b'content-length', str(len(body)).encode()),
+            )
+            # Let _watch see a disconnect the server has already noticed:
+            # once disconnected, uvicorn drops what is sent without an
+            # error, and the reply would count as received
+            await anyio.lowlevel.checkpoint()
+            self._started = True
+            await send(start)
+            await send({'type': 'http.response.body', 'body': body})
+            return
+        chunks = reply.chunks()
+        self._started = True
+        await send(start)
+        while True:
+            chunk = await anyio.to_thread.run_sync(
+                next,
+                chunks,
+                None,
+                limiter=self._threads,
+            )
+            if chunk is None:
+                break
+            await send(
+                {
+                    'type': 'http.response.body',
+                    'body': chunk,
+                    'more_body': True,
+                },
+            )
+        await anyio.lowlevel.checkpoint()
+        await send({'type': 'http.response.body', 'body': b''})
 
 
 class DiasporaService:
@@ -924,7 +1006,7 @@ class DiasporaService:
             serve,
         )
 
-    async def fetch_consumer_records(  # noqa: PLR0911
+    async def fetch_consumer_records(
         self,
         namespace: str,
         group_name: str,
@@ -951,13 +1033,18 @@ class DiasporaService:
     ) -> Response:
         """Fetch data for subscribed topics or assigned partitions.
 
-        A fetch to an instance another request holds is refused at once.
-        A subject may have FETCH_MAX_PER_SUBJECT fetches in progress, and
-        a fetch waits for one of FETCH_MAX_CONCURRENT slots no longer than
-        its wait; both refusals are 429s that poll nothing. The time spent
-        waiting comes off the wait for records, so the fetch answers
-        within its timeout. The slot, the instance and the subject's count
-        are held until the reply is sent.
+        A fetch to an instance another request holds is refused at once,
+        and a subject may have FETCH_MAX_PER_SUBJECT fetches in progress.
+        The fetch polls in slices of at most FETCH_SLICE_MS, each under
+        one of FETCH_MAX_CONCURRENT slots. Fetches take the slots in the
+        order they ask, and a slice that finds nothing gives its slot
+        back, so quiet long polls cannot keep the slots from fetches with
+        records waiting. The slices and the waits for a slot all fall
+        within the fetch's wait for records. A fetch that got no slot in
+        that time is refused with 429 and polls nothing; one that polled
+        and found nothing returns []. A slice that finds records keeps
+        its slot, the instance and the subject's count until the reply is
+        sent.
         """
         started = time.monotonic()
         if err := await run_in_threadpool(
@@ -983,34 +1070,122 @@ class DiasporaService:
             stack.callback(self._fetch_done, subject)
             wait_ms = fetch_wait_ms(timeout, held.default_wait_ms)
             deadline = started + wait_ms / 1000
-            if not await self._take_fetch_slot(stack, deadline):
-                return self._fetch_refused(
-                    'The service is serving the most fetches it serves at '
-                    'once; retry',
-                )
-            # A client that gave up while the fetch waited would lose the
-            # records it fetched
-            if await request.is_disconnected():
-                return Response(status_code=400)
-            remaining_ms = max(0, int((deadline - time.monotonic()) * 1000))
             fetch = functools.partial(
                 self.consumer_service.fetch_records,
                 subject,
                 namespace,
                 group_name,
                 instance_id,
-                timeout_ms=remaining_ms,
                 max_records=max_bytes if max_bytes and max_bytes > 0 else None,
             )
+            reply = await self._poll_for_records(
+                stack,
+                held,
+                fetch,
+                deadline,
+                request,
+            )
+            if not isinstance(reply, FetchReply):
+                return reply
+            unfetch = functools.partial(
+                self.consumer_service.unfetch,
+                held,
+                reply,
+            )
+            # The client may have left while the slice polled; nothing has
+            # committed the records since, so they can be fetched again
+            if await request.is_disconnected():
+                unfetch()
+                return Response(status_code=400)
+            release = stack.pop_all()
+            try:
+                return FetchResponse(
+                    reply,
+                    release=release,
+                    unfetch=unfetch,
+                    threads=self.fetch_threads,
+                )
+            except BaseException:
+                unfetch()
+                await release.aclose()
+                raise
+
+    async def _poll_for_records(
+        self,
+        stack: AsyncExitStack,
+        held: Any,
+        fetch: Callable[..., tuple[Any, int]],
+        deadline: float,
+        request: Request,
+    ) -> FetchReply | Response:
+        """Poll in slices, each under a slot, until records come or time ends.
+
+        Returns:
+            The reply of the slice that found records, whose slot stack
+            now releases; or the response to give instead: [] once the
+            fetch polled and its wait ended, 429 if it never got a slot,
+            or the error a slice met
+        """
+        polled = False
+        while True:
+            slot = await self._take_fetch_slot(deadline)
+            if slot is None:
+                if polled:
+                    return self._consumer_response([], 200)
+                return self._fetch_refused(
+                    'The service is serving the most fetches it serves at '
+                    'once; retry',
+                )
+            polled = True
+            found = await self._poll_slice(
+                slot,
+                held,
+                fetch,
+                deadline,
+                request,
+            )
+            if not isinstance(found, FetchReply):
+                return found
+            if found.records:
+                stack.callback(self.fetch_slots.release_on_behalf_of, slot)
+                return found
+            if time.monotonic() >= deadline:
+                return self._consumer_response([], 200)
+
+    async def _poll_slice(
+        self,
+        slot: object,
+        held: Any,
+        fetch: Callable[..., tuple[Any, int]],
+        deadline: float,
+        request: Request,
+    ) -> FetchReply | Response:
+        """Poll once, for at most FETCH_SLICE_MS, under slot.
+
+        The slot is given back unless the poll found records.
+        """
+        keep = False
+        try:
+            # A client that left would lose the records polled
+            if await request.is_disconnected():
+                return Response(status_code=400)
+            remaining_ms = max(0, int((deadline - time.monotonic()) * 1000))
             reply, status = await anyio.to_thread.run_sync(
                 run_holding,
                 held,
-                fetch,
+                functools.partial(
+                    fetch,
+                    timeout_ms=min(remaining_ms, FETCH_SLICE_MS),
+                ),
                 limiter=self.fetch_threads,
             )
             if not isinstance(reply, FetchReply):
                 return self._consumer_response(reply, status)
-            return await self._fetch_response(reply, stack.pop_all())
+            keep = bool(reply.records)
+            return reply
+        finally:
+            if not keep:
+                self.fetch_slots.release_on_behalf_of(slot)
 
     def _fetch_done(self, subject: str) -> None:
         left = self.fetching.get(subject, 0) - 1
@@ -1019,76 +1194,28 @@ class DiasporaService:
         else:
             self.fetching.pop(subject, None)
 
-    async def _take_fetch_slot(
-        self,
-        stack: AsyncExitStack,
-        deadline: float,
-    ) -> bool:
-        """Take a fetch slot by the deadline (time.monotonic()), for stack.
+    async def _take_fetch_slot(self, deadline: float) -> object | None:
+        """Take a fetch slot by the deadline (time.monotonic()).
 
         Returns:
-            Whether a slot was taken; stack releases it on exit
+            The slot's holder, to release it with, or None if no slot
+            came free in time
         """
         holder = object()
-        taken = False
         try:
             self.fetch_slots.acquire_on_behalf_of_nowait(holder)
-            taken = True
         except anyio.WouldBlock:
             with anyio.move_on_after(max(0.0, deadline - time.monotonic())):
                 await self.fetch_slots.acquire_on_behalf_of(holder)
-                taken = True
-        if taken:
-            stack.callback(self.fetch_slots.release_on_behalf_of, holder)
-        return taken
+                return holder
+            return None
+        return holder
 
     @staticmethod
     def _fetch_refused(message: str) -> Response:
         response = error_response(429, TOO_MANY_REQUESTS, message)
         response.headers['Retry-After'] = str(FETCH_RETRY_AFTER_S)
         return response
-
-    async def _fetch_response(
-        self,
-        reply: FetchReply,
-        release: AsyncExitStack,
-    ) -> Response:
-        """The reply's response, which releases the fetch once it is sent.
-
-        A reply of up to REPLY_MAX_BYTES is written whole. A larger one,
-        a single record, is written and sent a piece at a time, so its
-        JSON is never held whole.
-        """
-        if reply.size <= REPLY_MAX_BYTES:
-            body = await anyio.to_thread.run_sync(
-                reply.body,
-                limiter=self.fetch_threads,
-            )
-            return HeldResponse(
-                content=body,
-                media_type='application/json',
-                release=release,
-            )
-        threads = self.fetch_threads
-
-        async def stream() -> AsyncIterator[bytes]:
-            chunks = reply.chunks()
-            while True:
-                chunk = await anyio.to_thread.run_sync(
-                    next,
-                    chunks,
-                    None,
-                    limiter=threads,
-                )
-                if chunk is None:
-                    return
-                yield chunk
-
-        return HeldStreamingResponse(
-            stream(),
-            media_type='application/json',
-            release=release,
-        )
 
     async def commit_consumer_offsets(
         self,

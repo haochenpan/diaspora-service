@@ -435,6 +435,8 @@ class ManagedConsumer:
         self.default_wait_ms = default_wait_ms
         self.lock = InstanceLock()
         self.last_access = time.monotonic()
+        # Fetches so far, which rotate the partition a reply starts from
+        self.fetches = 0
         # Set, under the lock, once the consumer is closed; a request that
         # was waiting for the lock then finds the instance gone
         self.closed = False
@@ -1112,15 +1114,27 @@ class ConsumerService:
         managed: ManagedConsumer,
         raw: dict[TopicPartition, list[Any]],
     ) -> FetchReply:
-        """The reply of fetched records, rewinding the ones it leaves out."""
+        """The reply of fetched records, rewinding the ones it leaves out.
+
+        The partitions take turns to come first, one fetch after another,
+        so a partition whose records fill every reply cannot keep the
+        others out. Within a partition the records keep their order.
+        """
         records: list[EncodedRecord] = []
+        starts: dict[TopicPartition, int] = {}
         size = 2
         rewind: dict[TopicPartition, int] = {}
-        for tp, msgs in raw.items():
-            if not self._in_namespace(namespace, tp.topic):
-                continue
+        order = sorted(
+            (tp for tp in raw if self._in_namespace(namespace, tp.topic)),
+            key=lambda tp: (tp.topic, tp.partition),
+        )
+        if order:
+            turn = managed.fetches % len(order)
+            order = order[turn:] + order[:turn]
+        managed.fetches += 1
+        for tp in order:
             topic = self._strip_namespace(namespace, tp.topic)
-            for msg in msgs:
+            for msg in raw[tp]:
                 if rewind:
                     rewind[tp] = msg.offset
                     break
@@ -1136,10 +1150,31 @@ class ConsumerService:
                     rewind[tp] = msg.offset
                     break
                 records.append(record)
+                starts.setdefault(tp, msg.offset)
                 size = grown
         for tp, offset in rewind.items():
             managed.consumer.seek(tp, offset)
-        return FetchReply(records)
+        return FetchReply(records, starts)
+
+    @staticmethod
+    def unfetch(managed: ManagedConsumer, reply: FetchReply) -> None:
+        """Seek back to a reply's first records, which the client never got.
+
+        The caller holds the instance's lock. Nothing commits the
+        positions the reply moved past before this: kafka-python commits,
+        auto-commit included, only inside poll(), commit() and close(),
+        which all run under the lock.
+        """
+        for tp, offset in reply.starts.items():
+            try:
+                managed.consumer.seek(tp, offset)
+            except Exception:
+                logger.exception(
+                    'Error seeking %s back to %d for instance %s',
+                    tp,
+                    offset,
+                    managed.instance_id,
+                )
 
     def poll_records(
         self,

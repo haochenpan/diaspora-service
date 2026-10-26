@@ -22,6 +22,7 @@ from unittest.mock import patch
 import httpx
 import pytest
 
+from web_service import main
 from web_service.consumer_models import AssignmentRequest
 from web_service.consumer_models import CreateConsumerRequest
 from web_service.consumer_models import OffsetsCommitRequest
@@ -97,6 +98,12 @@ def _reply(*values: bytes) -> FetchReply:
             for i, value in enumerate(values)
         ],
     )
+
+
+@pytest.fixture
+def long_slices(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Let a fetch poll for its whole wait in one slice."""
+    monkeypatch.setattr(main, 'FETCH_SLICE_MS', 60_000)
 
 
 @pytest.fixture
@@ -650,6 +657,23 @@ CONSUMER_INST = 'my-instance'
 # ============================================================================
 # Consumer REST API - Helper to parse Response body
 # ============================================================================
+
+
+async def _sent_json(response: object) -> Any:
+    """Send a response as a server would, and parse the body it wrote."""
+    sent: list[dict[str, Any]] = []
+    done = asyncio.Event()
+
+    async def receive() -> dict[str, Any]:
+        await done.wait()
+        return {'type': 'http.disconnect'}
+
+    async def send(message: dict[str, Any]) -> None:
+        sent.append(message)
+
+    await response({'type': 'http'}, receive, send)
+    done.set()
+    return json.loads(b''.join(m.get('body', b'') for m in sent[1:]))
 
 
 def _response_json(response: object) -> Any:
@@ -1583,7 +1607,7 @@ async def test_fetch_consumer_records_success(
         max_bytes=None,
     )
     assert response.status_code == 200
-    assert _response_json(response) == [
+    assert await _sent_json(response) == [
         {
             'topic': 't1',
             'key': None,
@@ -1597,14 +1621,16 @@ async def test_fetch_consumer_records_success(
 @pytest.mark.asyncio
 async def test_fetch_consumer_records_default_timeout(
     mock_diaspora_service: DiasporaService,
+    *,
     mock_web_service: MagicMock,
     mock_consumer_service: MagicMock,
     valid_subject: str,
     valid_token: str,
+    long_slices: None,
 ) -> None:
     """Test fetch_consumer_records uses default timeout=5000."""
     _setup_namespace_success(mock_web_service)
-    mock_consumer_service.fetch_records.return_value = (_reply(), 200)
+    mock_consumer_service.fetch_records.return_value = (_reply(b'x'), 200)
     await mock_diaspora_service.fetch_consumer_records(
         request=_fetch_request(),
         namespace=CONSUMER_NS,
@@ -1630,14 +1656,16 @@ async def test_fetch_consumer_records_default_timeout(
 @pytest.mark.asyncio
 async def test_fetch_consumer_records_custom_timeout(
     mock_diaspora_service: DiasporaService,
+    *,
     mock_web_service: MagicMock,
     mock_consumer_service: MagicMock,
     valid_subject: str,
     valid_token: str,
+    long_slices: None,
 ) -> None:
     """Test fetch_consumer_records with custom timeout and max_bytes."""
     _setup_namespace_success(mock_web_service)
-    mock_consumer_service.fetch_records.return_value = (_reply(), 200)
+    mock_consumer_service.fetch_records.return_value = (_reply(b'x'), 200)
     await mock_diaspora_service.fetch_consumer_records(
         request=_fetch_request(),
         namespace=CONSUMER_NS,
@@ -1924,7 +1952,7 @@ CONSUMER_ROUTES: list[tuple[str, str, Any, str, tuple[Any, int]]] = [
         ({'topics': ['t1']}, 200),
     ),
     ('DELETE', f'{_INST}/subscription', None, 'unsubscribe', (None, 204)),
-    ('GET', f'{_INST}/records', None, 'fetch_records', (_reply(), 200)),
+    ('GET', f'{_INST}/records', None, 'fetch_records', (_reply(b'x'), 200)),
     ('POST', f'{_INST}/offsets', _OFFSETS, 'commit_offsets', (None, 200)),
     (
         'GET',
@@ -2324,19 +2352,20 @@ async def test_fetch_timeout_is_capped(
     *,
     mock_web_service: MagicMock,
     mock_consumer_service: MagicMock,
+    long_slices: None,
     query: str,
     expected_ms: int,
 ) -> None:
     """Fetch waits at most 30 s; a larger timeout is clamped, not refused."""
     _setup_consumer_mocks(mock_web_service)
-    mock_consumer_service.fetch_records.return_value = (_reply(), 200)
+    mock_consumer_service.fetch_records.return_value = (_reply(b'x'), 200)
     response = await _send(
         mock_diaspora_service,
         'GET',
         f'{_INST}/records{query}',
     )
     assert response.status_code == 200
-    assert response.json() == []
+    assert len(response.json()) == 1
     kwargs = mock_consumer_service.fetch_records.call_args.kwargs
     assert expected_ms - 500 < kwargs['timeout_ms'] <= expected_ms
 
