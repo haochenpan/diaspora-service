@@ -311,7 +311,7 @@ async def test_create_key_success_exact_format(
     """Test create_key returns exact success response format."""
     expected_access_key = 'AKIAIOSFODNN7EXAMPLE'  # pragma: allowlist secret
     expected_secret_key = (  # pragma: allowlist secret
-        'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY'  # pragma: allowlist secret  # noqa: E501
+        'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY'  # pragma: allowlist secret
     )
     expected_create_date = '2024-01-01T00:00:00'
     expected_endpoint = 'bootstrap.kafka:9092'
