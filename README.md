@@ -7,8 +7,8 @@
 [![MIT License](https://img.shields.io/badge/license-MIT-blue)](https://opensource.org/licenses/MIT)
 
 This repository holds the web service of the Diaspora Event Fabric. Users
-sign in with Globus. For each user, the service creates an AWS IAM
-identity and a namespace, the prefix of the user's Kafka topic names. It
+sign in with Globus. For each user, the service creates an IAM user
+and a namespace, the prefix of the user's Kafka topic names. It
 creates the user's topics in that namespace on an Amazon MSK cluster, and
 offers REST routes to manage them and to consume records from the topics.
 It is a FastAPI application that runs as one container on AWS Lightsail

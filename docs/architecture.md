@@ -10,7 +10,7 @@ reads topics on one Amazon MSK cluster.
 
 1. A client sends an HTTPS request to the public endpoint of the Lightsail
    container service. Lightsail forwards it over HTTP to port 8000 of the
-   one container, which Lightsail names `flask`
+   one container, which `deployment.yml` names `flask`
    ([Deployment](3-deploying.md#what-the-workflow-does)).
 2. In the container, gunicorn runs one Uvicorn worker, which serves the
    FastAPI application. `web_service/main.py` builds the application and
@@ -58,9 +58,14 @@ and `authorization`, `Bearer` followed by a Globus access token. The class
 6. The token's scopes include
    `https://auth.globus.org/scopes/<SERVER_CLIENT_ID>/action_all`.
 
-A failed check ends the request. The user, key, namespace and topic routes
-then answer `200` with `{"status": "error", "reason": ...}`; the consumer
-routes answer `401`. After the checks, the service trusts `subject` as the
+A request without either header gets FastAPI's `422`. A failed check ends
+the request: the user, key, namespace and topic routes answer `200` with
+`{"status": "error", "reason": ...}`, and the consumer routes answer
+`401`. Step 3 fails this way only when Globus answers that the token is
+inactive. When the introspection call itself fails, for example because
+Globus rejects `SERVER_CLIENT_ID` and `SERVER_SECRET`, the Globus SDK
+raises an `AuthAPIError` that the service does not catch, and the route
+answers `500`. After the checks, the service trusts `subject` as the
 caller's identity and names the caller's resources after it.
 
 ## Each user's resources
@@ -73,7 +78,7 @@ service creates the user.
 | --- | --- | --- | --- |
 | IAM user | the subject, under the path `/msk-users/` | `POST /api/v3/user`, or `POST /api/v3/key` when the keys table holds no key for the user | `DELETE /api/v3/user` |
 | IAM managed policy, attached to the user | the subject, under the path `/msk-policy/` | the same as the user | `DELETE /api/v3/user` |
-| IAM access key | chosen by IAM | `POST /api/v3/key` | `DELETE /api/v3/key`, `DELETE /api/v3/user` |
+| IAM access key | chosen by IAM | `POST /api/v3/key` | `POST /api/v3/key` when the keys table holds no key for the user, `DELETE /api/v3/key`, `DELETE /api/v3/user` |
 | Default namespace | `ns-` and the last 12 characters of the subject without dashes | the same as the user | `DELETE /api/v3/user` |
 | Kafka topic | `<namespace>.<topic>`, with 1 partition and replication factor 2 | `POST /api/v3/{namespace}/{topic}` | `DELETE /api/v3/{namespace}/{topic}`, `DELETE /api/v3/user` |
 | Kafka consumer group | `<namespace>.<group_name>` | the first consumer that joins it | not deleted by the service |
@@ -101,9 +106,10 @@ most `MAX_TOPICS_PER_NAMESPACE` topics, 50 by default.
 ## The DynamoDB tables
 
 Three environment variables name the tables, and their defaults are the
-production tables. Every table bills on demand and has one string
-partition key. When a table does not exist, the service creates it at its
-first write to it.
+production tables. Every table has one string partition key. When a table
+does not exist, a write that adds an item, or adds to a set, creates it
+with on-demand billing; deletes from a missing table are ignored, and
+reads from it find nothing.
 
 | Variable (default) | Partition key | Items |
 | --- | --- | --- |
@@ -126,10 +132,12 @@ background thread looks every 30 seconds for instances idle for longer
 than `CONSUMER_INSTANCE_TIMEOUT_MS` (5 minutes by default) and closes them.
 When the process stops, it closes them all.
 
-`WebService` and `NamespaceService` each hold a lock that serializes their
-operations: user and key operations in one, namespace and topic operations
-in the other. They are Python threading locks, so they serialize requests
-only within one process.
+`WebService` and `NamespaceService` each hold a lock. The lock in
+`WebService` serializes user and key operations, including the Kafka
+topic deletes of `DELETE /api/v3/user`. The lock in `NamespaceService`
+serializes only the DynamoDB step of namespace and topic operations: the
+topic routes call Kafka outside any lock. Both are Python threading
+locks, so they serialize requests only within one process.
 
 Because of this state, the service runs one worker on one node (Lightsail
 scale 1). A second worker or node would not hold the consumer instances

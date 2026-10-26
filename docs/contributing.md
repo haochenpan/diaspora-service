@@ -24,8 +24,11 @@ pip install -e ".[docs]"
 mkdocs build --strict
 ```
 
-`mkdocs serve` serves the site at <http://127.0.0.1:8000/> and rebuilds
-it on every change.
+To preview the site while you edit, run
+`mkdocs serve --dev-addr 127.0.0.1:8001`. It serves the site at
+<http://127.0.0.1:8001/> and rebuilds it on every change. Without
+`--dev-addr` it takes port 8000, the port the service uses in
+[Running locally](1-running.md).
 
 ## Checks
 
@@ -72,8 +75,9 @@ Name test files `*_test.py`. A test that needs AWS or Kafka must be marked
 with `@pytest.mark.integration`, or be in one of the modules that
 `tests/conftest.py` marks as a whole. A live test that creates an IAM
 user, a namespace, a topic or a consumer group takes its names from
-`tests/live_identity`: `live_subject()`, `live_namespace()` or the
-`random_subject` fixture. The live tests' IAM identity can touch only
+`live_subject()` or `live_namespace()` in `tests/live_identity`, or from
+the `random_subject` fixture in `tests/conftest.py`, which calls
+`live_subject()`. The live tests' IAM identity can touch only
 resources with those names, and the nightly sweep, a script that deletes
 what live runs leave behind, finds only those
 ([Naming live-test resources](2-testing.md#naming-live-test-resources)).
