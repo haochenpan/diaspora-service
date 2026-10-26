@@ -1823,6 +1823,10 @@ def test_partitions_take_turns_to_start_a_reply(
     log.logs = {t1: [b'a' * (1024 * 1024)] * 20, t2: [b'b'] * 5}
     log.pos = {t1: 0, t2: 0}
     got: dict[str, list[int]] = {'t1': [], 't2': []}
+    # A poll that finds nothing takes no partition's turn
+    managed = consumers._consumers[(SUBJECT, NAMESPACE, GROUP, 'i1')]
+    consumers._reply(NAMESPACE, managed, {})
+    assert managed.fetches == 0
     for _ in range(2):
         reply, status = consumers.fetch_records(
             SUBJECT,

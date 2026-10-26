@@ -435,7 +435,8 @@ class ManagedConsumer:
         self.default_wait_ms = default_wait_ms
         self.lock = InstanceLock()
         self.last_access = time.monotonic()
-        # Fetches so far, which rotate the partition a reply starts from
+        # Fetches that found records so far, which rotate the partition a
+        # reply starts from
         self.fetches = 0
         # Set, under the lock, once the consumer is closed; a request that
         # was waiting for the lock then finds the instance gone
@@ -1131,7 +1132,9 @@ class ConsumerService:
         if order:
             turn = managed.fetches % len(order)
             order = order[turn:] + order[:turn]
-        managed.fetches += 1
+            # Only replies with records take a turn, so an empty poll does
+            # not skip a partition's turn
+            managed.fetches += 1
         for tp in order:
             topic = self._strip_namespace(namespace, tp.topic)
             for msg in raw[tp]:
@@ -1162,8 +1165,9 @@ class ConsumerService:
 
         The caller holds the instance's lock. Nothing commits the
         positions the reply moved past before this: kafka-python commits,
-        auto-commit included, only inside poll(), commit() and close(),
-        which all run under the lock.
+        auto-commit included, only inside poll(), commit(), assign(),
+        unsubscribe() and close(), and the service calls each of them
+        under the lock.
         """
         for tp, offset in reply.starts.items():
             try:
