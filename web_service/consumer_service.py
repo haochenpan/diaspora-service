@@ -108,9 +108,14 @@ MAX_FETCH_WAIT_MS = 30_000
 # case. kafka-python takes them in any case too, but takes a value it does
 # not know as none, with only a log line, so the service checks them.
 OFFSET_RESETS = ('earliest', 'latest', 'none')
-# Instance names: they go in URLs, so letters, digits, dots, dashes and
-# underscores, starting with a letter or digit (so never . or ..)
-INSTANCE_NAME = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}')
+# Group and instance names: they go in URLs, so letters, digits, dots,
+# dashes and underscores, starting with a letter or digit (so never . or
+# .., which clients normalise away)
+NAME = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}')
+NAME_RULE = (
+    'must be 1 to 128 letters, digits, dots, dashes or underscores, '
+    'starting with a letter or digit'
+)
 
 # Error codes of the consumer routes: Confluent's, from kafka-rest's
 # Errors.java and rest-utils' KafkaExceptionMapper, except 40904.
@@ -203,6 +208,15 @@ def _invalid_config(setting: str, rule: str) -> Reply:
         INVALID_CONSUMER_CONFIG,
         f'Invalid consumer configuration: {setting} {rule}',
     )
+
+
+def _check_names(group_name: str, name: str | None) -> Reply | None:
+    """The 422 reply if the group or the instance name breaks NAME."""
+    if not NAME.fullmatch(group_name):
+        return _invalid_config('group', NAME_RULE)
+    if name is not None and not NAME.fullmatch(name):
+        return _invalid_config('name', NAME_RULE)
+    return None
 
 
 def _whole_number(value: int | str | None) -> int | None:
@@ -920,7 +934,8 @@ class ConsumerService:
 
         A subject may hold MAX_INSTANCES_PER_SUBJECT instances, and the
         service MAX_INSTANCES; a create past either is refused with 429.
-        A name must match INSTANCE_NAME, and one is made if none is given.
+        The group and the name must match NAME, and a name is made if none
+        is given.
         consumer.request.timeout.ms is, as in Confluent's REST Proxy, how
         long a fetch that names no timeout waits for records; it is not
         passed to the Kafka consumer.
@@ -944,12 +959,8 @@ class ConsumerService:
         if isinstance(settings[0], dict):
             return settings
         auto_offset_reset, min_bytes, wait_ms = settings
-        if name is not None and not INSTANCE_NAME.fullmatch(name):
-            return _invalid_config(
-                'name',
-                'must be 1 to 128 letters, digits, dots, dashes or '
-                'underscores, starting with a letter or digit',
-            )
+        if refusal := _check_names(group_name, name):
+            return refusal
 
         instance_id = name or uuid.uuid4().hex[:12]
         key = self._consumer_key(

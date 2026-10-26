@@ -497,6 +497,27 @@ def test_create_consumer_accepts_valid_names(
     assert body == {'instance_id': name}
 
 
+@pytest.mark.parametrize('group', ('', '..', '.g', 'a/b', 'g' * 129))
+def test_create_consumer_refuses_invalid_groups(
+    consumer_service: ConsumerService,
+    group: str,
+) -> None:
+    """A group goes in base_uri too, so it takes the names' rule."""
+    with patch('web_service.consumer_service.KafkaConsumer') as mock_kc:
+        body, status = consumer_service.create_consumer(
+            subject=SUBJECT,
+            namespace=NAMESPACE,
+            group_name=group,
+            name='inst',
+        )
+    mock_kc.assert_not_called()
+    assert status == 422
+    assert body['error_code'] == 42204
+    assert body['message'].startswith(
+        'Invalid consumer configuration: group must be 1 to 128',
+    )
+
+
 @pytest.mark.parametrize(
     'name',
     ('', '-inst', '.inst', 'a/b', 'a b', 'inst%2F', 'x' * 129, 'é'),
