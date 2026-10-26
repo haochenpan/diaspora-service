@@ -186,8 +186,9 @@ belong to the same IAM user; check before you delete either.
 1. Find the IAM user the key belongs to, and list its keys:
    `aws iam list-access-keys --user-name <user>`. If it already has two,
    run `aws iam get-access-key-last-used --access-key-id <key-id>` on
-   each. Delete only a key with no recent use, and only after checking
-   that neither set of secrets holds it.
+   each. Its `ServiceName` says which credential the key is: the deploy's
+   key was last used by Lightsail or STS, the container's by IAM, DynamoDB
+   or Kafka. Delete only a key with no recent use.
 2. Create a key: `aws iam create-access-key --user-name <user>`. The output
    is the only time AWS shows the secret.
 3. Update the matching secrets from the table, for example

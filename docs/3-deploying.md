@@ -212,6 +212,8 @@ and clients and these docs use the current domain.
         --service-name diaspora-web-service \
         --query 'containerServices[0].currentDeployment.containers' --output json |
       jq --arg image "$image" '.flask.image = $image')
+    jq -e '.flask.environment' > /dev/null <<< "$containers" ||
+      echo "No current deployment: set the environment by hand (below)."
     ```
 
 4. Create the deployment. The command prints the deployment with its
@@ -234,19 +236,23 @@ and clients and these docs use the current domain.
 To change a variable, or to deploy to a service with no current
 deployment, read the values into the shell first. `read -rs` keeps each
 value off the screen and out of shell history. The `SVC_` prefix keeps the
-values apart from the AWS CLI's own credentials.
+values apart from the AWS CLI's own credentials. A value set this way lasts
+only until the next workflow deploy, which rebuilds the environment from
+the `DOCKER_*` secrets and `deployment.yml`; update the matching secret, or
+for an optional variable `deployment.yml`, too.
 
 ```bash
 for var in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY SERVER_CLIENT_ID SERVER_SECRET \
     AWS_ACCOUNT_ID AWS_ACCOUNT_REGION MSK_CLUSTER_NAME DEFAULT_SERVERS; do
-  printf '%s: ' "$var"; read -rs value; echo
+  printf '%s: ' "$var"; IFS= read -rs value; echo
   export "SVC_$var=$value"
 done
 unset value
 ```
 
-To change one variable of the current deployment, read only that one and
-extend the filter of step 3, for example
+To change one variable of the current deployment, run the loop with only
+that name (`for var in MAX_TOPICS_PER_NAMESPACE; do`) and extend the filter
+of step 3, for example
 `jq --arg image "$image" '.flask.image = $image | .flask.environment.MAX_TOPICS_PER_NAMESPACE = env.SVC_MAX_TOPICS_PER_NAMESPACE'`.
 For a service with no current deployment, build the whole container
 instead of step 3:
