@@ -51,7 +51,7 @@ jmespath==1.1.0
     # via
     #   boto3
     #   botocore
-kafka-python==2.3.2
+kafka-python==3.0.11
     # via diaspora-service (pyproject.toml)
 opentelemetry-api==1.45.1
     # via fastapi
@@ -65,7 +65,7 @@ pydantic-core==2.50.1
     # via pydantic
 pyjwt==2.15.1
     # via globus-sdk
-python-dateutil==2.9.0.post0
+python-dateutil==3.0.0
     # via botocore
 requests==2.34.2
     # via globus-sdk
