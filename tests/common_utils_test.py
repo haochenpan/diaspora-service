@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from web_service.utils import AuthManager
 from web_service.utils import EnvironmentChecker
 
 
@@ -121,3 +122,15 @@ def test_check_only_one_env_variable_set(monkeypatch):
         str(excinfo.value)
         == 'AWS_SECRET_ACCESS_KEY environment variable is not set.'
     )
+
+
+@pytest.mark.parametrize(
+    ('server_client_id', 'server_secret'),
+    ((None, 'secret'), ('00000000-0000-0000-0000-000000000000', None)),
+)
+def test_auth_manager_requires_server_credentials(
+    server_client_id,
+    server_secret,
+):
+    with pytest.raises(ValueError, match='SERVER_CLIENT_ID and SERVER_SECRET'):
+        AuthManager(server_client_id, server_secret, 'client-id')
