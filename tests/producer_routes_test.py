@@ -9,11 +9,13 @@ import asyncio
 import base64
 import json
 import threading
+import time
 from collections.abc import Iterator
 from typing import Any
 from unittest.mock import MagicMock
 from unittest.mock import patch
 
+import anyio
 import httpx
 import pytest
 
@@ -21,7 +23,11 @@ from tests.producer_service_test import FakeProducer
 from web_service.main import DiasporaService
 from web_service.producer_service import MAX_BODY_BYTES
 from web_service.producer_service import MAX_RECORD_BYTES
+from web_service.producer_service import PRODUCE_MAX_BODY_BYTES
+from web_service.producer_service import PRODUCE_MAX_REQUESTS
 from web_service.producer_service import PRODUCER_CLOSE_TIMEOUT_S
+from web_service.producer_service import PRODUCER_MAX_BLOCK_MS
+from web_service.producer_service import RETRY_AFTER_S
 
 SUBJECT = '123e4567-e89b-12d3-a456-426614174000'
 HEADERS = {'subject': SUBJECT, 'authorization': 'Bearer ' + 'a' * 50}
@@ -85,12 +91,16 @@ async def _post(
     content: bytes | None = None,
     headers: dict[str, str] | None = None,
 ) -> httpx.Response:
+    if headers is None:
+        headers = HEADERS
+        if content is not None:
+            headers = {**HEADERS, 'content-type': 'application/json'}
     async with _client(service) as client:
         return await client.post(
             path,
             json=body if content is None else None,
             content=content,
-            headers=HEADERS if headers is None else headers,
+            headers=headers,
         )
 
 
@@ -201,9 +211,9 @@ async def test_produce_batch_partial_failure(
     body = response.json()
     assert [s['id'] for s in body['successes']] == ['a', 'c']
     assert [(f['id'], f['error_code']) for f in body['failures']] == [
-        ('b', 50002),
+        ('b', 50003),
         ('big', 41302),
-        ('p1', 40005),
+        ('p1', 40402),
     ]
 
 
@@ -213,15 +223,16 @@ async def test_produce_batch_partial_failure(
 
 
 @pytest.mark.parametrize(
-    ('content', 'code'),
+    ('content', 'status', 'code'),
     (
         (
             b'{"value": {"type": "STRING", "data": "a"}}\n{"value": null}',
-            40002,
+            400,
+            40004,
         ),
-        (b'not json', 40001),
-        (b'[]', 40001),
-        (b'', 40001),
+        (b'not json', 400, 40003),
+        (b'[]', 400, 40003),
+        (b'', 422, 42206),
     ),
     ids=('two-values', 'not-json', 'not-object', 'empty'),
 )
@@ -229,26 +240,27 @@ async def test_produce_record_body_refused(
     service: DiasporaService,
     fake_producer: FakeProducer,
     content: bytes,
+    status: int,
     code: int,
 ) -> None:
     response = await _post(service, RECORDS, content=content)
-    assert response.status_code == 400
+    assert response.status_code == status
     assert response.json()['error_code'] == code
     assert fake_producer.sent == []
 
 
 @pytest.mark.parametrize(
-    ('record', 'code'),
+    ('record', 'status', 'code'),
     (
-        ({'value': {'type': 'AVRO', 'data': {}}}, 40004),
-        ({'value': {'type': 'PROTOBUF', 'data': {}}}, 40004),
-        ({'value': {'type': 'JSONSCHEMA', 'data': {}}}, 40004),
-        ({'value': {'type': 'JSON', 'data': 1, 'schema_id': 3}}, 40004),
-        ({'key': {'type': 'JSON', 'data': 1, 'subject': 's'}}, 40004),
-        ({'value': {'data': 'x'}}, 40004),
-        ({'partition_id': 1, 'value': VALUE}, 40005),
-        ({'value': {'type': 'BINARY', 'data': '***'}}, 40003),
-        ({'value': VALUE, 'timestamp': 'noon'}, 40003),
+        ({'value': {'type': 'AVRO', 'data': {}}}, 422, 42206),
+        ({'value': {'type': 'PROTOBUF', 'data': {}}}, 422, 42206),
+        ({'value': {'type': 'JSONSCHEMA', 'data': {}}}, 422, 42206),
+        ({'value': {'type': 'JSON', 'data': 1, 'schema_id': 3}}, 422, 42206),
+        ({'key': {'type': 'JSON', 'data': 1, 'subject': 's'}}, 422, 42206),
+        ({'value': {'data': 'x'}}, 422, 42206),
+        ({'partition_id': 1, 'value': VALUE}, 404, 40402),
+        ({'value': {'type': 'BINARY', 'data': '***'}}, 400, 40005),
+        ({'value': VALUE, 'timestamp': 'noon'}, 400, 40005),
     ),
     ids=(
         'avro',
@@ -266,14 +278,15 @@ async def test_produce_record_refused(
     service: DiasporaService,
     fake_producer: FakeProducer,
     record: dict[str, Any],
+    status: int,
     code: int,
 ) -> None:
     response = await _post(service, RECORDS, record)
-    assert response.status_code == 400
+    assert response.status_code == status
     body = response.json()
     assert set(body) == {'error_code', 'message'}
     assert body['error_code'] == code
-    if code == 40004:
+    if code == 42206:
         assert 'schema registry' in body['message']
     assert fake_producer.sent == []
 
@@ -298,28 +311,32 @@ async def test_produce_record_over_8_mib_refused(
 
 
 @pytest.mark.parametrize(
-    ('body', 'code'),
+    'body',
     (
-        ({'entries': [{'id': 'a', 'value': VALUE}] * 2}, 40008),
-        ({'entries': [{'value': VALUE}]}, 40008),
-        ({'entries': [{'id': 'x' * 81, 'value': VALUE}]}, 40008),
-        (
-            {'entries': [{'id': str(i), 'value': VALUE} for i in range(501)]},
-            40007,
-        ),
-        ({'entries': []}, 40007),
+        {'entries': [{'id': 'a', 'value': VALUE}] * 2},
+        {'entries': [{'value': VALUE}]},
+        {'entries': [{'id': 'x' * 81, 'value': VALUE}]},
+        {'entries': [{'id': 'a/b', 'value': VALUE}]},
+        {'entries': [{'id': str(i), 'value': VALUE} for i in range(501)]},
+        {'entries': []},
     ),
-    ids=('duplicate-id', 'missing-id', 'long-id', 'over-500', 'empty'),
+    ids=(
+        'duplicate-id',
+        'missing-id',
+        'long-id',
+        'bad-id',
+        'over-500',
+        'empty',
+    ),
 )
 async def test_produce_batch_refused_as_a_whole(
     service: DiasporaService,
     fake_producer: FakeProducer,
     body: dict[str, Any],
-    code: int,
 ) -> None:
     response = await _post(service, BATCH, body)
-    assert response.status_code == 400
-    assert response.json()['error_code'] == code
+    assert response.status_code == 422
+    assert response.json()['error_code'] == 42208
     assert fake_producer.sent == []
 
 
@@ -330,7 +347,7 @@ async def test_produce_batch_two_values_refused(
     one = json.dumps({'entries': [{'id': 'a', 'value': VALUE}]}).encode()
     response = await _post(service, BATCH, content=one + one)
     assert response.status_code == 400
-    assert response.json()['error_code'] == 40002
+    assert response.json()['error_code'] == 40004
 
 
 @pytest.mark.parametrize('path', (RECORDS, BATCH))
@@ -353,7 +370,7 @@ async def test_produce_kafka_failure_reply(
         assert response.json()['successes'] == []
         (reply,) = response.json()['failures']
         assert reply.pop('id') == 'a'
-    assert reply['error_code'] == 50002
+    assert reply['error_code'] == 50003
     assert 'may still be written' in reply['message']
 
 
@@ -458,7 +475,7 @@ async def test_dot_in_topic_refused(
     )
     assert response.status_code == 400
     assert response.json() == {
-        'error_code': 40006,
+        'error_code': 40002,
         'message': 'Invalid topic name a.b: topic names never contain a dot',
     }
     _ns_db(service).get_namespace_topics.assert_not_called()
@@ -726,6 +743,290 @@ async def test_building_the_producer_leaves_loop_free(
 
 
 # ============================================================================
+# Content-Type
+# ============================================================================
+
+
+@pytest.mark.parametrize(
+    'content_type',
+    (
+        None,
+        'text/plain',
+        'application/x-www-form-urlencoded',
+        'application/json; charset=latin-1',
+        'application/jsonl',
+    ),
+)
+@pytest.mark.parametrize('path', (RECORDS, BATCH))
+async def test_body_not_json_refused(
+    service: DiasporaService,
+    fake_producer: FakeProducer,
+    path: str,
+    content_type: str | None,
+) -> None:
+    headers = dict(HEADERS)
+    if content_type is not None:
+        headers['content-type'] = content_type
+    response = await _post(
+        service,
+        path,
+        content=json.dumps({'value': VALUE}).encode(),
+        headers=headers,
+    )
+    assert response.status_code == 415
+    assert response.json()['error_code'] == 41501
+    service.auth.validate_access_token.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    'content_type',
+    (
+        'application/json',
+        'Application/JSON',
+        'application/json; charset=UTF-8',
+        'application/json;charset="utf-8"',
+    ),
+)
+async def test_json_content_types_accepted(
+    service: DiasporaService,
+    fake_producer: FakeProducer,
+    content_type: str,
+) -> None:
+    response = await _post(
+        service,
+        RECORDS,
+        content=json.dumps({'value': VALUE}).encode(),
+        headers={**HEADERS, 'content-type': content_type},
+    )
+    assert response.status_code == 200
+
+
+# ============================================================================
+# Admission, parsing one body at a time, and the threads that send
+# ============================================================================
+
+
+class _Gate:
+    """Blocks each acknowledgement wait until released; counts them."""
+
+    def __init__(self) -> None:
+        self.waiting = 0
+        self.release = threading.Event()
+        self._lock = threading.Lock()
+
+    def __call__(self, _timeout: float | None) -> None:
+        with self._lock:
+            self.waiting += 1
+        assert self.release.wait(timeout=5)
+
+    async def until_waiting(self, count: int) -> None:
+        for _ in range(500):
+            if self.waiting >= count:
+                return
+            await asyncio.sleep(0.01)
+        raise AssertionError(f'{self.waiting} of {count} sends waiting')
+
+
+async def test_requests_past_the_limit_get_429(
+    service: DiasporaService,
+    fake_producer: FakeProducer,
+) -> None:
+    gate = _Gate()
+    fake_producer.gate = gate
+    async with _client(service) as client:
+        held = [
+            asyncio.create_task(
+                client.post(RECORDS, json={'value': VALUE}, headers=HEADERS),
+            )
+            for _ in range(PRODUCE_MAX_REQUESTS)
+        ]
+        await gate.until_waiting(PRODUCE_MAX_REQUESTS)
+        refused = await client.post(
+            BATCH,
+            json={'entries': [{'id': 'a', 'value': VALUE}]},
+            headers=HEADERS,
+        )
+        gate.release.set()
+        replies = await asyncio.gather(*held)
+    assert refused.status_code == 429
+    assert refused.headers['retry-after'] == str(RETRY_AFTER_S)
+    assert refused.json()['error_code'] == 42901
+    assert [r.status_code for r in replies] == [200] * PRODUCE_MAX_REQUESTS
+    assert len(fake_producer.sent) == PRODUCE_MAX_REQUESTS
+    assert service.produce_admission.requests == 0
+    assert service.produce_admission.body_bytes == 0
+
+
+async def test_bodies_past_the_byte_budget_get_429(
+    service: DiasporaService,
+    fake_producer: FakeProducer,
+) -> None:
+    """A body without Content-Length holds 16 MiB of the 48 MiB budget."""
+    gate = _Gate()
+    fake_producer.gate = gate
+    record = json.dumps({'value': VALUE}).encode()
+
+    async def chunked() -> Any:
+        yield record
+
+    held_count = PRODUCE_MAX_BODY_BYTES // MAX_BODY_BYTES
+    assert held_count < PRODUCE_MAX_REQUESTS
+    async with _client(service) as client:
+        held = [
+            asyncio.create_task(
+                client.post(
+                    RECORDS,
+                    content=chunked(),
+                    headers={**HEADERS, 'content-type': 'application/json'},
+                ),
+            )
+            for _ in range(held_count)
+        ]
+        await gate.until_waiting(held_count)
+        refused = await client.post(
+            RECORDS,
+            json={'value': VALUE},
+            headers=HEADERS,
+        )
+        gate.release.set()
+        replies = await asyncio.gather(*held)
+    assert refused.status_code == 429
+    assert refused.headers['retry-after'] == str(RETRY_AFTER_S)
+    assert refused.json()['error_code'] == 42901
+    assert 'bytes' in refused.json()['message']
+    assert [r.status_code for r in replies] == [200] * held_count
+
+
+async def test_admission_released_on_refusal(
+    service: DiasporaService,
+    fake_producer: FakeProducer,
+) -> None:
+    for body in ({'value': {'type': 'AVRO', 'data': {}}}, {'value': VALUE}):
+        await _post(service, RECORDS, body)
+    await _post(service, RECORDS, content=b'x' * 10)
+    assert service.produce_admission.requests == 0
+    assert service.produce_admission.body_bytes == 0
+
+
+async def test_bodies_parsed_one_at_a_time(
+    service: DiasporaService,
+    fake_producer: FakeProducer,
+) -> None:
+    from web_service import producer_service
+
+    active = 0
+    most = 0
+    lock = threading.Lock()
+
+    def slow_prepare(raw: Any) -> Any:
+        nonlocal active, most
+        with lock:
+            active += 1
+            most = max(most, active)
+        time.sleep(0.05)
+        with lock:
+            active -= 1
+        return producer_service.prepare_record(raw)
+
+    with patch('web_service.main.prepare_record', slow_prepare):
+        async with _client(service) as client:
+            replies = await asyncio.gather(
+                *(
+                    client.post(
+                        RECORDS,
+                        json={'value': VALUE},
+                        headers=HEADERS,
+                    )
+                    for _ in range(4)
+                ),
+            )
+    assert [r.status_code for r in replies] == [200] * 4
+    assert most == 1
+
+
+async def test_sends_leave_the_shared_threadpool_free(
+    service: DiasporaService,
+    fake_producer: FakeProducer,
+) -> None:
+    """Produce requests waiting on the cluster hold none of its threads.
+
+    The shared threadpool is cut to 2 threads; with 8 sends waiting, a
+    management route is still served.
+    """
+    shared = anyio.to_thread.current_default_thread_limiter()
+    tokens = shared.total_tokens
+    shared.total_tokens = 2
+    gate = _Gate()
+    fake_producer.gate = gate
+    service.web_service.namespace_service.list_namespace_and_topics.return_value = {  # noqa: E501
+        'status': 'success',
+    }
+    try:
+        async with _client(service) as client:
+            held = [
+                asyncio.create_task(
+                    client.post(
+                        RECORDS,
+                        json={'value': VALUE},
+                        headers=HEADERS,
+                    ),
+                )
+                for _ in range(PRODUCE_MAX_REQUESTS)
+            ]
+            await gate.until_waiting(PRODUCE_MAX_REQUESTS)
+            with anyio.fail_after(2):
+                other = await client.get('/api/v3/namespace', headers=HEADERS)
+            gate.release.set()
+            await asyncio.gather(*held)
+    finally:
+        shared.total_tokens = tokens
+    assert other.status_code == 200
+    assert other.json() == {'status': 'success'}
+
+
+async def test_deadline_starts_at_arrival(
+    service: DiasporaService,
+    fake_producer: FakeProducer,
+) -> None:
+    """Time spent in the access checks counts against the 30 s."""
+
+    def slow_check(*_args: Any) -> None:
+        time.sleep(0.5)
+
+    service.auth.validate_access_token.side_effect = slow_check
+    with patch(
+        'web_service.main.SEND_TIMEOUT_S',
+        PRODUCER_MAX_BLOCK_MS / 1000 + 0.3,
+    ):
+        response = await _post(service, RECORDS, {'value': VALUE})
+    assert response.status_code == 500
+    assert response.json()['error_code'] == 50003
+    assert 'too little' in response.json()['message']
+    assert fake_producer.sent == []
+
+
+async def test_unreachable_cluster_gets_503(
+    service: DiasporaService,
+) -> None:
+    from kafka.errors import NoBrokersAvailable
+
+    broker = 'b-1.cluster.kafka.us-east-1.amazonaws.com:9098'
+    with patch(
+        'web_service.producer_service.KafkaProducer',
+        side_effect=NoBrokersAvailable(broker),
+    ) as build:
+        first = await _post(service, RECORDS, {'value': VALUE})
+        second = await _post(service, RECORDS, {'value': VALUE})
+    for response in (first, second):
+        assert response.status_code == 503
+        assert response.headers['retry-after'] == str(RETRY_AFTER_S)
+        assert response.json()['error_code'] == 50302
+        assert broker not in response.text
+    # The second request fails at once instead of building again
+    assert build.call_count == 1
+
+
+# ============================================================================
 # Shutdown
 # ============================================================================
 
@@ -764,13 +1065,31 @@ def test_openapi_documents_produce_routes(service: DiasporaService) -> None:
         assert route['tags'] == ['Producer']
         schema = route['requestBody']['content']['application/json']['schema']
         assert schema['additionalProperties'] is False
-    assert {'200', '400', '401', '404', '413', '500'} <= set(
-        single['responses'],
-    )
-    assert {'207', '400', '401', '404', '413'} <= set(batch['responses'])
+    common = {'400', '401', '404', '413', '415', '422', '429'}
+    assert common | {'200', '500', '503'} <= set(single['responses'])
+    assert common | {'207'} <= set(batch['responses'])
     assert '200' not in batch['responses']
     assert 'schema registry' in single['description']
-    for code in ('40001', '40002', '40003', '40004', '40005', '40006'):
+    assert 'write a record twice' in single['description']
+    for code in (
+        '40002',
+        '40003',
+        '40004',
+        '40005',
+        '40401',
+        '40402',
+        '41301',
+        '41302',
+        '41303',
+        '41501',
+        '42206',
+        '42901',
+        '50002',
+        '50003',
+        '50302',
+    ):
         assert code in single['description']
-    for code in ('40007', '40008', '41301'):
-        assert code in batch['description']
+    assert '42208' in batch['description']
+    batch_schema = batch['requestBody']['content']['application/json']
+    entry = batch_schema['schema']['properties']['entries']['items']
+    assert entry['properties']['id']['pattern'] == '^[0-9a-zA-Z_-]+$'

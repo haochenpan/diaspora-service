@@ -6,6 +6,7 @@ import base64
 import json
 import threading
 import time
+import tracemalloc
 from collections.abc import Callable
 from collections.abc import Iterator
 from typing import Any
@@ -16,17 +17,29 @@ from kafka.errors import KafkaTimeoutError
 from kafka.errors import MessageSizeTooLargeError
 from kafka.errors import NoBrokersAvailable
 from kafka.errors import NotEnoughReplicasError
+from kafka.errors import UnsupportedForMessageFormatError
 from kafka.producer.future import RecordMetadata
 from kafka.structs import TopicPartition
 
+from web_service.producer_service import batch_reply
 from web_service.producer_service import build_record
+from web_service.producer_service import estimate_parse_cost
 from web_service.producer_service import format_timestamp
 from web_service.producer_service import MAX_BATCH_ENTRIES
+from web_service.producer_service import MAX_BODY_BYTES
+from web_service.producer_service import MAX_PARSE_COST
 from web_service.producer_service import MAX_RECORD_BYTES
-from web_service.producer_service import parse_batch
+from web_service.producer_service import OutgoingRecord
 from web_service.producer_service import parse_body
+from web_service.producer_service import prepare_batch
+from web_service.producer_service import prepare_record
+from web_service.producer_service import ProduceAdmission
+from web_service.producer_service import PRODUCER_BUILD_RETRY_S
 from web_service.producer_service import PRODUCER_CLOSE_TIMEOUT_S
+from web_service.producer_service import PRODUCER_MAX_BLOCK_MS
 from web_service.producer_service import ProducerService
+from web_service.producer_service import record_reply
+from web_service.producer_service import record_size
 from web_service.producer_service import RecordError
 from web_service.producer_service import SEND_TIMEOUT_S
 
@@ -36,6 +49,9 @@ KAFKA_TOPIC = f'{NAMESPACE}.{TOPIC}'
 # 2026-10-26T12:00:00.000Z
 NOW_MS = 1_793_016_000_000
 _VALUE = {'type': 'STRING', 'data': 'v'}
+_EMPTY = RecordError(422, 42206, 'empty')
+# A broker address as kafka-python's errors name it
+_BROKER = 'b-1.cluster.kafka.us-east-1.amazonaws.com:9098'
 
 
 # ============================================================================
@@ -144,6 +160,14 @@ def _refusal(call: Callable[[], Any]) -> RecordError:
     return info.value
 
 
+def _record(value: bytes = b'v') -> OutgoingRecord:
+    return OutgoingRecord(key=None, value=value, headers=[], timestamp_ms=None)
+
+
+def _deadline() -> float:
+    return time.monotonic() + SEND_TIMEOUT_S
+
+
 # ============================================================================
 # parse_body
 # ============================================================================
@@ -153,7 +177,19 @@ _DEEP = b'{"value": ' + b'[' * 1_000_000 + b']' * 1_000_000 + b'}'
 
 
 def test_parse_body_one_object() -> None:
-    assert parse_body(b' \n{"value": null}\r\n\t') == {'value': None}
+    raw = b' \n{"value": null}\r\n\t'
+    assert parse_body(raw, empty=_EMPTY) == {'value': None}
+
+
+def test_parse_body_empties_a_bytearray() -> None:
+    raw = bytearray(b'{"value": null}')
+    assert parse_body(raw, empty=_EMPTY) == {'value': None}
+    assert raw == bytearray()
+
+
+@pytest.mark.parametrize('raw', (b'', b'  \n\t'))
+def test_parse_body_empty_refused(raw: bytes) -> None:
+    assert _refusal(lambda: parse_body(raw, empty=_EMPTY)) is _EMPTY
 
 
 @pytest.mark.parametrize(
@@ -166,8 +202,8 @@ def test_parse_body_one_object() -> None:
     ),
 )
 def test_parse_body_more_than_one_value_refused(raw: bytes) -> None:
-    err = _refusal(lambda: parse_body(raw))
-    assert (err.status, err.error_code) == (400, 40002)
+    err = _refusal(lambda: parse_body(raw, empty=_EMPTY))
+    assert (err.status, err.error_code) == (400, 40004)
     assert 'more than one JSON value' in err.message
     assert 'records:batch' in err.message
 
@@ -175,8 +211,6 @@ def test_parse_body_more_than_one_value_refused(raw: bytes) -> None:
 @pytest.mark.parametrize(
     ('raw', 'reason'),
     (
-        (b'', 'empty'),
-        (b'  \n', 'empty'),
         (b'{"value": ', 'not valid JSON'),
         (b'{} x', 'not valid JSON'),
         (b'\xff\xfe{}', 'not UTF-8'),
@@ -187,8 +221,6 @@ def test_parse_body_more_than_one_value_refused(raw: bytes) -> None:
         (_DEEP, 'not valid JSON'),
     ),
     ids=(
-        'empty',
-        'whitespace',
         'truncated',
         'trailing-garbage',
         'not-utf8',
@@ -200,8 +232,8 @@ def test_parse_body_more_than_one_value_refused(raw: bytes) -> None:
     ),
 )
 def test_parse_body_invalid_refused(raw: bytes, reason: str) -> None:
-    err = _refusal(lambda: parse_body(raw))
-    assert (err.status, err.error_code) == (400, 40001)
+    err = _refusal(lambda: parse_body(raw, empty=_EMPTY))
+    assert (err.status, err.error_code) == (400, 40003)
     assert reason in err.message
 
 
@@ -211,14 +243,74 @@ def test_parse_body_deep_nesting_refused_in_a_thread() -> None:
 
     def parse() -> None:
         try:
-            parse_body(_DEEP)
+            parse_body(_DEEP, empty=_EMPTY)
         except RecordError as e:
             errors.append(e)
 
     thread = threading.Thread(target=parse)
     thread.start()
     thread.join()
-    assert [e.error_code for e in errors] == [40001]
+    assert [e.error_code for e in errors] == [40003]
+
+
+# ============================================================================
+# estimate_parse_cost
+# ============================================================================
+
+
+def _flood(unit: bytes, size: int) -> bytes:
+    head = b'{"value":{"type":"JSON","data":['
+    tail = b'0]}}'
+    return head + unit * ((size - len(head) - len(tail)) // len(unit)) + tail
+
+
+@pytest.mark.parametrize(
+    'unit',
+    (
+        b'{},',
+        b'[],',
+        b'[[[]]],',
+        b'{"a":1},',
+        b'[1],',
+        b'"ab",',
+        '"€€",'.encode(),
+        b'0.1,',
+        b'1000,',
+        b'"abcdefghij",',
+        b'{"a":0.5,"b":"cd"},',
+    ),
+)
+def test_parse_cost_bounds_parsing_and_encoding(unit: bytes) -> None:
+    """The estimate is at least what parsing and encoding allocate."""
+    raw = _flood(unit, 1 * 1024 * 1024)
+    tracemalloc.start()
+    try:
+        prepare_record(raw)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert estimate_parse_cost(raw) >= peak
+
+
+@pytest.mark.parametrize('unit', (b'{},', b'[],'))
+def test_parse_cost_refuses_a_16_mib_flood_unparsed(unit: bytes) -> None:
+    raw = _flood(unit, MAX_BODY_BYTES)
+    with patch('web_service.producer_service.json.JSONDecoder') as decoder:
+        err = _refusal(lambda: prepare_record(raw))
+    assert (err.status, err.error_code) == (413, 41303)
+    decoder.assert_not_called()
+
+
+def test_parse_cost_of_a_full_base64_body_is_low() -> None:
+    raw = _raw(
+        {
+            'value': {
+                'type': 'BINARY',
+                'data': _b64(b'x' * (MAX_BODY_BYTES // 2)),
+            },
+        },
+    )
+    assert estimate_parse_cost(raw) < MAX_PARSE_COST // 4
 
 
 # ============================================================================
@@ -284,8 +376,9 @@ def test_build_record_without_key_or_value_refused(
     entry: dict[str, Any],
 ) -> None:
     err = _refusal(lambda: build_record(entry))
-    assert (err.status, err.error_code) == (400, 40003)
+    assert (err.status, err.error_code) == (400, 40005)
     assert 'needs a key or a value' in err.message
+    assert 'kafka-python' in err.message
 
 
 @pytest.mark.parametrize('data_type', ('AVRO', 'PROTOBUF', 'JSONSCHEMA'))
@@ -297,9 +390,9 @@ def test_build_record_schema_format_refused(
     err = _refusal(
         lambda: build_record({field: {'type': data_type, 'data': {}}}),
     )
-    assert (err.status, err.error_code) == (400, 40004)
+    assert (err.status, err.error_code) == (422, 42206)
     assert f'{field} type {data_type} needs a schema registry' in err.message
-    assert 'Octopus does not run' in err.message
+    assert 'Octopus runs no schema registry' in err.message
 
 
 @pytest.mark.parametrize(
@@ -318,7 +411,7 @@ def test_build_record_schema_field_refused(schema_field: str) -> None:
             {'value': {'type': 'JSON', 'data': 1, schema_field: 1}},
         ),
     )
-    assert (err.status, err.error_code) == (400, 40004)
+    assert (err.status, err.error_code) == (422, 42206)
     assert schema_field in err.message
     assert 'no schema registry' in err.message
 
@@ -334,7 +427,7 @@ def test_build_record_untyped_refused(
     spec: dict[str, Any],
 ) -> None:
     err = _refusal(lambda: build_record({field: spec}))
-    assert (err.status, err.error_code) == (400, 40004)
+    assert (err.status, err.error_code) == (422, 42206)
     assert f'{field} has no type' in err.message
     assert 'no schema registry' in err.message
 
@@ -376,7 +469,7 @@ def test_build_record_untyped_refused(
 )
 def test_build_record_invalid_data_refused(spec: Any, reason: str) -> None:
     err = _refusal(lambda: build_record({'value': spec}))
-    assert (err.status, err.error_code) == (400, 40003)
+    assert (err.status, err.error_code) == (400, 40005)
     assert reason in err.message
 
 
@@ -390,18 +483,29 @@ def test_build_record_partition_zero_or_absent(partition_id: Any) -> None:
     build_record({'partition_id': partition_id, 'value': _VALUE})
 
 
-@pytest.mark.parametrize('partition_id', (1, -1, 7, '0', 0.0, True, [0]))
-def test_build_record_other_partition_refused(partition_id: Any) -> None:
+@pytest.mark.parametrize('partition_id', (1, -1, 7))
+def test_build_record_other_partition_not_found(partition_id: int) -> None:
+    err = _refusal(
+        lambda: build_record({'partition_id': partition_id, 'value': _VALUE}),
+    )
+    assert (err.status, err.error_code) == (404, 40402)
+    assert f'Partition {partition_id} not found' in err.message
+
+
+@pytest.mark.parametrize('partition_id', ('0', 0.0, True, [0]))
+def test_build_record_non_integer_partition_refused(
+    partition_id: Any,
+) -> None:
     err = _refusal(
         lambda: build_record({'partition_id': partition_id, 'value': _VALUE}),
     )
     assert (err.status, err.error_code) == (400, 40005)
-    assert 'every topic has one partition, 0' in err.message
+    assert 'partition_id must be an integer' in err.message
 
 
 def test_build_record_unknown_field_refused() -> None:
     err = _refusal(lambda: build_record({'value': _VALUE, 'topic': 'x'}))
-    assert (err.status, err.error_code) == (400, 40003)
+    assert (err.status, err.error_code) == (400, 40005)
     assert 'Unknown record field(s) topic' in err.message
 
 
@@ -458,7 +562,7 @@ def test_build_record_invalid_headers_refused(
     reason: str,
 ) -> None:
     err = _refusal(lambda: build_record({'value': _VALUE, 'headers': headers}))
-    assert (err.status, err.error_code) == (400, 40003)
+    assert (err.status, err.error_code) == (400, 40005)
     assert reason in err.message
 
 
@@ -501,32 +605,64 @@ def test_build_record_invalid_timestamp_refused(
     err = _refusal(
         lambda: build_record({'value': _VALUE, 'timestamp': timestamp}),
     )
-    assert (err.status, err.error_code) == (400, 40003)
+    assert (err.status, err.error_code) == (400, 40005)
     assert reason in err.message
+
+
+def _sized_value(total: int) -> dict[str, Any]:
+    """A BINARY value whose record, with key 'k', is total bytes to Kafka."""
+    overhead = record_size(
+        OutgoingRecord(key=b'k', value=b'', headers=[], timestamp_ms=None),
+    )
+    size = total - overhead
+    # A larger value can take an extra byte to encode its length
+    while (
+        record_size(
+            OutgoingRecord(
+                key=b'k',
+                value=b'x' * size,
+                headers=[],
+                timestamp_ms=None,
+            ),
+        )
+        > total
+    ):
+        size -= 1
+    return {'type': 'BINARY', 'data': _b64(b'x' * size)}
 
 
 def test_build_record_at_size_limit_accepted() -> None:
     record = build_record(
         {
             'key': {'type': 'STRING', 'data': 'k'},
-            'value': {
-                'type': 'BINARY',
-                'data': _b64(b'x' * (MAX_RECORD_BYTES - 1 - 5)),
-            },
-            'headers': [{'name': 'h', 'value': _b64(b'1234')}],
+            'value': _sized_value(MAX_RECORD_BYTES),
         },
     )
-    assert record.value is not None
+    assert record_size(record) == MAX_RECORD_BYTES
+
+
+def test_build_record_8_mib_value_refused_for_kafka_overhead() -> None:
+    """An 8 MiB value is over the limit once Kafka's overhead is counted."""
+    err = _refusal(
+        lambda: build_record(
+            {
+                'value': {
+                    'type': 'BINARY',
+                    'data': _b64(b'x' * MAX_RECORD_BYTES),
+                },
+            },
+        ),
+    )
+    assert (err.status, err.error_code) == (413, 41302)
+    assert 'about 100 bytes' in err.message
 
 
 @pytest.mark.parametrize(
     'entry',
     (
         {
-            'value': {
-                'type': 'BINARY',
-                'data': _b64(b'x' * (MAX_RECORD_BYTES + 1)),
-            },
+            'key': {'type': 'STRING', 'data': 'k'},
+            'value': _sized_value(MAX_RECORD_BYTES + 1),
         },
         {
             'key': {'type': 'STRING', 'data': 'k' * (MAX_RECORD_BYTES // 2)},
@@ -542,9 +678,34 @@ def test_build_record_over_size_limit_refused(entry: dict[str, Any]) -> None:
     assert str(MAX_RECORD_BYTES) in err.message
 
 
+@pytest.mark.parametrize('data_type', ('BINARY', 'STRING'))
+def test_build_record_oversized_data_refused_before_decoding(
+    data_type: str,
+) -> None:
+    data = 'QUJD' * (MAX_RECORD_BYTES // 3 + 1)
+    with (
+        patch('web_service.producer_service.base64.b64decode') as decode,
+        patch(
+            'web_service.producer_service.DefaultRecordBatchBuilder',
+        ) as size,
+    ):
+        err = _refusal(
+            lambda: build_record({'value': {'type': data_type, 'data': data}}),
+        )
+    assert err.error_code == 41302
+    decode.assert_not_called()
+    size.estimate_size_in_bytes.assert_not_called()
+
+
 # ============================================================================
-# parse_batch
+# prepare_record and prepare_batch
 # ============================================================================
+
+
+def test_prepare_record_empty_body() -> None:
+    err = _refusal(lambda: prepare_record(b' '))
+    assert (err.status, err.error_code) == (422, 42206)
+    assert err.message == 'Request body is empty. Data is required.'
 
 
 def _entries(count: int) -> list[dict[str, Any]]:
@@ -552,27 +713,60 @@ def _entries(count: int) -> list[dict[str, Any]]:
 
 
 @pytest.mark.parametrize('count', (1, MAX_BATCH_ENTRIES))
-def test_parse_batch_accepts_1_to_500(count: int) -> None:
-    assert len(parse_batch(_raw({'entries': _entries(count)}))) == count
+def test_prepare_batch_accepts_1_to_500(count: int) -> None:
+    prepared = prepare_batch(_raw({'entries': _entries(count)}))
+    assert [entry_id for entry_id, _ in prepared] == [
+        str(i) for i in range(count)
+    ]
+    assert all(isinstance(r, OutgoingRecord) for _, r in prepared)
+
+
+def test_prepare_batch_keeps_each_entry_refusal() -> None:
+    prepared = prepare_batch(
+        _raw(
+            {
+                'entries': [
+                    {'id': 'a', 'value': _VALUE},
+                    {'id': 'b', 'value': {'type': 'AVRO', 'data': {}}},
+                    {'id': 'c', 'partition_id': 3, 'value': _VALUE},
+                ],
+            },
+        ),
+    )
+    assert [entry_id for entry_id, _ in prepared] == ['a', 'b', 'c']
+    a, b, c = (r for _, r in prepared)
+    assert isinstance(a, OutgoingRecord)
+    assert isinstance(b, RecordError)
+    assert b.error_code == 42206
+    assert isinstance(c, RecordError)
+    assert c.error_code == 40402
 
 
 @pytest.mark.parametrize(
-    ('body', 'reason'),
+    ('raw', 'reason'),
     (
-        ({}, 'entries must be a list of 1 to 500'),
-        ({'entries': []}, 'entries must be a list of 1 to 500'),
-        ({'entries': {'id': '1'}}, 'entries must be a list of 1 to 500'),
+        (b'', 'Request body is empty. Data is required.'),
+        (_raw({}), 'entries must be a list of 1 to 500'),
+        (_raw({'entries': []}), 'entries must be a list of 1 to 500'),
+        (_raw({'entries': {'id': '1'}}), 'entries must be a list of 1 to 500'),
         (
-            {'entries': _entries(501)},
+            _raw({'entries': _entries(501)}),
             'has 501 entries; the most allowed is 500',
         ),
-        ({'entries': _entries(1), 'extra': 1}, 'Unknown field(s) extra'),
+        (_raw({'entries': _entries(1), 'extra': 1}), 'Unknown field(s) extra'),
     ),
-    ids=('missing', 'empty', 'not-list', 'over-500', 'unknown-field'),
+    ids=(
+        'empty',
+        'missing',
+        'no-entries',
+        'not-list',
+        'over-500',
+        'unknown-field',
+    ),
 )
-def test_parse_batch_entries_refused(body: Any, reason: str) -> None:
-    err = _refusal(lambda: parse_batch(_raw(body)))
-    assert (err.status, err.error_code) == (400, 40007)
+def test_prepare_batch_refused(raw: bytes, reason: str) -> None:
+    err = _refusal(lambda: prepare_batch(raw))
+    assert (err.status, err.error_code) == (422, 42208)
     assert reason in err.message
 
 
@@ -581,13 +775,12 @@ def test_parse_batch_entries_refused(body: Any, reason: str) -> None:
     (
         ([{'value': _VALUE}], 'Entry 0 has no id'),
         ([{'id': '1', 'value': _VALUE}, 'x'], 'Entry 1 has no id'),
-        (
-            [{'id': 1, 'value': _VALUE}],
-            'Entry 0 id must be a string of 1 to 80',
-        ),
-        ([{'id': None, 'value': _VALUE}], 'Entry 0 id must be a string'),
-        ([{'id': '', 'value': _VALUE}], 'Entry 0 id must be a string'),
-        ([{'id': 'x' * 81, 'value': _VALUE}], 'Entry 0 id must be a string'),
+        ([{'id': 1, 'value': _VALUE}], 'Entry 0 id must be 1 to 80'),
+        ([{'id': None, 'value': _VALUE}], 'Entry 0 id must be 1 to 80'),
+        ([{'id': '', 'value': _VALUE}], 'Entry 0 id must be 1 to 80'),
+        ([{'id': 'x' * 81, 'value': _VALUE}], 'Entry 0 id must be 1 to 80'),
+        ([{'id': 'a b', 'value': _VALUE}], 'letters, digits, dashes'),
+        ([{'id': 'é', 'value': _VALUE}], 'letters, digits, dashes'),
         (
             [
                 {'id': 'a', 'value': _VALUE},
@@ -604,31 +797,37 @@ def test_parse_batch_entries_refused(body: Any, reason: str) -> None:
         'null',
         'empty',
         'too-long',
+        'space',
+        'non-ascii',
         'duplicate',
     ),
 )
-def test_parse_batch_bad_id_refused(
+def test_prepare_batch_bad_id_refused(
     entries: list[Any],
     reason: str,
 ) -> None:
-    err = _refusal(lambda: parse_batch(_raw({'entries': entries})))
-    assert (err.status, err.error_code) == (400, 40008)
+    err = _refusal(lambda: prepare_batch(_raw({'entries': entries})))
+    assert (err.status, err.error_code) == (422, 42208)
     assert reason in err.message
 
 
-def test_parse_batch_id_of_80_accepted() -> None:
-    entries = [{'id': 'x' * 80, 'value': _VALUE}]
-    assert parse_batch(_raw({'entries': entries})) == entries
+def test_prepare_batch_id_of_80_accepted() -> None:
+    entry_id = 'aZ09_-' * 13 + 'xy'
+    assert len(entry_id) == 80
+    prepared = prepare_batch(
+        _raw({'entries': [{'id': entry_id, 'value': _VALUE}]}),
+    )
+    assert prepared[0][0] == entry_id
 
 
-def test_parse_batch_more_than_one_value_refused() -> None:
+def test_prepare_batch_more_than_one_value_refused() -> None:
     raw = _raw({'entries': _entries(1)}) * 2
-    err = _refusal(lambda: parse_batch(raw))
-    assert (err.status, err.error_code) == (400, 40002)
+    err = _refusal(lambda: prepare_batch(raw))
+    assert (err.status, err.error_code) == (400, 40004)
 
 
 # ============================================================================
-# format_timestamp
+# Replies
 # ============================================================================
 
 
@@ -644,6 +843,72 @@ def test_format_timestamp(ms: int, text: str) -> None:
     assert format_timestamp(ms) == text
 
 
+def test_record_reply() -> None:
+    result = {'partition_id': 0, 'offset': 3, 'timestamp': 'T'}
+    assert record_reply(TOPIC, result) == (
+        {
+            'topic_name': TOPIC,
+            'partition_id': 0,
+            'offset': 3,
+            'timestamp': 'T',
+        },
+        200,
+    )
+    err = RecordError(500, 50003, 'later')
+    assert record_reply(TOPIC, err) == (
+        {'error_code': 50003, 'message': 'later'},
+        500,
+    )
+
+
+def test_batch_reply_keeps_entry_order() -> None:
+    ok = {'partition_id': 0, 'offset': 1, 'timestamp': 'T'}
+    refused = RecordError(422, 42206, 'schema')
+    failed = RecordError(500, 50003, 'later')
+    prepared: list[tuple[str, OutgoingRecord | RecordError]] = [
+        ('a', _record()),
+        ('b', refused),
+        ('c', _record()),
+        ('d', _record()),
+    ]
+    body, status = batch_reply(TOPIC, prepared, [ok, failed, ok])
+    assert status == 207
+    assert [s['id'] for s in body['successes']] == ['a', 'd']
+    assert body['successes'][0] == {'id': 'a', 'topic_name': TOPIC, **ok}
+    assert body['failures'] == [
+        {'id': 'b', 'error_code': 42206, 'message': 'schema'},
+        {'id': 'c', 'error_code': 50003, 'message': 'later'},
+    ]
+
+
+# ============================================================================
+# ProduceAdmission
+# ============================================================================
+
+
+def test_admission_bounds_requests() -> None:
+    admission = ProduceAdmission(max_requests=2, max_body_bytes=100)
+    assert admission.acquire(1) is None
+    assert admission.acquire(1) is None
+    refusal = admission.acquire(1)
+    assert refusal is not None
+    assert (refusal.status, refusal.error_code) == (429, 42901)
+    admission.release(1)
+    assert admission.acquire(1) is None
+
+
+def test_admission_bounds_body_bytes() -> None:
+    admission = ProduceAdmission(max_requests=10, max_body_bytes=100)
+    assert admission.acquire(60) is None
+    refusal = admission.acquire(41)
+    assert refusal is not None
+    assert (refusal.status, refusal.error_code) == (429, 42901)
+    assert admission.acquire(40) is None
+    admission.release(60)
+    admission.release(40)
+    assert (admission.requests, admission.body_bytes) == (0, 0)
+
+
 # ============================================================================
 # ProducerService - the producer
 # ============================================================================
@@ -654,9 +919,8 @@ def test_producer_built_on_first_use_only(
     fake_producer: FakeProducer,
 ) -> None:
     assert fake_producer.builds == 0
-    raw = _raw({'value': _VALUE})
-    producer_service.produce_record(NAMESPACE, TOPIC, raw)
-    producer_service.produce_record(NAMESPACE, TOPIC, raw)
+    producer_service.send(KAFKA_TOPIC, [_record()], _deadline())
+    producer_service.send(KAFKA_TOPIC, [_record()], _deadline())
     assert fake_producer.builds == 1
     assert len(fake_producer.sent) == 2
 
@@ -665,15 +929,15 @@ def test_producer_config(
     producer_service: ProducerService,
     fake_producer: FakeProducer,
 ) -> None:
-    producer_service.produce_record(NAMESPACE, TOPIC, _raw({'value': _VALUE}))
+    producer_service.send(KAFKA_TOPIC, [_record()], _deadline())
     config = fake_producer.config
     assert config['bootstrap_servers'] == 'localhost:9092'
     assert config['security_protocol'] == 'SASL_SSL'
     assert config['sasl_mechanism'] == 'OAUTHBEARER'
     assert config['sasl_oauth_token_provider'].region == 'us-east-1'
     assert config['acks'] == 'all'
-    assert config['max_request_size'] > MAX_RECORD_BYTES
-    assert config['max_block_ms'] <= SEND_TIMEOUT_S * 1000
+    assert config['max_request_size'] == 8_388_608
+    assert config['max_block_ms'] == PRODUCER_MAX_BLOCK_MS
     assert config['delivery_timeout_ms'] == SEND_TIMEOUT_S * 1000
     assert config['max_in_flight_requests_per_connection'] == 1
     assert config['allow_auto_create_topics'] is False
@@ -696,11 +960,7 @@ def test_producer_config_accepted_by_kafka_python(
         'web_service.producer_service.KafkaProducer',
         side_effect=build,
     ):
-        producer_service.produce_record(
-            NAMESPACE,
-            TOPIC,
-            _raw({'value': _VALUE}),
-        )
+        producer_service.send(KAFKA_TOPIC, [_record()], _deadline())
     unknown = set(captured) - set(KafkaProducer.DEFAULT_CONFIG)
     assert not unknown
     assert (
@@ -724,11 +984,7 @@ def test_producer_built_once_under_concurrency(
 
     def produce() -> None:
         started.wait()
-        producer_service.produce_record(
-            NAMESPACE,
-            TOPIC,
-            _raw({'value': _VALUE}),
-        )
+        producer_service.send(KAFKA_TOPIC, [_record()], _deadline())
 
     with patch(
         'web_service.producer_service.KafkaProducer',
@@ -746,146 +1002,158 @@ def test_producer_built_once_under_concurrency(
 def test_producer_not_configured() -> None:
     service = ProducerService(bootstrap_servers=None, region='us-east-1')
     with patch('web_service.producer_service.KafkaProducer') as cls:
-        body, status = service.produce_record(
-            NAMESPACE,
-            TOPIC,
-            _raw({'value': _VALUE}),
-        )
-    assert status == 500
-    assert body == {
+        (result,) = service.send(KAFKA_TOPIC, [_record()], _deadline())
+    assert isinstance(result, RecordError)
+    assert result.body() == {
         'error_code': 50002,
         'message': 'Kafka endpoint is not configured',
     }
     cls.assert_not_called()
 
 
-def test_producer_build_failure_then_retried(
+def test_failed_build_fails_fast_then_retries(
     producer_service: ProducerService,
 ) -> None:
     fake = FakeProducer()
-    builds = iter([NoBrokersAvailable(), fake])
+    builds: list[Any] = [NoBrokersAvailable(_BROKER), fake]
+    clock = [1000.0]
 
     def build(**config: Any) -> FakeProducer:
-        result = next(builds)
+        result = builds.pop(0)
         if isinstance(result, Exception):
             raise result
         return result
 
-    raw = _raw({'value': _VALUE})
-    with patch(
-        'web_service.producer_service.KafkaProducer',
-        side_effect=build,
+    with (
+        patch('web_service.producer_service.KafkaProducer', side_effect=build),
+        patch(
+            'web_service.producer_service.time.monotonic',
+            lambda: clock[0],
+        ),
     ):
-        body, status = producer_service.produce_record(NAMESPACE, TOPIC, raw)
-        assert status == 500
-        assert body['error_code'] == 50002
-        assert body['message'].startswith('Failed to produce: ')
-        body, status = producer_service.produce_record(NAMESPACE, TOPIC, raw)
-    assert status == 200
+        deadline = clock[0] + SEND_TIMEOUT_S
+        (first,) = producer_service.send(KAFKA_TOPIC, [_record()], deadline)
+        # Within the retry window: no build, the same reply
+        clock[0] += PRODUCER_BUILD_RETRY_S - 1
+        deadline = clock[0] + SEND_TIMEOUT_S
+        (second,) = producer_service.send(KAFKA_TOPIC, [_record()], deadline)
+        assert len(builds) == 1
+        clock[0] += 2
+        deadline = clock[0] + SEND_TIMEOUT_S
+        (third,) = producer_service.send(KAFKA_TOPIC, [_record()], deadline)
+    for result in (first, second):
+        assert isinstance(result, RecordError)
+        assert (result.status, result.error_code) == (503, 50302)
+        assert _BROKER not in result.message
+    assert not isinstance(third, RecordError)
+    assert builds == []
 
 
-def test_invalid_record_does_not_build_producer(
+def test_build_lock_wait_bounded_by_deadline(
     producer_service: ProducerService,
     fake_producer: FakeProducer,
 ) -> None:
-    body, status = producer_service.produce_record(
-        NAMESPACE,
-        TOPIC,
-        _raw({'value': {'type': 'AVRO', 'data': {}}}),
-    )
-    assert status == 400
-    assert body['error_code'] == 40004
+    """A request waits for another's build only while a send could start."""
+    deadline = time.monotonic() + PRODUCER_MAX_BLOCK_MS / 1000 + 0.2
+    with producer_service._lock:
+        start = time.monotonic()
+        (result,) = producer_service.send(KAFKA_TOPIC, [_record()], deadline)
+        waited = time.monotonic() - start
+    assert isinstance(result, RecordError)
+    assert result.error_code == 50003
+    assert 'too little' in result.message
+    assert waited < 1
     assert fake_producer.builds == 0
 
 
-# ============================================================================
-# ProducerService - produce_record
-# ============================================================================
-
-
-def test_produce_record_success_shape(
+def test_no_send_starts_with_less_than_max_block_left(
     producer_service: ProducerService,
     fake_producer: FakeProducer,
 ) -> None:
-    body, status = producer_service.produce_record(
-        NAMESPACE,
-        TOPIC,
-        _raw(
-            {
-                'partition_id': 0,
-                'key': {'type': 'STRING', 'data': 'k'},
-                'value': {'type': 'JSON', 'data': {'a': 1}},
-                'headers': [{'name': 'h', 'value': _b64(b'hv')}],
-            },
-        ),
-    )
-    assert status == 200
-    assert body == {
-        'topic_name': TOPIC,
-        'partition_id': 0,
-        'offset': 100,
-        'timestamp': '2026-10-26T12:00:00.000Z',
-    }
-    assert fake_producer.sent == [
-        {
-            'topic': KAFKA_TOPIC,
-            'key': b'k',
-            'value': b'{"a":1}',
-            'headers': [('h', b'hv')],
-            'partition': 0,
-            'timestamp_ms': None,
-        },
-    ]
+    producer_service.send(KAFKA_TOPIC, [_record()], _deadline())
+    deadline = time.monotonic() + PRODUCER_MAX_BLOCK_MS / 1000 - 0.5
+    (result,) = producer_service.send(KAFKA_TOPIC, [_record()], deadline)
+    assert isinstance(result, RecordError)
+    assert (result.status, result.error_code) == (500, 50003)
+    assert len(fake_producer.sent) == 1
 
 
-def test_produce_record_timestamp_sent_and_returned(
+def test_send_waits_until_the_deadline_only(
     producer_service: ProducerService,
     fake_producer: FakeProducer,
 ) -> None:
-    body, status = producer_service.produce_record(
-        NAMESPACE,
-        TOPIC,
-        _raw({'value': _VALUE, 'timestamp': '2026-10-26T12:00:00.250Z'}),
-    )
-    assert status == 200
-    assert fake_producer.sent[0]['timestamp_ms'] == NOW_MS + 250
-    assert body['timestamp'] == '2026-10-26T12:00:00.250Z'
-
-
-def test_produce_record_waits_at_most_send_timeout(
-    producer_service: ProducerService,
-    fake_producer: FakeProducer,
-) -> None:
-    producer_service.produce_record(NAMESPACE, TOPIC, _raw({'value': _VALUE}))
+    deadline = time.monotonic() + 20
+    producer_service.send(KAFKA_TOPIC, [_record()], deadline)
     timeout = fake_producer.futures[0].timeout
     assert timeout is not None
-    assert 0 < timeout <= SEND_TIMEOUT_S
+    assert 19 < timeout <= 20
+
+
+def test_send_shares_one_deadline(
+    producer_service: ProducerService,
+    fake_producer: FakeProducer,
+) -> None:
+    """Records left once too little time remains fail without a send."""
+    clock = [1000.0]
+    real_send = fake_producer.send
+
+    def slow_send(topic: str, **kwargs: Any) -> FakeFuture:
+        # Each send takes 8 s of the 30 s
+        clock[0] += 8
+        return real_send(topic, **kwargs)
+
+    fake_producer.send = slow_send  # type: ignore[method-assign]
+    with patch(
+        'web_service.producer_service.time.monotonic',
+        lambda: clock[0],
+    ):
+        results = producer_service.send(
+            KAFKA_TOPIC,
+            [_record()] * 4,
+            clock[0] + SEND_TIMEOUT_S,
+        )
+    # Sends at 0, 8 and 16 s leave 6 s, under the 10 s a send may block
+    assert len(fake_producer.sent) == 3
+    assert isinstance(results[3], RecordError)
+    assert 'too little' in results[3].message
+    # The waits share what is left of the 30 s
+    assert [f.timeout for f in fake_producer.futures] == [6.0, 6.0, 6.0]
 
 
 @pytest.mark.parametrize(
     ('error', 'waiting', 'status', 'code', 'reason'),
     (
         (
-            KafkaTimeoutError('Timeout after waiting for 30 secs.'),
+            KafkaTimeoutError(f'Timeout after waiting for 30 secs. {_BROKER}'),
+            True,
+            500,
+            50003,
+            'did not acknowledge the record in time; it may still be written',
+        ),
+        (
+            KafkaTimeoutError(f'Failed to update metadata. {_BROKER}'),
+            False,
+            500,
+            50003,
+            'the record was not sent',
+        ),
+        (
+            NotEnoughReplicasError(_BROKER),
+            True,
+            500,
+            50003,
+            '(NotEnoughReplicasError); retry it',
+        ),
+        (
+            UnsupportedForMessageFormatError(_BROKER),
             True,
             500,
             50002,
-            (
-                'no acknowledgement from the cluster within 30 s; the '
-                'record may still be written'
-            ),
+            '(UnsupportedForMessageFormatError)',
         ),
+        (RuntimeError(_BROKER), False, 500, 50002, '(RuntimeError)'),
         (
-            KafkaTimeoutError('Failed to update metadata after 10.0 secs.'),
-            False,
-            500,
-            50002,
-            'not sent: ',
-        ),
-        (NotEnoughReplicasError(), True, 500, 50002, 'Failed to produce: '),
-        (RuntimeError('boom'), False, 500, 50002, 'Failed to produce: boom'),
-        (
-            MessageSizeTooLargeError(),
+            MessageSizeTooLargeError(_BROKER),
             True,
             413,
             41302,
@@ -895,12 +1163,13 @@ def test_produce_record_waits_at_most_send_timeout(
     ids=(
         'ack-timeout',
         'metadata-timeout',
-        'broker-error',
+        'retriable',
+        'not-retriable',
         'send-raises',
         'broker-size',
     ),
 )
-def test_produce_record_kafka_failure(
+def test_send_kafka_failure(
     producer_service: ProducerService,
     fake_producer: FakeProducer,
     *,
@@ -912,102 +1181,56 @@ def test_produce_record_kafka_failure(
 ) -> None:
     errors = fake_producer.get_errors if waiting else fake_producer.send_errors
     errors[0] = error
-    body, got = producer_service.produce_record(
-        NAMESPACE,
-        TOPIC,
-        _raw({'value': _VALUE}),
-    )
-    assert got == status
-    assert body['error_code'] == code
-    assert reason in body['message']
+    (result,) = producer_service.send(KAFKA_TOPIC, [_record()], _deadline())
+    assert isinstance(result, RecordError)
+    assert (result.status, result.error_code) == (status, code)
+    assert reason in result.message
+    # The exception's text, which names brokers, is not returned
+    assert _BROKER not in result.message
 
 
-# ============================================================================
-# ProducerService - produce_batch
-# ============================================================================
-
-
-def test_produce_batch_success_shape(
+def test_send_success_and_partial_failure(
     producer_service: ProducerService,
     fake_producer: FakeProducer,
 ) -> None:
-    body, status = producer_service.produce_batch(
-        NAMESPACE,
-        TOPIC,
-        _raw(
-            {
-                'entries': [
-                    {'id': 'a', 'value': _VALUE},
-                    {
-                        'id': 'b',
-                        'value': _VALUE,
-                        'timestamp': '2026-10-26T12:00:01Z',
-                    },
-                ],
-            },
-        ),
-    )
-    assert status == 207
-    assert body == {
-        'successes': [
-            {
-                'id': 'a',
-                'topic_name': TOPIC,
-                'partition_id': 0,
-                'offset': 100,
-                'timestamp': '2026-10-26T12:00:00.000Z',
-            },
-            {
-                'id': 'b',
-                'topic_name': TOPIC,
-                'partition_id': 0,
-                'offset': 101,
-                'timestamp': '2026-10-26T12:00:01.000Z',
-            },
-        ],
-        'failures': [],
-    }
-    assert [s['topic'] for s in fake_producer.sent] == [KAFKA_TOPIC] * 2
-
-
-def test_produce_batch_partial_failure(
-    producer_service: ProducerService,
-    fake_producer: FakeProducer,
-) -> None:
-    """One entry's send fails and one is invalid; the others are written."""
     fake_producer.get_errors[1] = NotEnoughReplicasError()
-    entries = [
-        {'id': 'a', 'value': _VALUE},
-        {'id': 'b', 'value': {'type': 'AVRO', 'data': {}}},
-        {'id': 'c', 'value': _VALUE},
-        {
-            'id': 'd',
-            'value': {
-                'type': 'BINARY',
-                'data': _b64(b'x' * (MAX_RECORD_BYTES + 1)),
-            },
-        },
-        {'id': 'e', 'value': _VALUE},
+    records = [
+        OutgoingRecord(
+            key=b'k',
+            value=b'{"a":1}',
+            headers=[('h', b'hv')],
+            timestamp_ms=NOW_MS + 250,
+        ),
+        _record(),
+        _record(b'w'),
     ]
-    body, status = producer_service.produce_batch(
-        NAMESPACE,
-        TOPIC,
-        _raw({'entries': entries}),
+    first, second, third = producer_service.send(
+        KAFKA_TOPIC,
+        records,
+        _deadline(),
     )
-    assert status == 207
-    assert [s['id'] for s in body['successes']] == ['a', 'e']
-    assert [s['offset'] for s in body['successes']] == [100, 102]
-    failures = {f['id']: f for f in body['failures']}
-    assert [f['id'] for f in body['failures']] == ['b', 'c', 'd']
-    assert failures['b']['error_code'] == 40004
-    assert failures['c']['error_code'] == 50002
-    assert failures['d']['error_code'] == 41302
-    assert set(failures['c']) == {'id', 'error_code', 'message'}
-    # The invalid entries were never sent
-    assert len(fake_producer.sent) == 3
+    assert first == {
+        'partition_id': 0,
+        'offset': 100,
+        'timestamp': '2026-10-26T12:00:00.250Z',
+    }
+    assert isinstance(second, RecordError)
+    assert third == {
+        'partition_id': 0,
+        'offset': 102,
+        'timestamp': '2026-10-26T12:00:00.000Z',
+    }
+    assert fake_producer.sent[0] == {
+        'topic': KAFKA_TOPIC,
+        'key': b'k',
+        'value': b'{"a":1}',
+        'headers': [('h', b'hv')],
+        'partition': 0,
+        'timestamp_ms': NOW_MS + 250,
+    }
 
 
-def test_produce_batch_sends_in_order_before_waiting(
+def test_send_in_order_before_waiting(
     producer_service: ProducerService,
     fake_producer: FakeProducer,
 ) -> None:
@@ -1015,101 +1238,20 @@ def test_produce_batch_sends_in_order_before_waiting(
     fake_producer.gate = lambda _timeout: sent_before_first_wait.append(
         len(fake_producer.sent),
     )
-    entries = [
-        {'id': str(i), 'value': {'type': 'STRING', 'data': str(i)}}
-        for i in range(5)
-    ]
-    producer_service.produce_batch(
-        NAMESPACE,
-        TOPIC,
-        _raw({'entries': entries}),
-    )
+    records = [_record(str(i).encode()) for i in range(5)]
+    producer_service.send(KAFKA_TOPIC, records, _deadline())
     assert [s['value'] for s in fake_producer.sent] == [
         str(i).encode() for i in range(5)
     ]
     assert sent_before_first_wait[0] == 5
 
 
-def test_produce_batch_shares_one_deadline(
+def test_send_nothing_builds_no_producer(
     producer_service: ProducerService,
     fake_producer: FakeProducer,
 ) -> None:
-    """Entries left once the deadline passes fail without being sent."""
-    clock = [1000.0]
-
-    def monotonic() -> float:
-        return clock[0]
-
-    real_send = fake_producer.send
-
-    def slow_send(topic: str, **kwargs: Any) -> FakeFuture:
-        # Each send takes 12 s of the 30 s
-        clock[0] += 12
-        return real_send(topic, **kwargs)
-
-    fake_producer.send = slow_send  # type: ignore[method-assign]
-    entries = [{'id': str(i), 'value': _VALUE} for i in range(4)]
-    with patch('web_service.producer_service.time.monotonic', monotonic):
-        body, status = producer_service.produce_batch(
-            NAMESPACE,
-            TOPIC,
-            _raw({'entries': entries}),
-        )
-    assert status == 207
-    # Sends at 0, 12 and 24 s; the fourth would start at 36 s
-    assert len(fake_producer.sent) == 3
-    assert [f['id'] for f in body['failures']] == ['3']
-    assert 'ran out of its 30 s' in body['failures'][0]['message']
-    # The waits share what is left of the 30 s: none, at 36 s
-    assert [f.timeout for f in fake_producer.futures] == [0.0, 0.0, 0.0]
-
-
-def test_produce_batch_all_invalid_builds_no_producer(
-    producer_service: ProducerService,
-    fake_producer: FakeProducer,
-) -> None:
-    body, status = producer_service.produce_batch(
-        NAMESPACE,
-        TOPIC,
-        _raw({'entries': [{'id': 'a', 'value': {'data': 'x'}}]}),
-    )
-    assert status == 207
-    assert body['successes'] == []
-    assert body['failures'][0]['error_code'] == 40004
+    assert producer_service.send(KAFKA_TOPIC, [], _deadline()) == []
     assert fake_producer.builds == 0
-
-
-def test_produce_batch_producer_unavailable_fails_each_entry() -> None:
-    service = ProducerService(bootstrap_servers=None, region='us-east-1')
-    body, status = service.produce_batch(
-        NAMESPACE,
-        TOPIC,
-        _raw({'entries': _entries(2)}),
-    )
-    assert status == 207
-    assert body['successes'] == []
-    assert body['failures'] == [
-        {
-            'id': str(i),
-            'error_code': 50002,
-            'message': 'Kafka endpoint is not configured',
-        }
-        for i in range(2)
-    ]
-
-
-def test_produce_batch_refused_as_a_whole(
-    producer_service: ProducerService,
-    fake_producer: FakeProducer,
-) -> None:
-    body, status = producer_service.produce_batch(
-        NAMESPACE,
-        TOPIC,
-        _raw({'entries': [{'id': 'a', 'value': _VALUE}, {'value': _VALUE}]}),
-    )
-    assert status == 400
-    assert body == {'error_code': 40008, 'message': 'Entry 1 has no id'}
-    assert fake_producer.sent == []
 
 
 # ============================================================================
@@ -1121,7 +1263,7 @@ def test_close_closes_producer_with_timeout(
     producer_service: ProducerService,
     fake_producer: FakeProducer,
 ) -> None:
-    producer_service.produce_record(NAMESPACE, TOPIC, _raw({'value': _VALUE}))
+    producer_service.send(KAFKA_TOPIC, [_record()], _deadline())
     producer_service.close()
     assert fake_producer.close_calls == [PRODUCER_CLOSE_TIMEOUT_S]
 
@@ -1135,18 +1277,14 @@ def test_close_without_producer_builds_none(
     assert fake_producer.close_calls == []
 
 
-def test_produce_after_close_refused(
+def test_send_after_close_refused(
     producer_service: ProducerService,
     fake_producer: FakeProducer,
 ) -> None:
     producer_service.close()
-    body, status = producer_service.produce_record(
-        NAMESPACE,
-        TOPIC,
-        _raw({'value': _VALUE}),
-    )
-    assert status == 500
-    assert body == {
+    (result,) = producer_service.send(KAFKA_TOPIC, [_record()], _deadline())
+    assert isinstance(result, RecordError)
+    assert result.body() == {
         'error_code': 50002,
         'message': 'Failed to produce: service is shutting down',
     }
@@ -1157,7 +1295,7 @@ def test_close_error_is_logged_not_raised(
     producer_service: ProducerService,
     fake_producer: FakeProducer,
 ) -> None:
-    producer_service.produce_record(NAMESPACE, TOPIC, _raw({'value': _VALUE}))
+    producer_service.send(KAFKA_TOPIC, [_record()], _deadline())
 
     def fail(timeout: float | None = None) -> None:
         raise RuntimeError('close failed')

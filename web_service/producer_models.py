@@ -50,7 +50,8 @@ _RECORD_PROPERTIES: dict[str, Any] = {
                 'value': {
                     'type': ['string', 'null'],
                     'description': (
-                        'Base64; null is written as an empty value.'
+                        'Base64; null is written as an empty value, as '
+                        'kafka-python cannot send a null one.'
                     ),
                 },
             },
@@ -94,6 +95,7 @@ PRODUCE_BATCH_REQUEST_SCHEMA: dict[str, Any] = {
                         'type': 'string',
                         'minLength': 1,
                         'maxLength': 80,
+                        'pattern': '^[0-9a-zA-Z_-]+$',
                         'description': 'Distinct within the batch.',
                     },
                     **_RECORD_PROPERTIES,

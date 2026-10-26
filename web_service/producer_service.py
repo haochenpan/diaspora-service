@@ -4,6 +4,18 @@ Implements the produce requests of Confluent's REST API v3 with the
 BINARY, JSON and STRING formats: one shared KafkaProducer per process,
 built on first use, and replies only once the cluster acknowledges each
 record.
+
+A request goes through three stages, each bounded so that produce
+requests cannot exhaust the process's memory or the threads that serve
+every other route:
+
+1. Admission (ProduceAdmission): at most PRODUCE_MAX_REQUESTS requests and
+   PRODUCE_MAX_BODY_BYTES of declared body in flight; the rest are refused
+   at once.
+2. Parsing (prepare_record, prepare_batch): one body at a time, after a
+   cheap estimate of what parsing it would cost in memory.
+3. Sending (ProducerService.send): within the deadline the request took
+   when it arrived.
 """
 
 from __future__ import annotations
@@ -12,6 +24,7 @@ import base64
 import binascii
 import json
 import logging
+import re
 import threading
 import time
 from dataclasses import dataclass
@@ -25,40 +38,60 @@ from kafka.errors import KafkaTimeoutError
 from kafka.errors import MessageSizeTooLargeError
 from kafka.errors import RecordListTooLargeError
 from kafka.producer.future import FutureRecordMetadata
+from kafka.record.default_records import DefaultRecordBatchBuilder
 
 from web_service.services import MSKTokenProvider
 
 logger = logging.getLogger(__name__)
 
 MIB = 1024 * 1024
-# Largest record once decoded (key, value and headers): the cluster's
-# message.max.bytes
+# Largest record: the cluster's message.max.bytes, which counts the
+# record batch Kafka wraps it in (about 100 bytes for one record)
 MAX_RECORD_BYTES = 8 * MIB
 # Largest request body the produce routes read
 MAX_BODY_BYTES = 16 * MIB
 MAX_BATCH_ENTRIES = 500
 MAX_ENTRY_ID_LENGTH = 80
-# Longest a request waits for the cluster to acknowledge its records
+# Longest a request takes from its arrival to its reply, give or take the
+# token and namespace checks
 SEND_TIMEOUT_S = 30
-# Longest send() blocks waiting for topic metadata
+# Longest send() blocks waiting for topic metadata; no send starts with
+# less than this left of the request's time
 PRODUCER_MAX_BLOCK_MS = 10_000
-# Room above the record limit for the record and batch overhead
-PRODUCER_MAX_REQUEST_SIZE = MAX_RECORD_BYTES + MIB
 # Longest shutdown waits for records still in flight
 PRODUCER_CLOSE_TIMEOUT_S = 10
+# How long produce requests fail at once after the producer could not be
+# built, before the next request tries again
+PRODUCER_BUILD_RETRY_S = 5
 
-# Error codes of the produce routes
-BAD_BODY = 40001
-MULTIPLE_VALUES = 40002
-BAD_RECORD = 40003
-NEEDS_SCHEMA_REGISTRY = 40004
-BAD_PARTITION = 40005
-BAD_TOPIC_NAME = 40006
-BAD_ENTRIES = 40007
-BAD_ENTRY_ID = 40008
+# Requests in the produce path at once; each holds a thread of its own
+# limiter while it waits for the cluster
+PRODUCE_MAX_REQUESTS = 8
+# Declared body bytes in the produce path at once (a body without a
+# Content-Length counts as MAX_BODY_BYTES)
+PRODUCE_MAX_BODY_BYTES = 48 * MIB
+# Most a body may cost in memory to parse, by estimate_parse_cost
+MAX_PARSE_COST = 192 * MIB
+# Seconds a refused client is told to wait
+RETRY_AFTER_S = 1
+
+# Error codes of the produce routes; the Confluent ones are noted
+BAD_TOPIC_NAME = 40002  # Confluent: invalid topic
+BAD_BODY = 40003
+MULTIPLE_VALUES = 40004
+BAD_RECORD = 40005
+TOPIC_NOT_FOUND = 40401  # Confluent
+PARTITION_NOT_FOUND = 40402  # Confluent
 BODY_TOO_LARGE = 41301
 RECORD_TOO_LARGE = 41302
-KAFKA_FAILURE = 50002
+PARSE_TOO_COSTLY = 41303
+UNSUPPORTED_MEDIA_TYPE = 41501
+INVALID_PAYLOAD = 42206  # Confluent
+INVALID_BATCH = 42208  # Confluent
+TOO_MANY_REQUESTS = 42901  # Confluent
+KAFKA_ERROR = 50002  # Confluent
+KAFKA_RETRIABLE_ERROR = 50003  # Confluent
+BROKER_NOT_AVAILABLE = 50302  # Confluent
 
 _FORMATS = ('BINARY', 'JSON', 'STRING')
 _SCHEMA_FORMATS = frozenset({'AVRO', 'JSONSCHEMA', 'PROTOBUF'})
@@ -76,9 +109,19 @@ _RECORD_FIELDS = frozenset(
     {'partition_id', 'headers', 'key', 'value', 'timestamp'},
 )
 _HEADER_FIELDS = frozenset({'name', 'value'})
-_JSON_WHITESPACE = ' \t\n\r'
+_ENTRY_ID = re.compile(r'[0-9a-zA-Z_-]+')
+_WHITESPACE = re.compile(r'[ \t\n\r]*')
 _EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 _ONE_MS = timedelta(milliseconds=1)
+_NO_SCHEMA_REGISTRY = 'Octopus runs no schema registry'
+
+# Bytes of memory that parsing costs per byte of the body that opens a
+# container, delimits a string or separates two values: an upper bound of
+# CPython's objects (a one-key dict is 184 bytes, a short string about
+# 50, a float 24, plus the 8-byte pointer to each)
+_CONTAINER_COST = 160
+_QUOTE_COST = 32
+_COMMA_COST = 40
 
 
 class RecordError(Exception):
@@ -100,6 +143,16 @@ def _bad_record(message: str) -> RecordError:
     return RecordError(400, BAD_RECORD, message)
 
 
+def _too_large(size: int) -> RecordError:
+    return RecordError(
+        413,
+        RECORD_TOO_LARGE,
+        f'The record is at least {size} bytes; the most a record may be '
+        f'is {MAX_RECORD_BYTES} bytes, counting its key, value, headers '
+        "and about 100 bytes of Kafka's overhead",
+    )
+
+
 @dataclass(frozen=True)
 class OutgoingRecord:
     """A record checked and encoded, ready to send."""
@@ -110,17 +163,99 @@ class OutgoingRecord:
     timestamp_ms: int | None
 
 
+# --- Admission ---
+
+
+class ProduceAdmission:
+    """Bound the produce requests in flight, by count and by body size.
+
+    A request that would pass either bound is refused at once rather than
+    queued, so a burst cannot hold memory or threads while it waits.
+    """
+
+    def __init__(
+        self,
+        max_requests: int = PRODUCE_MAX_REQUESTS,
+        max_body_bytes: int = PRODUCE_MAX_BODY_BYTES,
+    ) -> None:
+        """Initialize with the bounds."""
+        self.max_requests = max_requests
+        self.max_body_bytes = max_body_bytes
+        self.requests = 0
+        self.body_bytes = 0
+        self._lock = threading.Lock()
+
+    def acquire(self, body_bytes: int) -> RecordError | None:
+        """Admit a request declaring body_bytes, or return its refusal."""
+        with self._lock:
+            if self.requests >= self.max_requests:
+                return RecordError(
+                    429,
+                    TOO_MANY_REQUESTS,
+                    f'The service is serving {self.max_requests} produce '
+                    'requests, the most it serves at once; retry shortly',
+                )
+            if self.body_bytes + body_bytes > self.max_body_bytes:
+                return RecordError(
+                    429,
+                    TOO_MANY_REQUESTS,
+                    'The service is reading or sending as many produce '
+                    'bytes as it can hold; retry shortly',
+                )
+            self.requests += 1
+            self.body_bytes += body_bytes
+            return None
+
+    def release(self, body_bytes: int) -> None:
+        """Release a request admitted with body_bytes."""
+        with self._lock:
+            self.requests -= 1
+            self.body_bytes -= body_bytes
+
+
+# --- Parsing ---
+
+
+def estimate_parse_cost(raw: bytes | bytearray) -> int:
+    """An upper bound of the memory parsing raw and encoding it costs.
+
+    Counts the bytes that make Python objects when parsed (container
+    openings, quotes, commas), plus the decoded text and the compact
+    re-encoding of JSON data. The counts run at memchr speed and include
+    bytes inside strings, so the bound is loose for text-heavy bodies.
+    """
+    width = 1 if raw.isascii() else 4
+    return (
+        (2 * width + 1) * len(raw)
+        + _CONTAINER_COST * (raw.count(b'{') + raw.count(b'['))
+        + _QUOTE_COST * raw.count(b'"')
+        + _COMMA_COST * raw.count(b',')
+    )
+
+
 def _no_constant(name: str) -> Any:
     raise ValueError(f'{name} is not valid JSON')
 
 
-def parse_body(raw: bytes) -> dict[str, Any]:
+def parse_body(raw: bytes | bytearray, *, empty: RecordError) -> Any:
     """Parse a request body that must hold exactly one JSON object.
 
+    A bytearray body is emptied once decoded, so that only the text and
+    the parsed object take memory while parsing.
+
     Raises:
-        RecordError: 40001 if the body is not one JSON object, 40002 if it
-            holds more than one JSON value
+        RecordError: empty for an empty body, 40003 if the body is not
+            one JSON object, 40004 if it holds more than one JSON value,
+            41303 if parsing it would cost too much memory
     """
+    if estimate_parse_cost(raw) > MAX_PARSE_COST:
+        raise RecordError(
+            413,
+            PARSE_TOO_COSTLY,
+            'The body holds too many JSON values to parse within the '
+            "service's memory; send fewer or larger values, or the data "
+            'as BINARY',
+        )
     try:
         text = raw.decode('utf-8')
     except UnicodeDecodeError:
@@ -129,10 +264,12 @@ def parse_body(raw: bytes) -> dict[str, Any]:
             BAD_BODY,
             'The request body is not UTF-8 text',
         ) from None
-    decoder = json.JSONDecoder(parse_constant=_no_constant)
-    start = len(text) - len(text.lstrip(_JSON_WHITESPACE))
+    if isinstance(raw, bytearray):
+        raw.clear()
+    start = _WHITESPACE.match(text).end()  # type: ignore[union-attr]
     if start == len(text):
-        raise RecordError(400, BAD_BODY, 'The request body is empty')
+        raise empty
+    decoder = json.JSONDecoder(parse_constant=_no_constant)
     try:
         body, end = decoder.raw_decode(text, start)
     except (ValueError, RecursionError) as e:
@@ -141,7 +278,7 @@ def parse_body(raw: bytes) -> dict[str, Any]:
             BAD_BODY,
             f'The request body is not valid JSON: {e!s}',
         ) from None
-    rest = len(text) - len(text[end:].lstrip(_JSON_WHITESPACE))
+    rest = _WHITESPACE.match(text, end).end()  # type: ignore[union-attr]
     if rest < len(text):
         try:
             decoder.raw_decode(text, rest)
@@ -170,12 +307,14 @@ def parse_body(raw: bytes) -> dict[str, Any]:
 def _check_partition(partition_id: Any) -> None:
     if partition_id is None:
         return
-    if type(partition_id) is not int or partition_id != 0:
+    if type(partition_id) is not int:
+        raise _bad_record('partition_id must be an integer')
+    if partition_id != 0:
         raise RecordError(
-            400,
-            BAD_PARTITION,
-            f'Partition {partition_id!r} does not exist; every topic has '
-            'one partition, 0',
+            404,
+            PARTITION_NOT_FOUND,
+            f'Partition {partition_id} not found; every topic has one '
+            'partition, 0',
         )
 
 
@@ -183,10 +322,10 @@ def _data_type(field: str, spec: dict[str, Any]) -> str:
     """Check the fields of a key or value and return its type."""
     if schema_fields := sorted(set(spec) & _SCHEMA_FIELDS):
         raise RecordError(
-            400,
-            NEEDS_SCHEMA_REGISTRY,
-            f'{field} names {", ".join(schema_fields)}; Octopus runs no '
-            f'schema registry, so {field} takes only type and data',
+            422,
+            INVALID_PAYLOAD,
+            f'{field} names {", ".join(schema_fields)}; '
+            f'{_NO_SCHEMA_REGISTRY}, so {field} takes only type and data',
         )
     if unknown := sorted(set(spec) - _DATA_FIELDS):
         raise _bad_record(
@@ -196,17 +335,17 @@ def _data_type(field: str, spec: dict[str, Any]) -> str:
     data_type = spec.get('type')
     if data_type is None:
         raise RecordError(
-            400,
-            NEEDS_SCHEMA_REGISTRY,
-            f'{field} has no type; Octopus runs no schema registry to '
-            'infer one, so give type BINARY, JSON or STRING',
+            422,
+            INVALID_PAYLOAD,
+            f'{field} has no type; {_NO_SCHEMA_REGISTRY} to infer one, so '
+            'give type BINARY, JSON or STRING',
         )
     if isinstance(data_type, str) and data_type in _SCHEMA_FORMATS:
         raise RecordError(
-            400,
-            NEEDS_SCHEMA_REGISTRY,
-            f'{field} type {data_type} needs a schema registry, which '
-            'Octopus does not run; use BINARY, JSON or STRING',
+            422,
+            INVALID_PAYLOAD,
+            f'{field} type {data_type} needs a schema registry; '
+            f'{_NO_SCHEMA_REGISTRY}, so use BINARY, JSON or STRING',
         )
     if data_type not in _FORMATS:
         raise _bad_record(
@@ -216,6 +355,11 @@ def _data_type(field: str, spec: dict[str, Any]) -> str:
 
 
 def _decode_base64(data: str, what: str) -> bytes:
+    # The decoded length, known before decoding (base64 holds 3 bytes
+    # in every 4 characters)
+    size = len(data) // 4 * 3
+    if size > MAX_RECORD_BYTES:
+        raise _too_large(size - 2)
     try:
         return base64.b64decode(data, validate=True)
     except (binascii.Error, ValueError):
@@ -223,6 +367,9 @@ def _decode_base64(data: str, what: str) -> bytes:
 
 
 def _encode_utf8(text: str, what: str) -> bytes:
+    # Every character takes at least one byte
+    if len(text) > MAX_RECORD_BYTES:
+        raise _too_large(len(text))
     try:
         return text.encode('utf-8')
     except UnicodeEncodeError:
@@ -319,6 +466,15 @@ def _parse_timestamp(timestamp: Any) -> int | None:
     return ms
 
 
+def record_size(record: OutgoingRecord) -> int:
+    """The record's size as Kafka counts it, in a batch of its own."""
+    return DefaultRecordBatchBuilder.estimate_size_in_bytes(
+        record.key,
+        record.value,
+        record.headers,
+    )
+
+
 def build_record(
     entry: dict[str, Any],
     *,
@@ -346,84 +502,201 @@ def build_record(
     headers = _encode_headers(entry.get('headers'))
     timestamp_ms = _parse_timestamp(entry.get('timestamp'))
     if key is None and value is None:
-        raise _bad_record('A record needs a key or a value with data')
-    size = len(key or b'') + len(value or b'')
-    size += sum(len(name.encode('utf-8')) + len(v) for name, v in headers)
-    if size > MAX_RECORD_BYTES:
-        raise RecordError(
-            413,
-            RECORD_TOO_LARGE,
-            f'The record is {size} bytes once decoded; the most a record '
-            f'may hold (key, value and headers) is {MAX_RECORD_BYTES}',
+        raise _bad_record(
+            'A record needs a key or a value with data: kafka-python, '
+            'which the service sends with, cannot send a record that has '
+            'neither',
         )
-    return OutgoingRecord(
+    record = OutgoingRecord(
         key=key,
         value=value,
         headers=headers,
         timestamp_ms=timestamp_ms,
     )
+    if (size := record_size(record)) > MAX_RECORD_BYTES:
+        raise _too_large(size)
+    return record
 
 
-def parse_batch(raw: bytes) -> list[dict[str, Any]]:
-    """Parse a batch request body and check its entries' ids.
+def prepare_record(raw: bytes | bytearray) -> OutgoingRecord:
+    """Parse and encode the one record a request body holds.
+
+    Raises:
+        RecordError: For a body or record the route refuses
+    """
+    return build_record(
+        parse_body(
+            raw,
+            empty=RecordError(
+                422,
+                INVALID_PAYLOAD,
+                'Request body is empty. Data is required.',
+            ),
+        ),
+    )
+
+
+def _batch_error(message: str) -> RecordError:
+    return RecordError(422, INVALID_BATCH, message)
+
+
+def _entry_ids(entries: list[Any]) -> list[str]:
+    """Check each entry's id, distinct within the batch, and return them."""
+    seen: set[str] = set()
+    for i, entry in enumerate(entries):
+        if not isinstance(entry, dict) or 'id' not in entry:
+            raise _batch_error(f'Entry {i} has no id')
+        entry_id = entry['id']
+        if (
+            not isinstance(entry_id, str)
+            or not (1 <= len(entry_id) <= MAX_ENTRY_ID_LENGTH)
+            or not _ENTRY_ID.fullmatch(entry_id)
+        ):
+            raise _batch_error(
+                f'Entry {i} id must be 1 to {MAX_ENTRY_ID_LENGTH} letters, '
+                'digits, dashes or underscores',
+            )
+        if entry_id in seen:
+            raise _batch_error(
+                f'Entry id {entry_id!r} appears more than once',
+            )
+        seen.add(entry_id)
+    return [entry['id'] for entry in entries]
+
+
+def prepare_batch(
+    raw: bytes | bytearray,
+) -> list[tuple[str, OutgoingRecord | RecordError]]:
+    """Parse a batch body and encode each entry, or its refusal.
+
+    The parsed body is dropped before returning: only the encoded records
+    are held while they are sent.
 
     Raises:
         RecordError: For a body the batch route refuses as a whole
     """
-    body = parse_body(raw)
+    body = parse_body(
+        raw,
+        empty=_batch_error('Request body is empty. Data is required.'),
+    )
     if unknown := sorted(set(body) - {'entries'}):
-        raise RecordError(
-            400,
-            BAD_ENTRIES,
+        raise _batch_error(
             f'Unknown field(s) {", ".join(unknown)}; a batch takes only '
             'entries',
         )
-    entries = body.get('entries')
+    entries = body.pop('entries', None)
     if not isinstance(entries, list) or not entries:
-        raise RecordError(
-            400,
-            BAD_ENTRIES,
+        raise _batch_error(
             f'entries must be a list of 1 to {MAX_BATCH_ENTRIES} records',
         )
     if len(entries) > MAX_BATCH_ENTRIES:
-        raise RecordError(
-            400,
-            BAD_ENTRIES,
+        raise _batch_error(
             f'The batch has {len(entries)} entries; the most allowed is '
             f'{MAX_BATCH_ENTRIES}',
         )
-    seen: set[str] = set()
-    for i, entry in enumerate(entries):
-        if not isinstance(entry, dict) or 'id' not in entry:
-            raise RecordError(
-                400,
-                BAD_ENTRY_ID,
-                f'Entry {i} has no id',
+    ids = _entry_ids(entries)
+    prepared: list[tuple[str, OutgoingRecord | RecordError]] = []
+    for i, entry_id in enumerate(ids):
+        entry, entries[i] = entries[i], None
+        try:
+            prepared.append(
+                (
+                    entry_id,
+                    build_record(entry, extra_fields=frozenset({'id'})),
+                ),
             )
-        entry_id = entry['id']
-        if not isinstance(entry_id, str) or not (
-            1 <= len(entry_id) <= MAX_ENTRY_ID_LENGTH
-        ):
-            raise RecordError(
-                400,
-                BAD_ENTRY_ID,
-                f'Entry {i} id must be a string of 1 to '
-                f'{MAX_ENTRY_ID_LENGTH} characters',
-            )
-        if entry_id in seen:
-            raise RecordError(
-                400,
-                BAD_ENTRY_ID,
-                f'Entry id {entry_id!r} appears more than once',
-            )
-        seen.add(entry_id)
-    return entries
+        except RecordError as e:
+            prepared.append((entry_id, e))
+    return prepared
 
 
 def format_timestamp(timestamp_ms: int) -> str:
     """Format epoch milliseconds as ISO-8601 UTC."""
     moment = _EPOCH + timestamp_ms * _ONE_MS
     return moment.isoformat(timespec='milliseconds').replace('+00:00', 'Z')
+
+
+def record_reply(
+    topic: str,
+    result: dict[str, Any] | RecordError,
+) -> tuple[dict[str, Any], int]:
+    """The reply to the single-record route."""
+    if isinstance(result, RecordError):
+        return result.body(), result.status
+    return {'topic_name': topic, **result}, 200
+
+
+def batch_reply(
+    topic: str,
+    prepared: list[tuple[str, OutgoingRecord | RecordError]],
+    results: list[dict[str, Any] | RecordError],
+) -> tuple[dict[str, Any], int]:
+    """The 207 reply to the batch route.
+
+    Args:
+        topic: The topic, as the request names it
+        prepared: Each entry's id and record or refusal, in order
+        results: The send result of each entry that had a record, in order
+    """
+    sent = iter(results)
+    successes: list[dict[str, Any]] = []
+    failures: list[dict[str, Any]] = []
+    for entry_id, record in prepared:
+        result = record if isinstance(record, RecordError) else next(sent)
+        if isinstance(result, RecordError):
+            failures.append({'id': entry_id, **result.body()})
+        else:
+            successes.append({'id': entry_id, 'topic_name': topic, **result})
+    return {'successes': successes, 'failures': failures}, 207
+
+
+# --- Sending ---
+
+
+def _kafka_failure(error: Exception, *, sent: bool) -> RecordError:
+    """The reply for a record the producer failed to write.
+
+    The exception's text names brokers, so it is logged, not returned.
+    """
+    if isinstance(
+        error,
+        (MessageSizeTooLargeError, RecordListTooLargeError),
+    ):
+        return RecordError(
+            413,
+            RECORD_TOO_LARGE,
+            'The cluster refused the record as too large',
+        )
+    logger.warning('Failed to produce a record: %r', error)
+    if isinstance(error, KafkaTimeoutError):
+        message = (
+            'The cluster did not acknowledge the record in time; it may '
+            'still be written'
+            if sent
+            else 'The cluster did not answer in time; the record was not sent'
+        )
+        return RecordError(500, KAFKA_RETRIABLE_ERROR, message)
+    name = type(error).__name__
+    if getattr(error, 'retriable', False):
+        return RecordError(
+            500,
+            KAFKA_RETRIABLE_ERROR,
+            f'Kafka failed to write the record ({name}); retry it',
+        )
+    return RecordError(
+        500,
+        KAFKA_ERROR,
+        f'Kafka failed to write the record ({name})',
+    )
+
+
+def _out_of_time() -> RecordError:
+    return RecordError(
+        500,
+        KAFKA_RETRIABLE_ERROR,
+        "Not sent: too little of the request's "
+        f'{SEND_TIMEOUT_S} s was left to send it; retry it',
+    )
 
 
 class ProducerService:
@@ -446,23 +719,51 @@ class ProducerService:
         self._lock = threading.Lock()
         # Set by close; produce requests from then on are refused
         self._closing = False
+        # Until when requests fail at once after a failed build
+        self._build_failed_until = 0.0
 
     @staticmethod
-    def _kafka_topic_name(namespace: str, topic: str) -> str:
+    def kafka_topic_name(namespace: str, topic: str) -> str:
+        """The Kafka topic of a namespace's topic."""
         return f'{namespace}.{topic}'
 
-    def _get_producer(self) -> KafkaProducer:
+    def _build(self) -> KafkaProducer:
+        """Build the producer; the caller holds the lock."""
+        return KafkaProducer(
+            bootstrap_servers=self.bootstrap_servers,
+            security_protocol='SASL_SSL',
+            sasl_mechanism='OAUTHBEARER',
+            sasl_oauth_token_provider=MSKTokenProvider(self.region),
+            acks='all',
+            # Retries keep the batch's order on one connection
+            max_in_flight_requests_per_connection=1,
+            delivery_timeout_ms=SEND_TIMEOUT_S * 1000,
+            request_timeout_ms=SEND_TIMEOUT_S * 1000,
+            max_block_ms=PRODUCER_MAX_BLOCK_MS,
+            max_request_size=MAX_RECORD_BYTES,
+            # Topics are made by the topic routes, never by a produce to a
+            # missing one
+            allow_auto_create_topics=False,
+        )
+
+    def _get_producer(self, deadline: float) -> KafkaProducer:
         """The process's producer, built on first use.
+
+        Waits for another request's build only while a send could still
+        start before the deadline.
 
         Raises:
             RecordError: If Kafka is not configured, the service is
                 shutting down, or the producer cannot be built
         """
-        with self._lock:
+        wait = deadline - time.monotonic() - PRODUCER_MAX_BLOCK_MS / 1000
+        if not self._lock.acquire(timeout=max(0.0, wait)):
+            raise _out_of_time()
+        try:
             if self._closing:
                 raise RecordError(
                     500,
-                    KAFKA_FAILURE,
+                    KAFKA_ERROR,
                     'Failed to produce: service is shutting down',
                 )
             if self._producer is not None:
@@ -470,61 +771,51 @@ class ProducerService:
             if not self.bootstrap_servers:
                 raise RecordError(
                     500,
-                    KAFKA_FAILURE,
+                    KAFKA_ERROR,
                     'Kafka endpoint is not configured',
                 )
+            unreachable = RecordError(
+                503,
+                BROKER_NOT_AVAILABLE,
+                'The Kafka cluster is not reachable; retry shortly',
+            )
+            if time.monotonic() < self._build_failed_until:
+                raise unreachable
             try:
-                self._producer = KafkaProducer(
-                    bootstrap_servers=self.bootstrap_servers,
-                    security_protocol='SASL_SSL',
-                    sasl_mechanism='OAUTHBEARER',
-                    sasl_oauth_token_provider=MSKTokenProvider(self.region),
-                    acks='all',
-                    # Retries keep the batch's order on one connection
-                    max_in_flight_requests_per_connection=1,
-                    delivery_timeout_ms=SEND_TIMEOUT_S * 1000,
-                    request_timeout_ms=SEND_TIMEOUT_S * 1000,
-                    max_block_ms=PRODUCER_MAX_BLOCK_MS,
-                    max_request_size=PRODUCER_MAX_REQUEST_SIZE,
-                    # Topics are made by the topic routes, never by a
-                    # produce to a missing one
-                    allow_auto_create_topics=False,
-                )
-            except Exception as e:
+                self._producer = self._build()
+            except Exception:
                 logger.exception('Failed to create producer')
-                raise RecordError(
-                    500,
-                    KAFKA_FAILURE,
-                    f'Failed to produce: {e!s}',
-                ) from None
+                self._build_failed_until = (
+                    time.monotonic() + PRODUCER_BUILD_RETRY_S
+                )
+                raise unreachable from None
             return self._producer
+        finally:
+            self._lock.release()
 
-    def _send_all(
+    def send(
         self,
         kafka_topic: str,
         records: list[OutgoingRecord],
+        deadline: float,
     ) -> list[dict[str, Any] | RecordError]:
         """Send records and wait for each acknowledgement.
 
-        All the records share one deadline of SEND_TIMEOUT_S. Returns, in
-        order, each record's partition, offset and timestamp or its error.
+        No send starts with less than PRODUCER_MAX_BLOCK_MS left before
+        the deadline, and no wait passes it. Returns, in order, each
+        record's partition, offset and timestamp or its error.
         """
+        if not records:
+            return []
         try:
-            producer = self._get_producer()
+            producer = self._get_producer(deadline)
         except RecordError as e:
             return [e] * len(records)
-        deadline = time.monotonic() + SEND_TIMEOUT_S
         sent: list[FutureRecordMetadata | RecordError] = []
         for record in records:
-            if time.monotonic() >= deadline:
-                sent.append(
-                    RecordError(
-                        500,
-                        KAFKA_FAILURE,
-                        'Failed to produce: not sent, the request ran out '
-                        f'of its {SEND_TIMEOUT_S} s',
-                    ),
-                )
+            remaining = deadline - time.monotonic()
+            if remaining < PRODUCER_MAX_BLOCK_MS / 1000:
+                sent.append(_out_of_time())
                 continue
             try:
                 sent.append(
@@ -538,7 +829,7 @@ class ProducerService:
                     ),
                 )
             except Exception as e:
-                sent.append(self._send_error(e, waiting=False))
+                sent.append(_kafka_failure(e, sent=False))
         results: list[dict[str, Any] | RecordError] = []
         for future in sent:
             if isinstance(future, RecordError):
@@ -549,7 +840,7 @@ class ProducerService:
                     timeout=max(0.0, deadline - time.monotonic()),
                 )
             except Exception as e:
-                results.append(self._send_error(e, waiting=True))
+                results.append(_kafka_failure(e, sent=True))
                 continue
             results.append(
                 {
@@ -559,103 +850,6 @@ class ProducerService:
                 },
             )
         return results
-
-    @staticmethod
-    def _send_error(error: Exception, *, waiting: bool) -> RecordError:
-        """The error for a record the producer failed to write."""
-        if isinstance(
-            error,
-            (MessageSizeTooLargeError, RecordListTooLargeError),
-        ):
-            return RecordError(
-                413,
-                RECORD_TOO_LARGE,
-                f'The cluster refused the record as too large: {error!s}',
-            )
-        if isinstance(error, KafkaTimeoutError):
-            if waiting:
-                message = (
-                    f'Failed to produce: no acknowledgement from the '
-                    f'cluster within {SEND_TIMEOUT_S} s; the record may '
-                    'still be written'
-                )
-            else:
-                message = f'Failed to produce: not sent: {error!s}'
-            return RecordError(500, KAFKA_FAILURE, message)
-        logger.warning('Failed to produce a record', exc_info=error)
-        return RecordError(500, KAFKA_FAILURE, f'Failed to produce: {error!s}')
-
-    def produce_record(
-        self,
-        namespace: str,
-        topic: str,
-        raw: bytes,
-    ) -> tuple[dict[str, Any], int]:
-        """Produce the one record a request body holds.
-
-        Returns:
-            Tuple of (response_body, http_status_code)
-        """
-        try:
-            record = build_record(parse_body(raw))
-        except RecordError as e:
-            return e.body(), e.status
-        (result,) = self._send_all(
-            self._kafka_topic_name(namespace, topic),
-            [record],
-        )
-        if isinstance(result, RecordError):
-            return result.body(), result.status
-        return {'topic_name': topic, **result}, 200
-
-    def produce_batch(
-        self,
-        namespace: str,
-        topic: str,
-        raw: bytes,
-    ) -> tuple[dict[str, Any], int]:
-        """Produce the entries of a batch request body.
-
-        A body refused as a whole answers 400; otherwise the reply is 207
-        with each entry in successes or failures.
-
-        Returns:
-            Tuple of (response_body, http_status_code)
-        """
-        try:
-            entries = parse_batch(raw)
-        except RecordError as e:
-            return e.body(), e.status
-        ids: list[str] = []
-        records: list[OutgoingRecord] = []
-        failures: list[dict[str, Any]] = []
-        for entry in entries:
-            try:
-                records.append(
-                    build_record(entry, extra_fields=frozenset({'id'})),
-                )
-                ids.append(entry['id'])
-            except RecordError as e:
-                failures.append({'id': entry['id'], **e.body()})
-        successes: list[dict[str, Any]] = []
-        results = (
-            self._send_all(
-                self._kafka_topic_name(namespace, topic),
-                records,
-            )
-            if records
-            else []
-        )
-        for entry_id, result in zip(ids, results):
-            if isinstance(result, RecordError):
-                failures.append({'id': entry_id, **result.body()})
-            else:
-                successes.append(
-                    {'id': entry_id, 'topic_name': topic, **result},
-                )
-        order = {entry['id']: i for i, entry in enumerate(entries)}
-        failures.sort(key=lambda f: order[f['id']])
-        return {'successes': successes, 'failures': failures}, 207
 
     def close(self) -> None:
         """Close the producer, waiting at most PRODUCER_CLOSE_TIMEOUT_S.
