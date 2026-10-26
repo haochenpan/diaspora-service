@@ -17,6 +17,8 @@ import pytest
 from botocore.stub import Stubber
 from kafka.errors import UnknownTopicOrPartitionError
 
+from web_service.services import NamespaceService
+
 
 def _load_sweep() -> ModuleType:
     path = (
@@ -43,6 +45,8 @@ ACCOUNT = '000000000000'
 SUBJECT_A = 'test-subject-0123456789abcdef'
 SUBJECT_B = 'test-subject-fedcba9876543210'
 TABLES = sweep.ServiceTables()
+REAL_USER = '3f1e2d4c-aaaa-bbbb-cccc-c0ffee000001'
+REAL_USER_NAMESPACE = 'ns-c0ffee000001'
 ADMIN_POLICY_ARN = 'arn:aws:iam::aws:policy/AdministratorAccess'
 
 
@@ -139,6 +143,13 @@ def test_select_policies_skips_young_foreign_and_attached() -> None:
             'ns-0123456789ab.test-topic-delete-during-create',
             'ns-0123456789ab',
         ),
+        ('ns-0123456789ab.test-topic-3', None),
+        ('ns-0123456789ab.test-topic-orders', None),
+        ('ns-0123456789ab.test-topic-1a2b3c4', None),
+        ('ns-0123456789ab.test-topic-1a2b3c4d5', None),
+        ('ns-0123456789ab.test-topic-concurrentx', None),
+        ('ns-0123456789ab.test-topic-concurrent-delete-1', None),
+        ('ns-0123456789ab.test-topic-1-2', None),
         ('test-namespace-0123456789abcdef.test-topic-1', None),
         ('test-namespace-abc.test-topic-fedcba9876543210', None),
         ('ns-0123456789ab.my-topic', None),
@@ -155,6 +166,62 @@ def test_select_policies_skips_young_foreign_and_attached() -> None:
 )
 def test_topic_namespace(topic: str, namespace: str | None) -> None:
     assert sweep.topic_namespace(topic) == namespace
+
+
+# The leftover test topics found on the cluster; all must match.
+LEFTOVER_TOPICS = (
+    'ns-137d57d79bd0.test-topic-3e80ab46',
+    'ns-14cf31e4299a.test-topic-411a3f39',
+    'ns-1cc67d119357.test-topic-concurrent',
+    'ns-428eaae3dd6d.test-topic-during-deletion',
+    'ns-534c33cac20a.test-topic-concurrent',
+    'ns-5c7bca486336.test-topic-8a26fba3',
+    'ns-7875c5f75493.test-topic-c7ff0860',
+    'ns-c8460bce8e4c.test-topic-1',
+    'ns-d20ac3b19e88.test-topic-f6eedbfa',
+    'ns-f894261d9a6d.test-topic-c4a1f0ba',
+    'ns-f966d36dcaff.test-topic-5f37543c',
+)
+
+
+@pytest.mark.parametrize('topic', LEFTOVER_TOPICS)
+def test_topic_namespace_matches_known_leftovers(topic: str) -> None:
+    assert sweep.topic_namespace(topic) == topic.partition('.')[0]
+
+
+@pytest.mark.parametrize(
+    'suffix',
+    (
+        '1',
+        '2',
+        'concurrent',
+        'concurrent-existing',
+        'concurrent-delete',
+        'during-deletion',
+        'delete-during-create',
+    ),
+)
+def test_topic_namespace_matches_fixed_test_topic_names(suffix: str) -> None:
+    topic = f'ns-0123456789ab.test-topic-{suffix}'
+
+    assert sweep.topic_namespace(topic) == 'ns-0123456789ab'
+
+
+@pytest.mark.parametrize(
+    'subject',
+    (
+        SUBJECT_A,
+        '3f1e2d4c-aaaa-bbbb-cccc-0123456789ab',
+        'abc',
+        'no-dashes-here',
+    ),
+)
+def test_default_namespace_matches_the_service(subject: str) -> None:
+    service = NamespaceService(dynamodb_service=MagicMock())
+
+    assert sweep.default_namespace(subject) == service.generate_default(
+        subject,
+    )
 
 
 def test_select_topics_skips_recorded_namespaces() -> None:
@@ -205,11 +272,21 @@ def test_collect_selects_only_test_resources() -> None:
         'ns-0123456789ab.test-topic-1',
         'ns-abcdefabcdef.test-topic-2',
         'test-namespace-0123456789abcdef.test-topic-fedcba9876543210',
+        # Default namespace of a real user, with no record in the tables.
+        f'{REAL_USER_NAMESPACE}.test-topic-1',
+        # Default namespace of a test user too young to sweep.
+        f'{sweep.default_namespace(SUBJECT_B)}.test-topic-1',
+        # Default namespace of the old test user being swept.
+        f'{sweep.default_namespace(SUBJECT_A)}.test-topic-2',
     ]
     with Stubber(iam) as iam_stub, Stubber(dynamodb) as db_stub:
         _stub_listing(
             iam_stub,
-            [_user(SUBJECT_A, OLD), _user(SUBJECT_B, NEW)],
+            [
+                _user(SUBJECT_A, OLD),
+                _user(SUBJECT_B, NEW),
+                _user(REAL_USER, OLD),
+            ],
             [
                 _policy(SUBJECT_A, OLD, attachments=1),
                 _policy(SUBJECT_B, NEW, attachments=1),
@@ -226,6 +303,7 @@ def test_collect_selects_only_test_resources() -> None:
         )
         for namespace, item in (
             ('ns-0123456789ab', None),
+            (sweep.default_namespace(SUBJECT_A), None),
             ('ns-abcdefabcdef', {'namespace': {'S': 'ns-abcdefabcdef'}}),
             ('test-namespace-0123456789abcdef', None),
         ):
@@ -248,9 +326,52 @@ def test_collect_selects_only_test_resources() -> None:
     assert plan.policies == [_policy_arn(SUBJECT_A)]
     assert plan.topics == [
         'ns-0123456789ab.test-topic-1',
+        f'{sweep.default_namespace(SUBJECT_A)}.test-topic-2',
         'test-namespace-0123456789abcdef.test-topic-fedcba9876543210',
     ]
     assert plan.errors == []
+
+
+@pytest.mark.parametrize(
+    'response',
+    (
+        {},
+        {'Item': {'subject': {'S': '__global_namespaces__'}}},
+        {'Item': {'namespaces': {'SS': []}}},
+    ),
+)
+def test_collect_selects_no_topics_without_namespace_list(
+    response: dict[str, Any],
+) -> None:
+    iam = _client('iam')
+    dynamodb = MagicMock()
+    dynamodb.get_item.return_value = response
+    kafka_admin = MagicMock()
+    kafka_admin.list_topics.return_value = ['ns-0123456789ab.test-topic-1']
+    with Stubber(iam) as iam_stub:
+        _stub_listing(iam_stub, [_user(SUBJECT_A, OLD)], [])
+
+        plan = sweep.collect(iam, dynamodb, kafka_admin, CUTOFF, TABLES)
+
+    assert plan.users == [SUBJECT_A]
+    assert plan.topics == []
+    assert len(plan.errors) == 1
+    dynamodb.get_item.assert_called_once()
+
+
+def test_collect_reads_no_records_without_test_topics() -> None:
+    iam = _client('iam')
+    dynamodb = MagicMock()
+    kafka_admin = MagicMock()
+    kafka_admin.list_topics.return_value = ['ns-0123456789ab.orders']
+    with Stubber(iam) as iam_stub:
+        _stub_listing(iam_stub, [], [])
+
+        plan = sweep.collect(iam, dynamodb, kafka_admin, CUTOFF, TABLES)
+
+    assert plan.topics == []
+    assert plan.errors == []
+    dynamodb.get_item.assert_not_called()
 
 
 def test_collect_selects_no_topics_when_records_unreadable() -> None:

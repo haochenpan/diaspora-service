@@ -11,13 +11,16 @@ exact names the tests use and nothing broader:
 - IAM policies under ``/msk-policy/`` with the same names and age, either
   attached to nothing or attached only to a user selected above.
 - Kafka topics named ``test-namespace-<16 hex>.test-topic-<16 hex>`` or
-  ``ns-<12 hex>.test-topic-<suffix>``, whose namespace the service has no
-  record of (in neither its users table's namespace list nor its namespace
-  table). Kafka keeps no topic creation time, so topics are not filtered
-  by age; run the script when no live test run is in progress.
+  ``ns-<12 hex>.test-topic-<suffix>``, with a suffix the tests use, whose
+  namespace the service has no record of (in neither its users table's
+  namespace list nor its namespace table) and is not the default
+  namespace of any IAM user other than a selected test user. Kafka keeps
+  no topic creation time, so topics are not filtered by age; run the
+  script when no live test run is in progress.
 
 Without ``--apply`` it only prints what it would delete. It exits non-zero
-if listing or any deletion fails.
+if listing or any deletion fails. If the service's namespace list cannot
+be read, or is missing or empty, it selects no topics.
 """
 
 from __future__ import annotations
@@ -52,8 +55,13 @@ TEST_SUBJECT = re.compile(r'test-subject-[0-9a-f]{16}')
 TEST_TOPICS = (
     # KafkaService tests: random namespace and topic.
     re.compile(r'(test-namespace-[0-9a-f]{16})\.test-topic-[0-9a-f]{16}'),
-    # WebService and consumer tests: a test user's default namespace.
-    re.compile(r'(ns-[0-9a-f]{12})\.test-topic-[0-9a-z]+(?:-[0-9a-z]+)*'),
+    # WebService, NamespaceService and consumer tests: a test user's
+    # default namespace, with the fixed or 8-hex topic names they use.
+    re.compile(
+        r'(ns-[0-9a-f]{12})\.test-topic-'
+        r'(?:1|2|concurrent(?:-existing|-delete)?|during-deletion'
+        r'|delete-during-create|[0-9a-f]{8})',
+    ),
 )
 
 DEFAULT_MIN_AGE_HOURS = 2.0
@@ -117,6 +125,14 @@ def select_policies(
     )
 
 
+def default_namespace(subject: str) -> str:
+    """Return the service's default namespace for a subject.
+
+    The same rule as ``NamespaceService.generate_default``.
+    """
+    return f'ns-{subject.replace("-", "")[-12:]}'
+
+
 def topic_namespace(topic: str) -> str | None:
     """Return the namespace of a topic the live tests create, else None."""
     for pattern in TEST_TOPICS:
@@ -126,12 +142,12 @@ def topic_namespace(topic: str) -> str | None:
     return None
 
 
-def select_topics(topics: Iterable[str], recorded: set[str]) -> list[str]:
-    """Return the test topics whose namespace is not in ``recorded``."""
+def select_topics(topics: Iterable[str], excluded: set[str]) -> list[str]:
+    """Return the test topics whose namespace is not in ``excluded``."""
     selected = []
     for topic in topics:
         namespace = topic_namespace(topic)
-        if namespace is not None and namespace not in recorded:
+        if namespace is not None and namespace not in excluded:
             selected.append(topic)
     return sorted(selected)
 
@@ -155,7 +171,8 @@ def recorded_namespaces(
 ) -> set[str]:
     """Return which of ``namespaces`` the service has a record of.
 
-    Raises on any read error, including a missing table, so that a wrong
+    Raises on any read error, including a missing table, and when the
+    users table has no namespace list or an empty one, so that a wrong
     table name never makes every namespace look unrecorded.
     """
     response = dynamodb.get_item(
@@ -163,8 +180,13 @@ def recorded_namespaces(
         Key={'subject': {'S': GLOBAL_NAMESPACES_KEY}},
         ConsistentRead=True,
     )
-    item = response.get('Item', {})
-    recorded = set(item.get('namespaces', {}).get('SS', []))
+    recorded = set(
+        response.get('Item', {}).get('namespaces', {}).get('SS', []),
+    )
+    if not recorded:
+        raise RuntimeError(
+            f'{tables.users} has no {GLOBAL_NAMESPACES_KEY} namespace list',
+        )
     for namespace in sorted(set(namespaces) - recorded):
         response = dynamodb.get_item(
             TableName=tables.namespaces,
@@ -199,14 +221,23 @@ def collect(
     if kafka_admin is None:
         plan.skipped.append('Kafka topics: no bootstrap servers given')
         return plan
+    # The default namespace of every other IAM user (real users, and test
+    # users too young to sweep) is never swept.
+    in_use = {
+        default_namespace(user['UserName'])
+        for user in users
+        if user['UserName'] not in plan.users
+    }
     try:
         topics = [t for t in kafka_admin.list_topics() if topic_namespace(t)]
+        if not topics:
+            return plan
         namespaces = {topic_namespace(t) or '' for t in topics}
-        recorded = recorded_namespaces(dynamodb, namespaces, tables)
+        recorded = recorded_namespaces(dynamodb, namespaces - in_use, tables)
     except Exception as e:
-        plan.errors.append(f'Kafka topics not listed: {e}')
+        plan.errors.append(f'Kafka topics not selected: {e}')
         return plan
-    plan.topics = select_topics(topics, recorded)
+    plan.topics = select_topics(topics, recorded | in_use)
     return plan
 
 
