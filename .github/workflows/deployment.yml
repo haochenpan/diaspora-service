@@ -101,9 +101,15 @@ jobs:
           # the container gets no IAM_USER_PERMISSIONS_BOUNDARY_ARN.
           BOUNDARY_NAME: ${{ vars.DOCKER_IAM_USER_PERMISSIONS_BOUNDARY_NAME }}
         run: |
-          if [ -n "$BOUNDARY_NAME" ] && ! printf '%s\n' "$BOUNDARY_NAME" | grep -Eqx '[A-Za-z0-9+=,.@_-]+'; then
-            echo "DOCKER_IAM_USER_PERMISSIONS_BOUNDARY_NAME is not an IAM policy name" >&2
-            exit 1
+          if [ -n "$BOUNDARY_NAME" ]; then
+            if [[ ! "$BOUNDARY_NAME" =~ ^[A-Za-z0-9+=,.@_-]+$ ]]; then
+              echo "DOCKER_IAM_USER_PERMISSIONS_BOUNDARY_NAME is not an IAM policy name" >&2
+              exit 1
+            fi
+            if [ "$BOUNDARY_NAME" = diaspora-web-service-container ]; then
+              echo "DOCKER_IAM_USER_PERMISSIONS_BOUNDARY_NAME names the service's own policy" >&2
+              exit 1
+            fi
           fi
 
           output=$(aws lightsail push-container-image --region us-east-1 --service-name "$SERVICE_NAME" --label "$CONTAINER_NAME" --image "$CONTAINER_NAME")

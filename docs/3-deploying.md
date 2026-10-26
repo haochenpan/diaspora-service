@@ -233,7 +233,13 @@ user under `/msk-users/` needs the boundary. The `boundaries` step of
 `scripts/update_user_policies.py`
 ([Update the users' IAM](5-runbook.md#update-the-users-iam)) gives it to
 the service's users. Delete the live tests' leftover users, which it
-skips, with the sweep (`scripts/sweep_test_resources.py --apply`).
+skips, with the sweep (`scripts/sweep_test_resources.py --apply`). A
+user under `/msk-users/` named neither as a subject nor as a test user is
+skipped by both: delete it, or give it the boundary by hand with
+`aws iam put-user-permissions-boundary`.
+
+The `boundaries` step checks only that the boundary exists. Check first
+that its default version matches `deploy/iam/user-boundary-policy.json`.
 
 ### Switch the service to its identity
 
@@ -254,10 +260,15 @@ the `render` function used below.
       --user-name diaspora-web-service-container
     aws iam attach-user-policy --user-name diaspora-web-service-container \
       --policy-arn "arn:aws:iam::$ACCOUNT_ID:policy/diaspora-service/diaspora-web-service-container"
-    aws iam create-access-key --user-name diaspora-web-service-container
+    (umask 077; aws iam create-access-key \
+      --user-name diaspora-web-service-container \
+      --query 'AccessKey.[AccessKeyId,SecretAccessKey]' --output text \
+      > ~/web-service-key.txt)
     ```
 
-    Keep the key's secret somewhere safe: AWS shows it only here.
+    The file holds the key ID and its secret, which AWS returns only
+    here; nothing is printed. Step 6 stores them, and you delete the file
+    after it.
 
 2. Set the boundary variable and deploy. From then on every new user gets
    the boundary.
@@ -295,10 +306,18 @@ the `render` function used below.
     ```
 
 6. Store the new key as `DOCKER_AWS_ACCESS_KEY_ID` and
-   `DOCKER_AWS_SECRET_ACCESS_KEY` (`gh secret set` prompts for each value),
-   deploy, and [check the deploy](#check-a-deploy). Then make one call
-   that creates a key, such as `POST /api/v3/key` for a user without one,
-   and read the log for `AccessDenied`.
+   `DOCKER_AWS_SECRET_ACCESS_KEY`, delete the file, deploy, and
+   [check the deploy](#check-a-deploy):
+
+    ```bash
+    cut -f1 ~/web-service-key.txt | tr -d '\n' | gh secret set DOCKER_AWS_ACCESS_KEY_ID
+    cut -f2 ~/web-service-key.txt | tr -d '\n' | gh secret set DOCKER_AWS_SECRET_ACCESS_KEY
+    rm ~/web-service-key.txt
+    gh workflow run deployment.yml --ref main
+    ```
+
+    Then make one call that creates a key, such as `POST /api/v3/key` for
+    a user without one, and read the log for `AccessDenied`.
 
 To change what the identity may do, edit the template and apply it as a new
 default version of its policy, as the live tests' guide shows for theirs.
@@ -315,14 +334,26 @@ but the deployment noted in step 5 still holds the previous key, so these
 commands copy it from there without printing it (replace `<version>`):
 
 ```bash
-for var in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY; do
+previous() {
   aws lightsail get-container-service-deployments --region us-east-1 \
       --service-name diaspora-web-service \
-      --query "deployments[?version==\`<version>\`].containers.flask.environment.$var | [0]" \
-      --output text | gh secret set "DOCKER_$var"
-done
-gh workflow run deployment.yml --ref main
+      --query "deployments[?version==\`<version>\`].containers.flask.environment.$1 | [0]" \
+      --output text
+}
+key_id=$(previous AWS_ACCESS_KEY_ID)
+secret=$(previous AWS_SECRET_ACCESS_KEY)
+if [ -z "$key_id" ] || [ "$key_id" = None ] || [ -z "$secret" ] || [ "$secret" = None ]; then
+  echo "Deployment <version> holds no key; nothing was changed" >&2
+else
+  printf '%s' "$key_id" | gh secret set DOCKER_AWS_ACCESS_KEY_ID
+  printf '%s' "$secret" | gh secret set DOCKER_AWS_SECRET_ACCESS_KEY
+  gh workflow run deployment.yml --ref main
+fi
 ```
+
+The AWS CLI prints `None` when the deployment is not found, for example
+when `<version>` is mistyped or has left Lightsail's history, so the
+commands check both values before they change either secret.
 
 If the previous key has been deactivated since, make it active first
 (`aws iam update-access-key --status Active`, with its user and key ID).
@@ -465,8 +496,9 @@ deployment, read the values into the shell first. `read -rs` keeps each
 value off the screen and out of shell history. The `SVC_` prefix keeps the
 values apart from the AWS CLI's own credentials. A value set this way lasts
 only until the next workflow deploy, which rebuilds the environment from
-the `DOCKER_*` secrets and `deployment.yml`; update the matching secret, or
-for an optional variable `deployment.yml`, too.
+the `DOCKER_*` secrets, `deployment.yml` and the repository variable
+`DOCKER_IAM_USER_PERMISSIONS_BOUNDARY_NAME`; update the matching secret or
+variable, too.
 
 ```bash
 for var in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY SERVER_CLIENT_ID SERVER_SECRET \

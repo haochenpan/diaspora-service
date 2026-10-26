@@ -302,5 +302,10 @@ python scripts/update_user_policies.py boundaries --undo ~/boundaries-<UTC time>
 `policies --undo` makes each policy's previous version its default
 again; the new versions stay as versions that are not the default.
 `boundaries --undo` removes the boundary from each user the run gave it
-to. Either leaves a policy or user changed again since the run as it is,
+to. Undo `boundaries` only after rolling the container back to the
+previous key
+([Roll back the switch](3-deploying.md#roll-back-the-switch)): the
+service's own identity may attach a user's policy only to a user with the
+boundary, and `POST /api/v3/key` attaches it, so without the boundary
+those users can't get a key. Either leaves a policy or user changed again since the run as it is,
 and reports it.
