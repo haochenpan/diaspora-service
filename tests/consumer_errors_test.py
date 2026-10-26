@@ -1270,7 +1270,7 @@ def test_reaper_skips_an_instance_a_request_holds(
     _instances(service, subjects=1)
     key = (_subject(0), NAMESPACE, GROUP, 'a')
     managed = consumers._consumers[key]
-    managed.last_access = 0
+    managed.last_access = time.monotonic() - 600
     managed.lock.acquire()
     try:
         started = time.monotonic()
