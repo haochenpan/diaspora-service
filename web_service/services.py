@@ -31,9 +31,13 @@ ADMIN_REQUEST_TIMEOUT_MS = 15_000
 ADMIN_OPERATION_TIMEOUT_MS = 10_000
 # Longest a Kafka client's constructor waits to connect to the cluster and
 # read its metadata before it raises KafkaTimeoutError; kafka-python's
-# default is 30 s. One bootstrap takes under a second, but ten at once,
-# such as concurrent topic creates, have taken up to 3.5 s.
-KAFKA_BOOTSTRAP_TIMEOUT_MS = 5_000
+# default is 30 s. One bootstrap takes under a second, but 16 at once on a
+# quarter of a CPU have taken up to 10.6 s.
+KAFKA_BOOTSTRAP_TIMEOUT_MS = 15_000
+# How long one step of a Kafka client's IO loop may run before kafka-python
+# logs a warning; on a quarter of a CPU, steps exceed its default of 0.1 s
+# hundreds of times while 16 instances connect and fetch
+KAFKA_SLOW_TASK_WARNING_S = 1.0
 # Wait before retrying a create that found the topic still present
 TOPIC_EXISTS_RETRY_DELAY_S = 2
 # The most topics a namespace may hold when MAX_TOPICS_PER_NAMESPACE is
@@ -911,7 +915,10 @@ def build_kafka_client[T](build: Callable[..., T], **config: Any) -> T:
     started: list[KafkaNetClient] = []
 
     def network_client(**settings: Any) -> KafkaNetClient:
-        network = KafkaNetClient(**settings)
+        network = KafkaNetClient(
+            **settings,
+            slow_task_threshold_secs=KAFKA_SLOW_TASK_WARNING_S,
+        )
         started.append(network)
         network.cluster.config['allow_auto_create_topics'] = settings.get(
             'allow_auto_create_topics',

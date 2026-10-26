@@ -65,6 +65,7 @@ from web_service.consumer_service import MAX_PARTITION_FETCH_BYTES
 from web_service.consumer_service import REPLY_MAX_BYTES
 from web_service.main import DiasporaService
 from web_service.services import build_kafka_client
+from web_service.services import KAFKA_SLOW_TASK_WARNING_S
 
 SUBJECT = '123e4567-e89b-12d3-a456-426614174000'
 HEADERS = {'subject': SUBJECT, 'authorization': 'Bearer ' + 'a' * 50}
@@ -928,6 +929,10 @@ def test_consumers_never_have_the_cluster_create_a_topic(
     [managed] = service.consumer_service._consumers.values()
     network = managed.consumer._client
     assert network.cluster.config['allow_auto_create_topics'] is False
+    assert (
+        network._net.config['slow_task_threshold_secs']
+        == KAFKA_SLOW_TASK_WARNING_S
+    )
 
 
 def test_network_clients_get_the_auto_create_setting() -> None:
