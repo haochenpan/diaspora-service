@@ -1,14 +1,17 @@
 # Security Policy
 
-## Supported Versions
+## Reporting a vulnerability
 
-We currently only support the latest versions of the software with security
-updates. I.e., we will not backport new security updates to old versions.
+Report a vulnerability privately through
+[GitHub's private vulnerability reporting](https://github.com/haochenpan/diaspora-service/security/advisories/new).
+Do not open a public issue, pull request or discussion about it.
 
-## Reporting a Vulnerability
+Include what you found, how to reproduce it, and what an attacker could do
+with it.
 
-If you believe you have found a security vulnerability in the repository, we
-encourage you to let us know right away. We will investigate all legitimate
-reports and do our best to quickly fix the problem.
+## Scope
 
-Please report security issues to the Issue Tracker or Security Advisories.
+- The web service's API: the code in this repository and its running
+  deployment.
+- The Kafka console (the Diaspora Admin Console) and its startup script
+  in `docs/kafka-console/`.
