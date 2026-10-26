@@ -1173,6 +1173,8 @@ class ProducerService:
         if producer is None:
             return
         try:
-            producer.close(timeout=PRODUCER_CLOSE_TIMEOUT_S)
+            # kafka-python's close waits up to its timeout for the records
+            # still unsent and then as long again for its network thread
+            producer.close(timeout=PRODUCER_CLOSE_TIMEOUT_S / 2)
         except Exception:
             logger.exception('Error closing producer on shutdown')

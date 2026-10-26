@@ -1357,7 +1357,7 @@ async def test_shutdown_closes_producer(
         response = await _post(service, RECORDS, {'value': VALUE})
         assert response.status_code == 200
         assert fake_producer.close_calls == []
-    assert fake_producer.close_calls == [PRODUCER_CLOSE_TIMEOUT_S]
+    assert fake_producer.close_calls == [PRODUCER_CLOSE_TIMEOUT_S / 2]
     service.consumer_service.shutdown_all.assert_called_once_with()
 
 
