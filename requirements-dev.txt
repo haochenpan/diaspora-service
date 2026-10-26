@@ -107,7 +107,7 @@ jmespath==1.1.0
     #   -c requirements.txt
     #   boto3
     #   botocore
-kafka-python==2.3.2
+kafka-python==3.0.11
     # via
     #   -c requirements.txt
     #   diaspora-service (pyproject.toml)

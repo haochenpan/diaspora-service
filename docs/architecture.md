@@ -173,20 +173,21 @@ These limits bound the memory of the consumer routes:
   arrays took 180 MiB, which the bound refuses.
 
 The service's worst case on a cluster of two brokers adds up as follows.
-The measured numbers come from tests on macOS against one local broker;
+The measured numbers come from tests on macOS, against one local broker
+except for the instances' row, which was measured against the cluster;
 the others are derived from the code.
 
 | Part | Memory | Source |
 | --- | --- | --- |
 | The service at rest | 99 MiB | Measured |
 | Records fetched ahead by 16 instances, 8 MiB from each of 2 brokers | 256 MiB | Derived; one broker's 8 MiB per instance was measured |
-| 16 instances' clients, sockets and heartbeat threads | 16 MiB | Measured at 0.3 to 0.6 MiB each, rounded up to 1 MiB |
+| 16 instances' clients, TLS connections and IO threads | 72 MiB | Measured at 4.1 to 4.2 MiB each, rounded up to 4.5 MiB |
 | 3 fetches, each with an 8 MiB record from each of 2 brokers | 216 MiB | Measured at 71 MiB for one fetch whose broker returned two 8 MiB records |
 | One check that a json instance's key or value is JSON | 32 MiB | Derived from the estimate's bound |
 | The produce routes: one parse of up to 192 MiB, 48 MiB of bodies and records, and the producer's copies of those records | 288 MiB | Derived |
-| Total | 907 MiB | |
+| Total | 963 MiB | |
 
-That leaves about 117 MiB of the node's 1 GB. In the same tests, with
+That leaves about 61 MiB of the node's 1 GB. In the local tests, with
 12 idle instances holding 64 MiB of fetched-ahead records, 4 fetches of
 one 8 MiB record each raised the service from 99 MiB to 320 MiB as
 base64 and to 350 MiB as JSON of control characters.

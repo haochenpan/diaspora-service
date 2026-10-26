@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import io
 import json
 import threading
 import time
@@ -18,7 +19,6 @@ from kafka.cluster import ClusterMetadata
 from kafka.errors import KafkaTimeoutError
 from kafka.errors import LeaderNotAvailableError
 from kafka.errors import MessageSizeTooLargeError
-from kafka.errors import NoBrokersAvailable
 from kafka.errors import NotEnoughReplicasError
 from kafka.errors import TopicAuthorizationFailedError
 from kafka.errors import UnknownTopicOrPartitionError
@@ -1202,7 +1202,10 @@ def test_failed_build_fails_fast_then_retries(
     producer_service: ProducerService,
 ) -> None:
     fake = FakeProducer()
-    builds: list[Any] = [NoBrokersAvailable(_BROKER), fake]
+    builds: list[Any] = [
+        KafkaTimeoutError(f'Unable to bootstrap from {_BROKER}'),
+        fake,
+    ]
     clock = [1000.0]
 
     def build(**config: Any) -> FakeProducer:
@@ -1293,14 +1296,42 @@ class _AnsweringSender(FakeSender):
     ) -> None:
         super().__init__()
         self.metadata = metadata
-        self.response = MetadataResponse[1](
-            brokers=[(0, 'broker', 9098, None)],
+        response = MetadataResponse[1]
+        topic_class = response.MetadataResponseTopic
+        partition = topic_class.MetadataResponsePartition(
+            error_code=0,
+            partition_index=0,
+            leader_id=0,
+            replica_nodes=[0],
+            isr_nodes=[0],
+        )
+        built = response(
+            brokers=[
+                response.MetadataResponseBroker(
+                    node_id=0,
+                    host='broker',
+                    port=9098,
+                    rack=None,
+                ),
+            ],
             controller_id=0,
             topics=[
-                (error, topic, False, [] if error else [(0, 0, 0, [0], [0])])
+                topic_class(
+                    error_code=error,
+                    name=topic,
+                    is_internal=False,
+                    partitions=[] if error else [partition],
+                )
                 for error, topic in topics
             ],
         )
+        # Decoded from its bytes, as a broker's response is
+        self.response = response.decode(io.BytesIO(built.encode()))
+
+    def add_topic(self, topic: str) -> None:
+        super().add_topic(topic)
+        # As kafka-python's sender does, before its next metadata request
+        self.metadata.add_topic(topic)
 
     def wakeup(self) -> None:
         threading.Timer(

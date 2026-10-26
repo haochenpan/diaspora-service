@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import io
 import json
 import threading
 import time
@@ -27,7 +28,6 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 from kafka import KafkaConsumer
-from kafka.client_async import KafkaClient
 from kafka.errors import BrokerNotAvailableError
 from kafka.errors import CommitFailedError
 from kafka.errors import CoordinatorNotAvailableError
@@ -36,14 +36,14 @@ from kafka.errors import IllegalStateError
 from kafka.errors import InvalidTopicError
 from kafka.errors import KafkaError
 from kafka.errors import KafkaTimeoutError
-from kafka.errors import NoBrokersAvailable
 from kafka.errors import SaslAuthenticationFailedError
 from kafka.errors import ThrottlingQuotaExceededError
 from kafka.errors import TopicAuthorizationFailedError
 from kafka.errors import UnknownTopicOrPartitionError
 from kafka.errors import UnsupportedVersionError
 from kafka.future import Future
-from kafka.protocol.commit import OffsetCommitResponse
+from kafka.net import KafkaNetClient
+from kafka.protocol.consumer import OffsetCommitResponse
 from kafka.structs import OffsetAndMetadata
 from kafka.structs import TopicPartition
 from starlette.responses import JSONResponse
@@ -78,9 +78,33 @@ JSON_RECORDS = 'application/vnd.kafka.json.v2+json'
 TOKEN_INACTIVE = {'status': 'error', 'reason': 'Token is inactive.'}
 
 
+def _never_connected(
+    api_version: tuple[int, ...],
+    **config: Any,
+) -> KafkaConsumer:
+    """A real KafkaConsumer with the service's settings, never connected.
+
+    The api_version spares it the bootstrap at build, but a subscribe or an
+    assign asks for metadata, which bootstraps on the consumer's IO thread;
+    here that bootstrap never ends. It is stubbed before the thread starts.
+    """
+    build_network = config.pop('kafka_client')
+
+    def network_client(**settings: Any) -> Any:
+        network = build_network(**settings)
+        network._manager.bootstrap_async = lambda *args, **kwargs: Future()
+        return network
+
+    return KafkaConsumer(
+        **config,
+        kafka_client=network_client,
+        api_version=api_version,
+    )
+
+
 def _build(**config: Any) -> KafkaConsumer:
-    """A real KafkaConsumer with the service's settings, never connected."""
-    return KafkaConsumer(**config, api_version=(2, 8, 0))
+    """A real KafkaConsumer that takes the broker for Kafka 2.8."""
+    return _never_connected((2, 8, 0), **config)
 
 
 @pytest.fixture
@@ -625,9 +649,9 @@ def test_seek_on_an_unassigned_partition_fails_in_kafka_python(
     service: DiasporaService,
     client: TestClient,
 ) -> None:
-    """kafka-python only asserts, which the 409 above saves the caller."""
+    """kafka-python raises ValueError, which the 409 above saves the caller."""
     _create(client)
-    with pytest.raises(AssertionError):
+    with pytest.raises(ValueError, match='Unassigned partition'):
         _consumer(service).seek(_kafka_tp('t2'), 3)
 
 
@@ -746,7 +770,6 @@ def test_kafka_error_text_is_not_echoed(
         (CommitFailedError('x'), 409, 40903),
         (TopicAuthorizationFailedError('x'), 403, 40301),
         (GroupAuthorizationFailedError('x'), 403, 40301),
-        (NoBrokersAvailable('x'), 503, 50302),
         (BrokerNotAvailableError('x'), 503, 50302),
         (UnknownTopicOrPartitionError('x'), 404, 40401),
         (InvalidTopicError('x'), 400, 40002),
@@ -776,9 +799,10 @@ def test_kafka_failure_mapping(
 def test_broker_unreachable_at_create_is_503(
     service: DiasporaService,
 ) -> None:
+    """kafka-python reports a bootstrap that found no broker as a timeout."""
     with patch(
         'web_service.consumer_service.KafkaConsumer',
-        side_effect=NoBrokersAvailable(),
+        side_effect=KafkaTimeoutError('Unable to bootstrap from b-1:9098'),
     ):
         body, status = service.consumer_service.create_consumer(
             SUBJECT,
@@ -874,14 +898,14 @@ def test_half_built_consumer_is_closed(
 ) -> None:
     """A KafkaConsumer that raises after building its client closes it."""
     closed: list[Any] = []
-    real_close = KafkaClient.close
+    real_close = KafkaNetClient.close
 
-    def close(self: KafkaClient, *args: Any, **kwargs: Any) -> None:
+    def close(self: KafkaNetClient, *args: Any, **kwargs: Any) -> None:
         closed.append(self)
         real_close(self, *args, **kwargs)
 
     with (
-        patch.object(KafkaClient, 'close', close),
+        patch.object(KafkaNetClient, 'close', close),
         patch(
             'kafka.consumer.group.ConsumerCoordinator',
             side_effect=RuntimeError('late failure'),
@@ -2070,10 +2094,7 @@ def kafka38(built: list[dict[str, Any]]) -> Iterator[None]:
     """Consumers that take the broker for Kafka 3.8, as MSK's is."""
     with patch(
         'web_service.consumer_service.KafkaConsumer',
-        side_effect=lambda **config: KafkaConsumer(
-            **config,
-            api_version=(3, 8, 0),
-        ),
+        side_effect=lambda **config: _never_connected((3, 8, 0), **config),
     ):
         yield
 
@@ -2083,37 +2104,71 @@ def _commits(service: DiasporaService) -> Iterator[list[Any]]:
     """Capture the OffsetCommit requests the consumer sends, as encoded.
 
     Only the network is stubbed: the coordinator is known and ready, and
-    the client encodes each request, as BrokerConnection.send does, and
-    answers it with success.
+    the connection manager picks each request's version for the broker,
+    encodes it, as a connection does, and answers it with success.
     """
     consumer = _consumer(service)
-    coordinator, kafka_client = consumer._coordinator, consumer._client
+    coordinator, manager = consumer._coordinator, consumer._manager
     sent: list[Any] = []
 
-    def send(node_id: int, request: Any, **kwargs: Any) -> Future:
+    async def ready(timeout_ms: Any = None) -> bool:
+        return True
+
+    def send(request: Any, node_id: Any = None, **kwargs: Any) -> Future:
+        version = manager.broker_version_data.api_version(request)
+        request.API_VERSION = version
         request.encode()
         sent.append(request)
-        topics = [
-            (topic, [(p[0], 0) for p in parts])
-            for topic, parts in request.topics
-        ]
+        response_class = OffsetCommitResponse[version]
+        topic_class = response_class.OffsetCommitResponseTopic
+        partition_class = topic_class.OffsetCommitResponsePartition
+        response = response_class(
+            throttle_time_ms=0,
+            topics=[
+                topic_class(
+                    name=topic.name,
+                    partitions=[
+                        partition_class(
+                            partition_index=p.partition_index,
+                            error_code=0,
+                        )
+                        for p in topic.partitions
+                    ],
+                )
+                for topic in request.topics
+            ],
+        )
+        # Decoded from its bytes, as a broker's response is
         return Future().success(
-            OffsetCommitResponse[request.API_VERSION](0, topics),
+            response_class.decode(io.BytesIO(response.encode())),
         )
 
     with (
-        patch.object(
-            coordinator,
-            'ensure_coordinator_ready',
-            return_value=True,
-        ),
+        patch.object(coordinator, 'ensure_coordinator_ready_async', ready),
         patch.object(coordinator, 'coordinator_unknown', return_value=False),
         patch.object(coordinator, 'coordinator', return_value=0),
-        patch.object(kafka_client, 'ready', return_value=True),
-        patch.object(kafka_client, 'send', side_effect=send),
-        patch.object(kafka_client, 'poll', return_value=[]),
+        patch.object(manager, 'send', side_effect=send),
     ):
         yield sent
+
+
+def _committed(request: Any) -> list[tuple[str, list[tuple[Any, ...]]]]:
+    """An OffsetCommit request's topics, partitions, offsets and metadata."""
+    return [
+        (
+            topic.name,
+            [
+                (
+                    p.partition_index,
+                    p.committed_offset,
+                    p.committed_leader_epoch,
+                    p.committed_metadata,
+                )
+                for p in topic.partitions
+            ],
+        )
+        for topic in request.topics
+    ]
 
 
 def test_commit_of_an_offset_commits_the_next(
@@ -2138,8 +2193,8 @@ def test_commit_of_an_offset_commits_the_next(
         )
     assert response.status_code == 200
     (request,) = sent
-    assert request.API_VERSION == 7
-    assert request.topics == [(f'{NAMESPACE}.t1', [(0, 6, -1, '')])]
+    assert request.API_VERSION == 8
+    assert _committed(request) == [(f'{NAMESPACE}.t1', [(0, 6, -1, '')])]
 
 
 def test_commit_of_everything_commits_the_positions(
@@ -2166,7 +2221,7 @@ def test_commit_of_everything_commits_the_positions(
     # As in Confluent's REST Proxy, an empty list of offsets
     assert (response.status_code, response.json()) == (200, [])
     (request,) = sent
-    assert request.topics == [(f'{NAMESPACE}.t1', [(0, 6, -1, '')])]
+    assert _committed(request) == [(f'{NAMESPACE}.t1', [(0, 6, -1, '')])]
 
 
 def test_committed_offset_is_the_next_record(

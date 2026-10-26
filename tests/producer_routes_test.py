@@ -1324,12 +1324,12 @@ async def test_upload_time_does_not_count_against_the_send(
 async def test_unreachable_cluster_gets_503(
     service: DiasporaService,
 ) -> None:
-    from kafka.errors import NoBrokersAvailable
+    from kafka.errors import KafkaTimeoutError
 
     broker = 'b-1.cluster.kafka.us-east-1.amazonaws.com:9098'
     with patch(
         'web_service.producer_service.KafkaProducer',
-        side_effect=NoBrokersAvailable(broker),
+        side_effect=KafkaTimeoutError(f'Unable to bootstrap from {broker}'),
     ) as build:
         first = await _post(service, RECORDS, {'value': VALUE})
         second = await _post(service, RECORDS, {'value': VALUE})

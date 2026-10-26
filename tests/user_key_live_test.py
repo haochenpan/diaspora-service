@@ -19,7 +19,7 @@ from botocore.credentials import CredentialProvider
 from botocore.credentials import Credentials
 from kafka import KafkaConsumer
 from kafka.errors import GroupAuthorizationFailedError
-from kafka.sasl.oauth import AbstractTokenProvider
+from kafka.net.sasl.oauth import AbstractTokenProvider
 from kafka.structs import OffsetAndMetadata
 from kafka.structs import TopicPartition
 

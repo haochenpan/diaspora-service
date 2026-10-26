@@ -44,6 +44,7 @@ from kafka.errors import UnknownTopicOrPartitionError
 from kafka.producer.future import FutureRecordMetadata
 from kafka.record.default_records import DefaultRecordBatchBuilder
 
+from web_service.services import build_kafka_client
 from web_service.services import MSKTokenProvider
 
 logger = logging.getLogger(__name__)
@@ -980,12 +981,17 @@ class ProducerService:
 
     def _build(self) -> KafkaProducer:
         """Build the producer; the caller holds the lock."""
-        return KafkaProducer(
+        return build_kafka_client(
+            KafkaProducer,
             bootstrap_servers=self.bootstrap_servers,
             security_protocol='SASL_SSL',
             sasl_mechanism='OAUTHBEARER',
             sasl_oauth_token_provider=MSKTokenProvider(self.region),
             acks='all',
+            # An idempotent producer needs the cluster's
+            # WriteDataIdempotently permission, which the service's IAM
+            # identity does not have
+            enable_idempotence=False,
             # Retries keep the batch's order on one connection
             max_in_flight_requests_per_connection=1,
             delivery_timeout_ms=SEND_TIMEOUT_S * 1000,

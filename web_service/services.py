@@ -9,6 +9,7 @@ import os
 import re
 import threading
 import time
+from collections.abc import Callable
 from collections.abc import Mapping
 from collections.abc import Sequence
 from typing import Any
@@ -16,10 +17,10 @@ from typing import Any
 import boto3
 from aws_msk_iam_sasl_signer import MSKAuthTokenProvider
 from kafka.admin import KafkaAdminClient
-from kafka.admin import NewTopic
 from kafka.errors import TopicAlreadyExistsError
 from kafka.errors import UnknownTopicOrPartitionError
-from kafka.sasl.oauth import AbstractTokenProvider
+from kafka.net import KafkaNetClient
+from kafka.net.sasl.oauth import AbstractTokenProvider
 
 from web_service.utils import EnvironmentChecker
 
@@ -28,6 +29,11 @@ from web_service.utils import EnvironmentChecker
 # is shorter so the controller answers before the client gives up.
 ADMIN_REQUEST_TIMEOUT_MS = 15_000
 ADMIN_OPERATION_TIMEOUT_MS = 10_000
+# Longest a Kafka client's constructor waits to connect to the cluster and
+# read its metadata before it raises KafkaTimeoutError; kafka-python's
+# default is 30 s. One bootstrap takes under a second, but ten at once,
+# such as concurrent topic creates, have taken up to 3.5 s.
+KAFKA_BOOTSTRAP_TIMEOUT_MS = 5_000
 # Wait before retrying a create that found the topic still present
 TOPIC_EXISTS_RETRY_DELAY_S = 2
 # The most topics a namespace may hold when MAX_TOPICS_PER_NAMESPACE is
@@ -880,6 +886,42 @@ class DynamoDBService:
             )
 
 
+def build_kafka_client[T](build: Callable[..., T], **config: Any) -> T:
+    """Build a kafka-python client, closing its network client if that fails.
+
+    A KafkaConsumer, KafkaProducer or KafkaAdminClient builds its network
+    client, which may start an IO thread and open connections, before it
+    bootstraps; if the bootstrap or a later step raises, the network client
+    is left running, since nothing holds it. Closing it stops its thread
+    and its connections.
+
+    Args:
+        build: The client's class
+        config: Its settings; the bootstrap waits at most
+            KAFKA_BOOTSTRAP_TIMEOUT_MS unless they set bootstrap_timeout_ms
+
+    Raises:
+        Exception: Whatever build raised
+    """
+    started: list[KafkaNetClient] = []
+
+    def network_client(**settings: Any) -> KafkaNetClient:
+        network = KafkaNetClient(**settings)
+        started.append(network)
+        return network
+
+    config.setdefault('bootstrap_timeout_ms', KAFKA_BOOTSTRAP_TIMEOUT_MS)
+    try:
+        return build(**config, kafka_client=network_client)
+    except Exception:
+        for network in started:
+            try:
+                network.close()
+            except Exception:
+                logger.exception('Error closing a half-built Kafka client')
+        raise
+
+
 class MSKTokenProvider(AbstractTokenProvider):
     """Provide tokens for MSK authentication."""
 
@@ -920,7 +962,8 @@ class KafkaService:
 
     def _admin_client(self) -> KafkaAdminClient:
         """Build an admin client whose requests end within a bound."""
-        return KafkaAdminClient(
+        return build_kafka_client(
+            KafkaAdminClient,
             bootstrap_servers=self.bootstrap_servers,
             security_protocol='SASL_SSL',
             sasl_mechanism='OAUTHBEARER',
@@ -968,15 +1011,13 @@ class KafkaService:
             topic_exists = False
             try:
                 admin = self._admin_client()
-                topic_list = [
-                    NewTopic(
-                        name=kafka_topic_name,
-                        num_partitions=1,
-                        replication_factor=2,
-                    ),
-                ]
                 admin.create_topics(
-                    new_topics=topic_list,
+                    new_topics={
+                        kafka_topic_name: {
+                            'num_partitions': 1,
+                            'replication_factor': 2,
+                        },
+                    },
                     timeout_ms=ADMIN_OPERATION_TIMEOUT_MS,
                 )
                 return {

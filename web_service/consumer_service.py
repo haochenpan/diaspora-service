@@ -22,7 +22,6 @@ from contextvars import ContextVar
 from typing import Any
 
 from kafka import KafkaConsumer
-from kafka.client_async import KafkaClient
 from kafka.errors import AuthorizationError
 from kafka.errors import BrokerNotAvailableError
 from kafka.errors import CommitFailedError
@@ -34,7 +33,6 @@ from kafka.errors import InvalidRequestError
 from kafka.errors import InvalidTopicError
 from kafka.errors import KafkaError
 from kafka.errors import KafkaTimeoutError
-from kafka.errors import NoBrokersAvailable
 from kafka.errors import PolicyViolationError
 from kafka.errors import SecurityDisabledError
 from kafka.errors import ThrottlingQuotaExceededError
@@ -50,6 +48,7 @@ from web_service.consumer_records import EncodedField
 from web_service.consumer_records import EncodedRecord
 from web_service.consumer_records import FetchReply
 from web_service.consumer_records import NotText
+from web_service.services import build_kafka_client
 from web_service.services import MSKTokenProvider
 
 logger = logging.getLogger(__name__)
@@ -61,13 +60,19 @@ REAPER_INTERVAL_SECONDS = 30
 # without a poll before kafka-python takes it out of its group: enough for
 # the reaper to wait for the instance's lock and commit
 POLL_SLACK_MS = 60_000
+# How long the group keeps an instance that stops sending heartbeats
+# without leaving, such as one still busy when the process stopped, before
+# it gives the instance's partitions to the other members; kafka-python's
+# default is 45 s
+SESSION_TIMEOUT_MS = 10_000
 # Longest a commit or a committed-offsets lookup waits on the cluster;
-# without a timeout kafka-python retries until it succeeds
+# without a timeout, kafka-python waits up to 30 s for a commit and retries
+# a lookup until it succeeds
 CONSUMER_OPERATION_TIMEOUT_MS = 10_000
 # When an instance with auto-commit is closed (by a delete, the reaper or
 # shutdown), the longest the commit of its positions waits, and then the
-# longest kafka-python's close waits for its two steps together: stopping
-# the heartbeat thread and leaving the group
+# longest kafka-python's close waits for the group to answer the instance's
+# leave
 CLOSE_COMMIT_TIMEOUT_MS = 5_000
 CLOSE_TIMEOUT_MS = 4_000
 # Longest shutdown waits for all the instances together, which it closes
@@ -92,7 +97,8 @@ MAX_PARTITION_FETCH_BYTES = 1024 * 1024
 # returned, however large. 2 MiB holds the base64 of a full 1 MiB fetch.
 REPLY_MAX_BYTES = 2 * 1024 * 1024
 # Instances one subject may hold, and the service in all. Each is a
-# KafkaClient with its own heartbeat thread and sockets to the brokers.
+# KafkaConsumer with its own IO thread, which also sends its heartbeats, and
+# its own sockets to the brokers.
 # After a fetch, kafka-python keeps each broker's next reply for the next
 # fetch, up to 8 MiB a broker, however long the instance sits idle, and
 # pausing the instance's partitions does not drop it. 16 instances on two
@@ -169,6 +175,15 @@ def error_reply(status: int, error_code: int, message: str) -> Reply:
 
 def _instance_not_found() -> Reply:
     return error_reply(404, INSTANCE_NOT_FOUND, 'Consumer instance not found.')
+
+
+def _unreachable(action: str) -> Reply:
+    return error_reply(
+        503,
+        BROKER_NOT_AVAILABLE,
+        f'Failed to {action}: the Kafka cluster is not reachable; '
+        'retry shortly',
+    )
 
 
 def _illegal_state(message: str) -> Reply:
@@ -281,13 +296,8 @@ def kafka_failure(error: Exception, action: str) -> Reply:  # noqa: C901, PLR091
             NOT_AUTHORIZED,
             f'Failed to {action}: the service is not authorized ({name})',
         )
-    if isinstance(error, (NoBrokersAvailable, BrokerNotAvailableError)):
-        return error_reply(
-            503,
-            BROKER_NOT_AVAILABLE,
-            f'Failed to {action}: the Kafka cluster is not reachable; '
-            'retry shortly',
-        )
+    if isinstance(error, BrokerNotAvailableError):
+        return _unreachable(action)
     if isinstance(error, UnknownTopicOrPartitionError):
         return error_reply(404, NOT_FOUND, 'Topic not found.')
     if isinstance(error, InvalidTopicError):
@@ -797,11 +807,9 @@ class ConsumerService:
                         e,
                     )
             try:
-                # kafka-python waits up to timeout_ms for each of its two
-                # steps
                 managed.consumer.close(
                     autocommit=False,
-                    timeout_ms=within(CLOSE_TIMEOUT_MS) // 2,
+                    timeout_ms=within(CLOSE_TIMEOUT_MS),
                 )
             except Exception:
                 logger.exception(error_message, managed.instance_id)
@@ -844,8 +852,8 @@ class ConsumerService:
     ) -> Reply | None:
         """The 409 reply if a partition is not assigned to the instance.
 
-        kafka-python asserts that a partition is assigned before it seeks
-        on it; Confluent answers the same mistake with 409 and 40903.
+        kafka-python raises ValueError for a seek on a partition that is
+        not assigned; Confluent answers the same mistake with 409 and 40903.
         """
         assigned = managed.consumer.assignment() or set()
         if not tps and not assigned:
@@ -1034,32 +1042,21 @@ class ConsumerService:
     ) -> KafkaConsumer | Reply:
         """Build an instance's KafkaConsumer, or the reply if that fails.
 
-        KafkaConsumer builds its KafkaClient, which starts connecting,
-        before it finishes checking its settings; if it then raises, the
-        client is closed here, since nothing else holds it.
+        The consumer bootstraps while it is built: a timeout then means no
+        broker answered, which gets 503.
         """
-        clients: list[KafkaClient] = []
-
-        def client(**config: Any) -> KafkaClient:
-            built = KafkaClient(**config)
-            clients.append(built)
-            return built
-
         kwargs = self._consumer_config(
             kafka_group_id,
             auto_offset_reset=auto_offset_reset,
             auto_commit_enable=auto_commit_enable,
             fetch_min_bytes=fetch_min_bytes,
         )
-        kwargs['kafka_client'] = client
         try:
-            return KafkaConsumer(**kwargs)
+            return build_kafka_client(KafkaConsumer, **kwargs)
+        except KafkaTimeoutError as e:
+            logger.warning('Failed to create consumer: %r', e)
+            return _unreachable('create consumer')
         except Exception as e:
-            for built in clients:
-                try:
-                    built.close()
-                except Exception:
-                    logger.exception('Error closing a half-built consumer')
             return kafka_failure(e, 'create consumer')
 
     def _consumer_config(
@@ -1084,14 +1081,16 @@ class ConsumerService:
             'fetch_max_bytes': FETCH_MAX_BYTES,
             'max_partition_fetch_bytes': MAX_PARTITION_FETCH_BYTES,
             # kafka-python's default (300 s, the default idle timeout) has
-            # the heartbeat thread leave the group before the reaper closes
-            # an idle instance, so the commit at close would fail. Longer,
-            # the instance stays in its group until the reaper closes it.
+            # the consumer's IO thread leave the group before the reaper
+            # closes an idle instance, so the commit at close would fail.
+            # Longer, the instance stays in its group until the reaper
+            # closes it.
             'max_poll_interval_ms': (
                 self.timeout_ms
                 + REAPER_INTERVAL_SECONDS * 1000
                 + POLL_SLACK_MS
             ),
+            'session_timeout_ms': SESSION_TIMEOUT_MS,
         }
         if fetch_min_bytes is not None:
             kwargs['fetch_min_bytes'] = fetch_min_bytes

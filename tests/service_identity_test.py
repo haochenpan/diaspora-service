@@ -68,7 +68,8 @@ KAFKA_LOCAL = frozenset(
     {
         'admin.close',
         'producer.close',
-        'built.close',
+        # A half-built client's network client
+        'network.close',
         'metadata.request_update',
         'consumer.assign',
         'consumer.assignment',
@@ -187,6 +188,7 @@ def _calls(path: Path) -> set[str]:
 
     The receiver is the last name before the method: ``consumer`` for
     ``managed.consumer.poll()``, ``iam`` for ``self.iam.create_user()``.
+    ``build_kafka_client(KafkaConsumer, ...)`` calls KafkaConsumer.
     """
     calls = set()
     for node in ast.walk(ast.parse(path.read_text())):
@@ -195,6 +197,11 @@ def _calls(path: Path) -> set[str]:
         func = node.func
         if isinstance(func, ast.Name):
             calls.add(func.id)
+            if func.id == 'build_kafka_client' and isinstance(
+                node.args[0],
+                ast.Name,
+            ):
+                calls.add(node.args[0].id)
         elif isinstance(func, ast.Attribute):
             receiver = func.value
             if isinstance(receiver, ast.Attribute):
