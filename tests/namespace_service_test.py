@@ -82,12 +82,6 @@ def namespace_service(db_service: DynamoDBService) -> NamespaceService:
 
 
 @pytest.fixture
-def random_subject() -> str:
-    """Generate a random subject for each test."""
-    return f'test-subject-{os.urandom(8).hex()}'
-
-
-@pytest.fixture
 def cleanup_data(
     namespace_service: NamespaceService,
     db_service: DynamoDBService,

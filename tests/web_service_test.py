@@ -14,6 +14,7 @@ from typing import Any
 
 import pytest
 
+from tests.live_identity import permissions_boundary_arn
 from web_service.services import DynamoDBService
 from web_service.services import IAMService
 from web_service.services import KafkaService
@@ -246,6 +247,7 @@ def iam_service() -> IAMService:
         account_id=account_id or '',
         region=region or '',
         cluster_name=cluster_name or '',
+        permissions_boundary_arn=permissions_boundary_arn(),
     )
 
 
@@ -305,12 +307,6 @@ def web_service(
         kafka_service=kafka_service,
         namespace_service=namespace_service,
     )
-
-
-@pytest.fixture
-def random_subject() -> str:
-    """Generate a random subject for each test."""
-    return f'test-subject-{os.urandom(8).hex()}'
 
 
 @pytest.fixture

@@ -9,6 +9,8 @@ from typing import Any
 
 import pytest
 
+from tests.live_identity import live_subject
+
 # Every test in these modules builds real IAM, DynamoDB or Kafka clients
 # and talks to AWS, so all of them run only in the integration set.
 LIVE_TEST_MODULES = frozenset(
@@ -55,6 +57,12 @@ def pytest_collection_modifyitems(
     for item in items:
         if item.path.name in LIVE_TEST_MODULES:
             item.add_marker(pytest.mark.integration)
+
+
+@pytest.fixture
+def random_subject() -> str:
+    """Return a new subject named the way the live identity allows."""
+    return live_subject()
 
 
 class NetworkBlockedError(RuntimeError):
