@@ -15,7 +15,6 @@ from collections.abc import Callable
 from contextlib import asynccontextmanager
 from contextlib import AsyncExitStack
 from typing import Any
-from typing import TypeVar
 
 import anyio
 import anyio.lowlevel
@@ -86,8 +85,6 @@ from .services import KafkaService
 from .services import NamespaceService
 from .services import parse_max_topics_per_namespace
 from .services import WebService
-
-_Prepared = TypeVar('_Prepared')
 
 logger = logging.getLogger(__name__)
 
@@ -1953,10 +1950,10 @@ class DiasporaService:
         return self._produce_error(_body_too_large_error())
 
 
-def _refusal_returned(
-    prepare: Callable[[bytearray], _Prepared],
+def _refusal_returned[Prepared](
+    prepare: Callable[[bytearray], Prepared],
     raw: bytearray,
-) -> _Prepared | RecordError:
+) -> Prepared | RecordError:
     """Prepare a body, returning its refusal instead of raising it.
 
     A refusal raised out of the parse thread would keep the frames that

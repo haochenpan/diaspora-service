@@ -19,7 +19,6 @@ from contextlib import asynccontextmanager
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any
-from typing import TypeVar
 
 from kafka import KafkaConsumer
 from kafka.client_async import KafkaClient
@@ -117,7 +116,6 @@ BROKER_NOT_AVAILABLE = 50302
 Reply = tuple[dict[str, Any], int]
 # A reply that may have no body (204, or 200 to a commit)
 MaybeReply = tuple[dict[str, Any] | None, int]
-_T = TypeVar('_T')
 
 # The Kafka errors KafkaExceptionMapper answers with 400 and 40002
 _BAD_REQUEST_ERRORS = (
@@ -362,7 +360,7 @@ class InstanceLock:
                     return False
                 try:
                     await asyncio.wait_for(waiter, remaining)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     return False
             finally:
                 with self._condition:
@@ -461,7 +459,7 @@ _HELD: ContextVar[ManagedConsumer | None] = ContextVar(
 )
 
 
-def run_holding(managed: Any, call: Callable[[], _T]) -> _T:
+def run_holding[T](managed: Any, call: Callable[[], T]) -> T:
     """Run call as the holder of managed's lock, which the caller holds."""
     token = _HELD.set(managed)
     try:

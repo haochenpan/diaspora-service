@@ -6,7 +6,7 @@ import importlib.util
 import sys
 from datetime import datetime
 from datetime import timedelta
-from datetime import timezone
+from datetime import UTC
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -39,7 +39,7 @@ def _load_sweep() -> ModuleType:
 
 sweep = _load_sweep()
 
-NOW = datetime(2026, 1, 2, 12, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 1, 2, 12, 0, tzinfo=UTC)
 CUTOFF = NOW - timedelta(hours=2)
 OLD = NOW - timedelta(hours=3)
 NEW = NOW - timedelta(minutes=30)
@@ -588,7 +588,7 @@ def test_main_dry_run_deletes_nothing(
     with Stubber(iam) as iam_stub, Stubber(dynamodb):
         _stub_listing(
             iam_stub,
-            [_user(SUBJECT_A, datetime(2020, 1, 1, tzinfo=timezone.utc))],
+            [_user(SUBJECT_A, datetime(2020, 1, 1, tzinfo=UTC))],
             [],
         )
 

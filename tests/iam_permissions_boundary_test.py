@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from datetime import timezone
+from datetime import UTC
 from unittest.mock import patch
 
 import pytest
@@ -47,7 +47,7 @@ def _create_with_stubbed_iam(
                     'UserName': SUBJECT,
                     'UserId': 'AIDAEXAMPLEEXAMPLE01',
                     'Arn': USER_ARN,
-                    'CreateDate': datetime(2026, 1, 1, tzinfo=timezone.utc),
+                    'CreateDate': datetime(2026, 1, 1, tzinfo=UTC),
                 },
             },
             expected_create_user,
