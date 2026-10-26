@@ -10,16 +10,12 @@ permissions:
   contents: read
 
 jobs:
+  # A fixed name, so the check keeps its name when the Python version
+  # changes.
   pytest:
-    name: pytest (${{ matrix.os }}, ${{ matrix.python }})
+    name: pytest
     timeout-minutes: 10
-
-    strategy:
-      matrix:
-        include:
-        - os: ubuntu-latest
-          python: '3.14'
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
 
     # Placeholders that satisfy the service's start-up checks. No AWS
     # credentials or config are read, and conftest.py fails any test here
@@ -35,15 +31,16 @@ jobs:
       AWS_ACCOUNT_ID: '000000000000'
       AWS_ACCOUNT_REGION: us-east-1
       MSK_CLUSTER_NAME: dummy
+      PYTHON_VERSION: '3.14'
 
     steps:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Set up Python ${{ matrix.python }}
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
         uses: actions/setup-python@v7
         with:
-          python-version: ${{ matrix.python }}
+          python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Get pip cache dir
         id: pip-cache-dir
@@ -54,9 +51,9 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ${{ env.PIP_CACHE_DIR }}
-          key: tests-${{ matrix.os }}-pip-${{ matrix.python }}-${{ hashFiles('pyproject.toml') }}
+          key: tests-${{ runner.os }}-pip-${{ env.PYTHON_VERSION }}-${{ hashFiles('pyproject.toml') }}
           restore-keys: |
-            tests-${{ matrix.os }}-pip-${{ matrix.python }}-
+            tests-${{ runner.os }}-pip-${{ env.PYTHON_VERSION }}-
 
       - name: Install Packages
         run: |

@@ -65,17 +65,27 @@ tox
 
 | Workflow | Job | Tests | When | Secrets |
 | --- | --- | --- | --- | --- |
-| `tests.yml` | `unit` | unit | every push, pull request and tag | none |
-| `tests.yml` | `live` | live | push to `main`, nightly, manual dispatch | the service's AWS keys |
+| `tests.yml` | `unit` | unit | pull requests; pushes to `main`, `test-me-*` and tags; nightly; manual dispatch | none |
+| `tests.yml` | `live` | live | pushes to `main`, nightly, manual dispatch | the service's AWS keys |
+| `tests.yml` | `sweep` | none | nightly, after `live` | the service's AWS keys |
 | `deployment.yml` | `unit` | unit | before every deploy | none |
 
 - The deploy job in `deployment.yml` waits for its `unit` job, so a failing
   unit test on `main` stops the deploy.
-- The `live` job never runs on pull requests or `test-me-*` branches. Live
-  runs share the `live-tests` concurrency group, so two never overlap.
-- After the nightly live run, `scripts/sweep_test_resources.py --apply`
-  deletes resources that earlier live runs left behind: IAM users and
-  policies named `test-subject-<16 hex>` older than two hours, and Kafka
-  topics named `test-namespace-<16 hex>.test-topic-<16 hex>` or
-  `ns-<12 hex>.test-topic-<suffix>` whose namespace the service has no
-  record of. Without `--apply` the script only lists what it would delete.
+- The `live` job never runs on pull requests or `test-me-*` pushes. A
+  manual dispatch runs the live tests of the branch it is dispatched on,
+  whichever branch that is.
+- `live` and `sweep` share the `live-tests` concurrency group, so no two
+  of them run at the same time. GitHub keeps only one pending run per
+  group: a run that is waiting can be cancelled by a newer one.
+- After the nightly live run, unless it was cancelled, the `sweep` job
+  runs `scripts/sweep_test_resources.py --apply`. It deletes what earlier
+  live runs left behind: IAM users and policies named
+  `test-subject-<16 hex>` older than two hours, and Kafka topics named
+  `test-namespace-<16 hex>.test-topic-<16 hex>` or
+  `ns-<12 hex>.test-topic-<suffix>` (with the suffixes the tests use)
+  whose namespace the service has no record of and that is not the default
+  namespace of another IAM user. Kafka keeps no creation time for topics,
+  so topics are not filtered by age: a local live run around the nightly
+  time can lose its topics. Without `--apply` the script only lists what
+  it would delete.
