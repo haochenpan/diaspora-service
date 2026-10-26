@@ -213,10 +213,12 @@ class FetchResponse(Response):
     a time, so its JSON is never held whole.
 
     If the client leaves before the whole reply is handed to the server,
-    the send fails, or it takes longer than FETCH_SEND_TIMEOUT_S, unfetch
-    runs before the release, so the next fetch returns the reply's
-    records again. A reply handed whole to the server counts as received,
-    since the server cannot tell whether the client read it.
+    or the encode or the send fails, unfetch runs before the release, so
+    the next fetch returns the reply's records again. A reply handed whole
+    to the server counts as received, since the server cannot tell
+    whether the client read it. A reply that takes longer than
+    FETCH_SEND_TIMEOUT_S to send is skipped: the server closes the
+    connection, and the next fetch starts after the reply.
     """
 
     def __init__(
@@ -226,9 +228,14 @@ class FetchResponse(Response):
         release: AsyncExitStack,
         unfetch: Callable[[], None],
         threads: anyio.CapacityLimiter,
+        name: str,
     ) -> None:
-        """Make the response; nothing is encoded until it is sent."""
+        """Make the response; nothing is encoded until it is sent.
+
+        name names the instance in the log.
+        """
         super().__init__(status_code=200, media_type='application/json')
+        self._name = name
         self._reply = reply
         self._release = release
         self._unfetch = unfetch
@@ -245,8 +252,9 @@ class FetchResponse(Response):
         """Send the reply, then release the fetch."""
         async with self._release:
             delivered = failed = False
+            timer = anyio.move_on_after(FETCH_SEND_TIMEOUT_S)
             try:
-                with anyio.move_on_after(FETCH_SEND_TIMEOUT_S):
+                with timer:
                     async with anyio.create_task_group() as tasks:
                         tasks.start_soon(self._watch, receive, tasks)
                         try:
@@ -262,7 +270,9 @@ class FetchResponse(Response):
                             self._complete = delivered = True
                         tasks.cancel_scope.cancel()
             finally:
-                if not delivered:
+                if timer.cancelled_caught:
+                    self._skip()
+                elif not delivered:
                     self._unfetch()
             if failed and not self._started:
                 refusal = error_response(
@@ -271,6 +281,23 @@ class FetchResponse(Response):
                     'Internal server error',
                 )
                 await refusal(scope, receive, send)
+
+    def _skip(self) -> None:
+        """Leave out a reply that took too long to send, so it is not resent.
+
+        Seeking back would send the same reply to the same slow client on
+        every retry, each holding a slot for FETCH_SEND_TIMEOUT_S.
+        """
+        logger.warning(
+            'Skipped a fetch reply to instance %s that was not sent within '
+            '%d s; the next fetch starts after it. It started at %s',
+            self._name,
+            FETCH_SEND_TIMEOUT_S,
+            ', '.join(
+                f'{tp.topic}[{tp.partition}] offset {offset}'
+                for tp, offset in self._reply.starts.items()
+            ),
+        )
 
     async def _watch(
         self,
@@ -1176,6 +1203,7 @@ class DiasporaService:
                     release=release,
                     unfetch=unfetch,
                     threads=self.fetch_threads,
+                    name=f'{namespace}/{group_name}/{instance_id}',
                 )
             except BaseException:
                 unfetch()

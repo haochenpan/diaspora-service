@@ -1715,12 +1715,14 @@ async def test_a_streamed_reply_the_client_left_is_fetched_again(
     assert log.pos[_kafka_tp()] == 1
 
 
-async def test_a_reply_past_the_send_limit_is_fetched_again(
+async def test_a_reply_past_the_send_limit_is_skipped(
     service: DiasporaService,
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
+    """A client too slow for a reply would get it again on every retry."""
     monkeypatch.setattr(main, 'FETCH_SEND_TIMEOUT_S', 0.2)
-    log = _log(service, 'i1', b'r0')
+    log = _log(service, 'i1', b'r0', b'r1')
     response = await _fetch(service, _connected())
     stalled = asyncio.Event()
 
@@ -1733,10 +1735,18 @@ async def test_a_reply_past_the_send_limit_is_fetched_again(
         await stalled.wait()
 
     started = time.monotonic()
-    await response({'type': 'http'}, receive, send)
+    with caplog.at_level('WARNING', logger='web_service.main'):
+        await response({'type': 'http'}, receive, send)
     assert time.monotonic() - started < 1
-    assert log.pos[_kafka_tp()] == 0
+    # The next fetch starts after the reply
+    assert log.pos[_kafka_tp()] == 2
     _assert_released(service)
+    (warning,) = [r for r in caplog.records if r.name == 'web_service.main']
+    assert warning.levelname == 'WARNING'
+    message = warning.getMessage()
+    assert f'{NAMESPACE}/{GROUP}/i1' in message
+    assert f'{NAMESPACE}.t1[0] offset 0' in message
+    assert 'r0' not in message
 
 
 async def test_fetch_slots_go_to_the_longest_waiter() -> None:
