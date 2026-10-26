@@ -364,7 +364,12 @@ Once the service has run as its identity without an `AccessDenied` in the
 log, for at least a day that included user and key creations, deactivate
 the container's previous key, and delete it later. The deploy workflow's
 own key (`AWS_ACCESS_KEY_ID`) may be the same key; check before you
-deactivate it:
+deactivate it.
+
+In the `diaspora-web-service` deployment it is the same key: the deploy's
+`AWS_ACCESS_KEY_ID` is the container's previous key, which belongs to an
+administrator. It stays active as the deploy's key and is not replaced,
+deactivated or deleted; only the container stopped using it.
 
 1. Show the previous key's user and last use, with the key ID from step 5:
    `aws iam get-access-key-last-used --access-key-id <previous-key-id>`.
