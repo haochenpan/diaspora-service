@@ -1507,7 +1507,7 @@
 </thead>
 <tbody>
 <tr>
-<td><code>Failed to create IAM user: Failed to create user and policy: &lt;IAM error&gt;</code></td>
+<td><code>Failed to create IAM user: Failed to create user and policy: IAM did not complete the request</code></td>
 <td>IAM refused a call</td>
 </tr>
 <tr>
@@ -1541,7 +1541,7 @@
 <td>The cluster did not delete a topic. The topics deleted before it stay deleted; that topic, the rest, the namespace, the key and the user are kept</td>
 </tr>
 <tr>
-<td><code>Failed to delete IAM user: Failed to delete user and policy: &lt;IAM error&gt;</code></td>
+<td><code>Failed to delete IAM user: Failed to delete user and policy: IAM did not complete the request</code></td>
 <td>IAM refused a call. The topics, the namespace and the stored key are already deleted</td>
 </tr>
 </tbody>
@@ -1583,11 +1583,11 @@
 <td>Creating the user failed, as in <a href="#create-user">Create user</a></td>
 </tr>
 <tr>
-<td><code>Failed to delete existing IAM access keys: Failed to delete access keys: &lt;IAM error&gt;</code></td>
+<td><code>Failed to delete existing IAM access keys: Failed to delete access keys: IAM did not complete the request</code></td>
 <td>IAM refused to list or delete the user's keys</td>
 </tr>
 <tr>
-<td><code>Failed to create IAM access key: Failed to create access key: &lt;IAM error&gt;</code></td>
+<td><code>Failed to create IAM access key: Failed to create access key: IAM did not complete the request</code></td>
 <td>IAM refused to create the key</td>
 </tr>
 </tbody>
@@ -1610,7 +1610,7 @@
 </thead>
 <tbody>
 <tr>
-<td><code>Failed to delete IAM access keys: Failed to delete access keys: &lt;IAM error&gt;</code></td>
+<td><code>Failed to delete IAM access keys: Failed to delete access keys: IAM did not complete the request</code></td>
 <td>IAM refused to list or delete the keys. The stored key is kept, since it may still be valid</td>
 </tr>
 </tbody>
