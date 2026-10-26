@@ -213,7 +213,7 @@ belong to the same IAM user; check before you delete either.
 1. In [Globus developer settings](https://app.globus.org/settings/developers),
    open the confidential client whose client ID is the `SERVER_CLIENT_ID`
    value, and add a client secret. Globus shows it only once.
-2. Update the secret: `gh secret set DOCKER_SERVER_SECRET`.
+2. Update the secret: `gh secret set DOCKER_SERVER_SECRET`. <!-- pragma: allowlist secret -->
 3. Deploy: `gh workflow run deployment.yml --ref main`, then
    [check the deploy](3-deploying.md#check-a-deploy) and make one
    authenticated call, such as `GET /api/v3/namespace`
