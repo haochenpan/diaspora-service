@@ -103,7 +103,7 @@ service also sets the policy it names as the user's permissions boundary.
 The service writes the policy when it creates the user, so a change to it
 reaches only the users created after the change. `scripts/update_user_policies.py`
 brings the other users' policies up to date
-([Update the users' policies](5-runbook.md#update-the-users-policies)).
+([Update the users' IAM](5-runbook.md#update-the-users-iam)).
 
 `POST /api/v3/key` returns the key stored for the user when the keys table
 holds one, with `fresh` set to `false`. Otherwise it creates the user and
