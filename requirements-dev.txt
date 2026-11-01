@@ -19,12 +19,12 @@ aws-msk-iam-sasl-signer-python==1.0.2
     # via
     #   -c requirements.txt
     #   diaspora-service (pyproject.toml)
-boto3==1.43.118
+boto3==1.43.121
     # via
     #   -c requirements.txt
     #   diaspora-service (pyproject.toml)
     #   aws-msk-iam-sasl-signer-python
-botocore==1.43.118
+botocore==1.43.121
     # via
     #   -c requirements.txt
     #   aws-msk-iam-sasl-signer-python
@@ -107,13 +107,13 @@ jmespath==1.1.0
     #   -c requirements.txt
     #   boto3
     #   botocore
-kafka-python==2.3.2
+kafka-python==3.0.12
     # via
     #   -c requirements.txt
     #   diaspora-service (pyproject.toml)
 librt==0.16.0
     # via mypy
-mypy==2.4.0
+mypy==2.4.1
     # via diaspora-service (pyproject.toml)
 mypy-extensions==1.1.0
     # via mypy
@@ -129,7 +129,7 @@ packaging==26.3
     #   virtualenv
 pathspec==1.1.1
     # via mypy
-platformdirs==4.13.5
+platformdirs==4.14.0
     # via virtualenv
 pluggy==1.7.0
     # via
@@ -156,7 +156,7 @@ pyjwt==2.15.1
     # via
     #   -c requirements.txt
     #   globus-sdk
-pytest==9.1.1
+pytest==9.2.0
     # via
     #   diaspora-service (pyproject.toml)
     #   pytest-asyncio
@@ -168,11 +168,11 @@ pytest-cov==7.1.0
     # via diaspora-service (pyproject.toml)
 pytest-mock==3.17.0
     # via diaspora-service (pyproject.toml)
-python-dateutil==2.9.0.post0
+python-dateutil==3.0.0
     # via
     #   -c requirements.txt
     #   botocore
-python-discovery==1.6.4
+python-discovery==1.6.7
     # via virtualenv
 pyyaml==6.0.3
     # via pre-commit
@@ -180,7 +180,7 @@ requests==2.34.2
     # via
     #   -c requirements.txt
     #   globus-sdk
-ruff==0.17.2
+ruff==0.17.3
     # via diaspora-service (pyproject.toml)
 s3transfer==0.19.3
     # via
@@ -223,5 +223,5 @@ uvicorn-worker==0.4.0
     # via
     #   -c requirements.txt
     #   diaspora-service (pyproject.toml)
-virtualenv==21.14.13
+virtualenv==21.15.1
     # via pre-commit
